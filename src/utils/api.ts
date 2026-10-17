@@ -15,6 +15,25 @@ export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, ret
     }
   }
 
+  // Auto-adjuntar X-Tenant-Id si nos encontramos en la ruta de una sala o el usuario pertenece a una sala
+  if (!headers.has('X-Tenant-Id')) {
+    try {
+      const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+      const match = pathname.match(/\/sala\/([a-zA-Z0-9_-]+)/i);
+      if (match && match[1]) {
+        headers.set('X-Tenant-Id', match[1].toLowerCase());
+      } else {
+        const adminSession = localStorage.getItem('bingo_admin_user');
+        if (adminSession) {
+          const parsed = JSON.parse(adminSession);
+          if (parsed.tenant_id && parsed.tenant_id !== 'global') {
+            headers.set('X-Tenant-Id', parsed.tenant_id.toLowerCase());
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
   // If the body is FormData, we MUST let the browser set the Content-Type header with the boundary
   const isFormData = init?.body instanceof FormData;
 

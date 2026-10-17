@@ -1,84 +1,130 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { Lock, Loader2, Mail, Home as HomeIcon } from 'lucide-react';
+import { useNavigate, Link, useParams, useSearchParams } from 'react-router-dom';
+import { Lock, Loader2, Mail, Home as HomeIcon, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 
 export default function AdminLogin() {
   const navigate = useNavigate();
-  const { loginAdmin, user } = useAuth();
+  const { slug } = useParams<{ slug?: string }>();
+  const [searchParams] = useSearchParams();
+  const { loginAdmin, loginTenantAdmin, user } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(
+    searchParams.get('error') === 'unauthorized_room' 
+      ? 'Tus credenciales de administrador no pertenecen a esta sala.' 
+      : ''
+  );
 
   React.useEffect(() => {
     if (user && user.role === 'admin') {
-      navigate('/admin');
+      if (slug) {
+        // Si el usuario es de esta sala o es Super Admin, ir al admin de la sala
+        if (user.isSuperAdmin || (user.tenant_id || '').toLowerCase() === slug.toLowerCase()) {
+          navigate(`/sala/${slug}/admin`);
+        }
+      } else {
+        if (user.isSuperAdmin) {
+          navigate('/admin');
+        } else if (user.tenant_id) {
+          navigate(`/sala/${user.tenant_id}/admin`);
+        }
+      }
     } else if (user && user.role === 'seller') {
       navigate('/seller');
     }
-  }, [user, navigate]);
+  }, [user, navigate, slug]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
     try {
-      const { success, error: loginError } = await loginAdmin(email, password);
-      if (success) {
-        // Redirection will be handled by useEffect when user state updates
-      } else {
-        const lowerErr = (loginError || '').toLowerCase();
-        if ((email.toLowerCase() === 'comamosexpress@gmail.com' || email.toLowerCase() === 'stcganas@gmail.com') && (lowerErr.includes('invalid login credentials') || lowerErr.includes('not found') || lowerErr.includes('invalid_credentials'))) {
-          setError('Credenciales no encontradas. Si es tu primera vez, por favor REGÍSTRATE con este correo para activar tus permisos de Super Admin.');
-        } else if (lowerErr.includes('invalid login credentials') || lowerErr.includes('invalid_credentials') || lowerErr.includes('email not confirmed')) {
-          setError('Correo o contraseña incorrectos. Por favor verifica tus datos.');
-        } else if (lowerErr.includes('rate limit') || lowerErr.includes('too many requests')) {
-          setError('Demasiados intentos fallidos. Por favor espera unos minutos antes de intentar de nuevo.');
-        } else if (lowerErr.includes('invalid api key') || lowerErr.includes('api key')) {
-          setError('Error de conexión temporal con el servidor de autenticación. Por favor reintenta.');
+      // 1. Intentar autenticar contra el backend de salas/tenants
+      const tenantRes = await loginTenantAdmin(email, password, slug);
+      if (tenantRes.success && tenantRes.user) {
+        if (slug) {
+          navigate(`/sala/${slug}/admin`);
+        } else if (tenantRes.user.isSuperAdmin) {
+          navigate('/admin');
+        } else if (tenantRes.user.tenant_id) {
+          navigate(`/sala/${tenantRes.user.tenant_id}/admin`);
         } else {
-          setError(loginError || 'Correo o contraseña incorrectos.');
+          navigate('/admin');
+        }
+        return;
+      }
+
+      // 2. Si falló y no especificó sala, intentar con Supabase Auth (superadmins legacy)
+      if (!slug) {
+        const { success: legacySuccess, error: legacyError } = await loginAdmin(email, password);
+        if (legacySuccess) {
+          navigate('/admin');
+          return;
         }
       }
-    } catch (err) {
-      setError('Error al iniciar sesión');
+
+      // Si hubo error específico de tenant, mostrarlo
+      const loginError = tenantRes.error || 'Credenciales incorrectas.';
+      const lowerErr = loginError.toLowerCase();
+      if (lowerErr.includes('otra sala') || lowerErr.includes('no pertenece')) {
+        setError('Acceso denegado: Este usuario de administrador pertenece a otra sala y no tiene permiso aquí.');
+      } else if (lowerErr.includes('invalid login credentials') || lowerErr.includes('invalid_credentials') || lowerErr.includes('contraseña')) {
+        setError('Correo o contraseña de administrador incorrectos.');
+      } else {
+        setError(loginError);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Error al iniciar sesión como administrador.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-100 relative">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-slate-900 text-slate-100 relative">
       <Link 
-        to="/" 
-        className="absolute top-6 left-6 flex items-center gap-2 text-slate-600 hover:text-slate-900 font-bold transition bg-white px-4 py-2 rounded-xl shadow-sm border border-slate-200"
+        to={slug ? `/sala/${slug}` : "/"} 
+        className="absolute top-6 left-6 flex items-center gap-2 text-slate-300 hover:text-white font-bold transition bg-slate-800 px-4 py-2 rounded-xl shadow-sm border border-slate-700"
       >
         <HomeIcon size={20} />
-        <span>Inicio</span>
+        <span>{slug ? `Volver a Sala` : `Inicio`}</span>
       </Link>
 
-      <div className="max-w-md w-full bg-white rounded-3xl shadow-xl overflow-hidden border-4 border-slate-800">
-        <div className="bg-slate-800 p-6 text-white text-center">
-          <Lock size={48} className="mx-auto mb-4 text-yellow-400" />
-          <h1 className="text-2xl font-black tracking-tight uppercase">Acceso Administrador</h1>
+      <div className="max-w-md w-full bg-slate-950 rounded-3xl shadow-2xl overflow-hidden border border-slate-800">
+        <div className="bg-slate-900 p-6 text-white text-center border-b border-slate-800">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-3">
+            <Lock size={32} />
+          </div>
+          <h1 className="text-xl font-black tracking-tight uppercase">
+            {slug ? `Admin de Sala: ${slug}` : 'Acceso Administrador'}
+          </h1>
+          <p className="text-xs text-slate-400 mt-1">
+            {slug 
+              ? 'Panel de control exclusivo e independiente para esta sala' 
+              : 'Gestión y control de salas de bingo'}
+          </p>
         </div>
 
         <form onSubmit={handleLogin} className="p-8 space-y-6">
           {error && (
-            <div className="bg-red-100 text-red-700 p-3 rounded-xl text-sm font-bold text-center">
-              {error}
+            <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3.5 rounded-xl text-xs font-bold flex items-center gap-2.5">
+              <ShieldAlert size={18} className="shrink-0" />
+              <span>{error}</span>
             </div>
           )}
 
           <div>
-            <label className="block text-sm font-bold text-slate-700 mb-1">Correo Electrónico</label>
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+              Correo Electrónico del Administrador
+            </label>
             <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
               <input 
                 required 
                 type="email" 
-                className="w-full p-3 pl-10 border-2 border-slate-200 rounded-xl focus:border-slate-800 focus:ring-0 outline-none transition"
+                className="w-full bg-slate-900 p-3 pl-10 border border-slate-800 rounded-xl text-white text-sm focus:border-amber-500 focus:ring-0 outline-none transition"
                 placeholder="admin@ejemplo.com"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
@@ -88,15 +134,19 @@ export default function AdminLogin() {
 
           <div>
             <div className="flex justify-between items-center mb-1">
-              <label className="block text-sm font-bold text-slate-700">Contraseña</label>
-              <Link to="/admin/forgot-password" className="text-xs font-bold text-blue-600 hover:underline">
-                ¿Olvidaste tu contraseña?
-              </Link>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-400">
+                Contraseña
+              </label>
+              {!slug && (
+                <Link to="/admin/forgot-password" className="text-xs font-bold text-amber-400 hover:underline">
+                  ¿Olvidaste tu contraseña?
+                </Link>
+              )}
             </div>
             <input 
               required 
               type="password" 
-              className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-slate-800 focus:ring-0 outline-none transition"
+              className="w-full bg-slate-900 p-3 border border-slate-800 rounded-xl text-white text-sm focus:border-amber-500 focus:ring-0 outline-none transition"
               placeholder="••••••••"
               value={password}
               onChange={e => setPassword(e.target.value)}
@@ -106,19 +156,21 @@ export default function AdminLogin() {
           <button 
             type="submit"
             disabled={loading}
-            className="w-full py-4 bg-slate-800 hover:bg-slate-900 text-white font-black text-xl rounded-2xl shadow-lg transform transition active:scale-95 flex items-center justify-center gap-2 disabled:opacity-70 disabled:active:scale-100"
+            className="w-full py-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-base rounded-2xl shadow-lg shadow-amber-500/20 transform transition active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            {loading ? <Loader2 className="animate-spin" /> : "INICIAR SESIÓN"}
+            {loading ? <Loader2 className="animate-spin text-slate-950" /> : "INICIAR SESIÓN ADMIN"}
           </button>
 
-          <div className="text-center space-y-4">
-            <p className="text-slate-500 text-sm">
-              ¿No tienes cuenta?{' '}
-              <Link to="/admin/register" className="text-slate-800 font-bold hover:underline">
-                Regístrate aquí
-              </Link>
-            </p>
-          </div>
+          {!slug && (
+            <div className="text-center space-y-2 pt-2 border-t border-slate-900">
+              <p className="text-slate-400 text-xs">
+                ¿Aún no tienes sala propia?{' '}
+                <Link to="/" className="text-amber-400 font-bold hover:underline">
+                  Crear una nueva sala
+                </Link>
+              </p>
+            </div>
+          )}
         </form>
       </div>
     </div>

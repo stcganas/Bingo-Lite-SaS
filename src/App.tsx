@@ -468,22 +468,59 @@ function SupabaseWarning() {
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading, error } = useAuth();
+  const location = useLocation();
+
   if (loading) return <div className="min-h-screen flex items-center justify-center">Cargando...</div>;
   if (error) return <div className="min-h-screen flex items-center justify-center text-red-600 font-bold">{error}</div>;
+  
+  const salaMatch = location.pathname.match(/^\/sala\/([^\/]+)/);
+  const routeSlug = salaMatch ? salaMatch[1].toLowerCase() : null;
+
   if (!user || user.role !== 'admin') {
+    if (routeSlug) {
+      return <Navigate to={`/sala/${routeSlug}/admin/login`} replace />;
+    }
     return <Navigate to="/admin/login" replace />;
   }
+
+  // Aislamiento estricto de administradores por sala:
+  if (routeSlug) {
+    const isSuper = !!user.isSuperAdmin;
+    const userTenant = (user.tenant_id || '').toLowerCase();
+    // Si no es Super Admin global y no coincide el tenant_id con el slug de la sala, denegar acceso
+    if (!isSuper && userTenant !== routeSlug) {
+      return <Navigate to={`/sala/${routeSlug}/admin/login?error=unauthorized_room`} replace />;
+    }
+  } else {
+    // Si accede a /admin general pero es un admin exclusivo de sala, redirigirlo a su sala
+    if (!user.isSuperAdmin && user.tenant_id) {
+      return <Navigate to={`/sala/${user.tenant_id}/admin`} replace />;
+    }
+  }
+
   return children;
 }
 
 function PlayerProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading, error } = useAuth();
+  const location = useLocation();
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">Cargando...</div>;
   if (error) return <div className="min-h-screen flex items-center justify-center text-red-600 font-bold">{error}</div>;
   
   if (!user || user.role !== 'player') {
     return <Navigate to="/" replace />;
+  }
+
+  // Verificar aislamiento por sala: Si la URL es /sala/:slug/player, el usuario debe pertenecer estrictamente a esa sala
+  const salaMatch = location.pathname.match(/^\/sala\/([^\/]+)/);
+  if (salaMatch) {
+    const routeSlug = salaMatch[1].toLowerCase();
+    const userTenant = (user.tenant_id || 'default').toLowerCase();
+    if (userTenant !== routeSlug && !(routeSlug === 'bingo-lite' && userTenant === 'default')) {
+      // El usuario pertenece a otra sala. Impedir acceso a sala ajena y redirigir al login de esta sala
+      return <Navigate to={`/sala/${routeSlug}`} replace />;
+    }
   }
 
   return children;
@@ -621,6 +658,12 @@ export default function App() {
               <Route path="/sala/:slug/dynamics" element={<DynamicsInfo />} />
               <Route path="/sala/:slug/free-games" element={<FreeGames />} />
               <Route path="/sala/:slug/registration-success" element={<RegistrationSuccess />} />
+              <Route path="/sala/:slug/admin/login" element={<AdminLogin />} />
+              <Route path="/sala/:slug/admin" element={
+                <ProtectedRoute>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              } />
               
               {/* Redirigir cualquier otra ruta a Home */}
               <Route path="*" element={<Navigate to="/" replace />} />

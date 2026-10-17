@@ -14,6 +14,7 @@ interface User {
   email?: string;
   isSuperAdmin?: boolean;
   city?: string;
+  tenant_id?: string;
 }
 
 interface AuthContextType {
@@ -21,8 +22,9 @@ interface AuthContextType {
   loading: boolean;
   error: string | null;
   loginAdmin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  loginTenantAdmin: (email: string, password: string, roomSlug?: string) => Promise<{ success: boolean; error?: string; user?: any }>;
   registerAdmin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  loginPlayer: (phone: string, password?: string, name?: string) => Promise<void>;
+  loginPlayer: (phone: string, password?: string, name?: string, accessCode?: string, roomSlug?: string) => Promise<any>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ success: boolean; error?: string }>;
   updatePassword: (password: string) => Promise<{ success: boolean; error?: string }>;
@@ -33,6 +35,7 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
   error: null,
   loginAdmin: async () => ({ success: false }),
+  loginTenantAdmin: async () => ({ success: false }),
   registerAdmin: async () => ({ success: false }),
   loginPlayer: async () => {},
   logout: async () => {},
@@ -168,6 +171,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         setLoading(false);
       } else {
+        // Verificar si hay una sesión activa de administrador de sala guardada
+        let savedAdmin = null;
+        try {
+          savedAdmin = localStorage.getItem('bingo_admin_user');
+        } catch (e) {}
+
+        if (savedAdmin) {
+          try {
+            const admin = JSON.parse(savedAdmin);
+            const currentPath = window.location.pathname;
+            const salaMatch = currentPath.match(/^\/sala\/([^\/]+)/);
+            const urlTenant = salaMatch ? salaMatch[1].toLowerCase() : null;
+
+            // Si está en /sala/:slug/admin, verificar que el admin pertenezca a esa sala (o sea superadmin)
+            if (urlTenant && !admin.isSuperAdmin && (admin.tenant_id || '').toLowerCase() !== urlTenant) {
+              console.warn(`[Auth] Sesión de admin pertenece a "${admin.tenant_id}", pero estás en "${urlTenant}". Limpiando sesión de admin para esta ruta.`);
+              setUser(null);
+              setLoading(false);
+              return;
+            }
+
+            setUser(admin);
+            setLoading(false);
+            return;
+          } catch (e) {}
+        }
+
         let savedPlayer = null;
         try {
           savedPlayer = localStorage.getItem('bingo_player');
@@ -179,6 +209,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (savedPlayer) {
             try {
               const player = JSON.parse(savedPlayer);
+
+              // Validar aislamiento por sala: si la URL es /sala/:slug, verificar que el jugador pertenezca a esa sala
+              const currentPath = window.location.pathname;
+              const salaMatch = currentPath.match(/^\/sala\/([^\/]+)/);
+              const urlTenant = salaMatch ? salaMatch[1].toLowerCase() : null;
+              const playerTenant = (player.tenant_id || 'default').toLowerCase();
+
+              if (urlTenant && playerTenant !== urlTenant && !(urlTenant === 'bingo-lite' && playerTenant === 'default')) {
+                console.log(`[Auth] Sesión guardada pertenece a "${playerTenant}", no a "${urlTenant}". Requiere login en esta sala.`);
+                setUser(null);
+                setLoading(false);
+                return;
+              }
+
               setUser(prev => prev?.uid === player.uid ? prev : player);
               
               // Validate in background if saved player still exists in database
@@ -187,10 +231,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   const rawPhone = player.phone || '';
                   const cleanPhone = rawPhone.replace(/\D/g, '');
                   if (cleanPhone) {
-                    const checkRes = await fetch(`/api/players/${cleanPhone}/cards?_t=${Date.now()}`);
+                    const tenantQuery = playerTenant ? `&tenantId=${encodeURIComponent(playerTenant)}` : '';
+                    const checkRes = await fetch(`/api/players/${cleanPhone}/cards?_t=${Date.now()}${tenantQuery}`);
                     const checkData = await checkRes.json().catch(() => ({}));
                     if (checkRes.status === 404 || checkData.error === 'Player not found' || checkData.status === 'not_found') {
-                      console.log('[Auth] Jugador guardado ya no existe en la base de datos. Limpiando sesión...');
+                      console.log('[Auth] Jugador guardado ya no existe en la base de datos de esta sala. Limpiando sesión...');
                       try { localStorage.removeItem('bingo_player'); } catch (e) {}
                       if (isMounted) {
                         setUser(null);
@@ -272,13 +317,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: true };
   };
 
-  const loginPlayer = async (rawPhone: string, password?: string, name?: string) => {
+  const loginPlayer = async (rawPhone: string, password?: string, name?: string, accessCode?: string, roomSlug?: string) => {
     const phone = normalizePhone(rawPhone);
     try {
       const res = await apiFetch('/api/players/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, password })
+        body: JSON.stringify({ 
+          phone, 
+          password,
+          access_code: accessCode,
+          room_slug: roomSlug,
+          tenant_id: roomSlug
+        })
       });
       
       const data = await res.json();
@@ -287,18 +338,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error(data.error || 'Error al iniciar sesión');
       }
       
+      const resolvedTenant = data.tenant_id || data.room_slug || roomSlug || 'default';
       const playerUser: User = { 
         uid: data.id ? `player-${data.id}` : `player-${data.phone}`, 
         name: data.name || name || 'Invitado', 
         role: 'player', 
         phone: data.phone,
         email: data.email,
-        city: data.city
+        city: data.city,
+        tenant_id: resolvedTenant
       };
       
       try { sessionStorage.removeItem('push_banner_dismissed'); } catch (e) {}
       setUser(playerUser);
       localStorage.setItem('bingo_player', JSON.stringify(playerUser));
+      localStorage.setItem(`bingo_player_${resolvedTenant.toLowerCase()}`, JSON.stringify(playerUser));
       
       const doOneSignalLogin = async () => {
         try {
@@ -312,8 +366,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
       if (soundSettings.login) playLoginSound();
+
+      return data;
     } catch (err: any) {
       throw err;
+    }
+  };
+
+  const loginTenantAdmin = async (email: string, password: string, roomSlug?: string) => {
+    try {
+      const res = await apiFetch('/api/admin/tenant-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, room_slug: roomSlug })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { success: false, error: data.error || 'Credenciales de administrador incorrectas' };
+      }
+
+      const adminUser: User = {
+        uid: data.user.uid,
+        name: data.user.name,
+        role: 'admin',
+        email: data.user.email,
+        isSuperAdmin: !!data.user.isSuperAdmin,
+        tenant_id: data.user.tenant_id
+      };
+
+      setUser(adminUser);
+      localStorage.setItem('bingo_admin_user', JSON.stringify(adminUser));
+      
+      const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
+      if (soundSettings.login) playLoginSound();
+
+      return { success: true, user: adminUser };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Error de conexión con el servidor' };
     }
   };
 
@@ -328,6 +417,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Logout error:', e);
     } finally {
       localStorage.removeItem('bingo_player');
+      localStorage.removeItem('bingo_admin_user');
       setUser(null);
       
       try {
@@ -357,7 +447,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, loginAdmin, registerAdmin, loginPlayer, logout, resetPassword, updatePassword }}>
+    <AuthContext.Provider value={{ user, loading, error, loginAdmin, loginTenantAdmin, registerAdmin, loginPlayer, logout, resetPassword, updatePassword }}>
       {children}
     </AuthContext.Provider>
   );

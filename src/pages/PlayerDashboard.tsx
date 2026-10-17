@@ -18,6 +18,7 @@ import { PWAInstallButton } from '../components/PWAInstallButton';
 import PushSubscriptionBanner from '../components/PushSubscriptionBanner';
 import { useTTS } from '../hooks/useTTS';
 import { useAuth } from '../AuthContext';
+import { useTenant } from '../TenantContext';
 import { getBingoChannel } from '../ably';
 import { announceBall } from '../utils/speech';
 import { playMarkSound, playUnmarkSound, playErrorSound, playChatOpenSound, playChatCloseSound, playSynthesizedDJEffect, getAudioContext, setGlobalFxVolume, getGlobalFxVolume, playBase64PCM, playFxFromUrl } from '../utils/sound';
@@ -52,6 +53,7 @@ const getProxyUrl = (url: string): string => {
 export default function PlayerDashboard() {
   const navigate = useNavigate();
   const { user, loading: authLoading, logout } = useAuth();
+  const { tenantSlug, tenantPrefix } = useTenant();
   const fetchReferralStats = useCallback(async () => {
     if (!user?.phone) return;
     setIsFetchingStats(true);
@@ -617,7 +619,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     try {
       const normalizedPhone = currentUser.phone ? normalizePhone(currentUser.phone) : '';
       if (!normalizedPhone) return;
-      const res = await apiFetch(`/api/players/${normalizedPhone}/cards?_t=${Date.now()}`);
+      const tenantParam = tenantSlug ? `&tenantId=${encodeURIComponent(tenantSlug)}` : '';
+      const res = await apiFetch(`/api/players/${normalizedPhone}/cards?_t=${Date.now()}${tenantParam}`);
       const data = await res.json();
       
       if (data.status === 'not_found' || data.error) {
@@ -698,7 +701,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     if (!currentUser?.phone) return;
     try {
       const normalizedPhone = normalizePhone(currentUser.phone);
-      const res = await apiFetch(`/api/wallet?phone=${normalizedPhone}&gameId=${gameStateRef.current?.id || ''}&_t=${Date.now()}`);
+      const tenantParam = tenantSlug ? `&tenantId=${encodeURIComponent(tenantSlug)}` : '';
+      const res = await apiFetch(`/api/wallet?phone=${normalizedPhone}${tenantParam}&gameId=${gameStateRef.current?.id || ''}&_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         setWalletBalance(data.balance);
@@ -714,7 +718,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     if (!currentUser?.phone) return;
     try {
       const normalizedPhone = normalizePhone(currentUser.phone);
-      const res = await apiFetch(`/api/wallet/history?phone=${normalizedPhone}&_t=${Date.now()}`);
+      const tenantParam = tenantSlug ? `&tenantId=${encodeURIComponent(tenantSlug)}` : '';
+      const res = await apiFetch(`/api/wallet/history?phone=${normalizedPhone}${tenantParam}&_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         setWalletHistory(data);

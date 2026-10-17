@@ -371,59 +371,90 @@ async function getGiftStatsMap(targetGameId?: number) {
   return giftsMap;
 }
 
-// Wallet helper functions
-async function getWalletBalance(rawPhone: string): Promise<number> {
+// Wallet helper functions con aislamiento estricto por sala (Tenant)
+async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
+  if (!phone) return 0;
+  const targetTenant = (tenantId || 'default').toLowerCase();
   try {
-    const { data, error } = await supabase.from('wallets').select('balance').eq('phone', phone).single();
-    if (error && error.code !== 'PGRST116') throw error;
+    let query = supabase.from('wallets').select('balance').eq('phone', phone);
+    if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+      query = query.eq('tenant_id', targetTenant);
+    } else {
+      query = query.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      if (error.code === '42703') { // Columna tenant_id no existe aún en la tabla wallets de Supabase
+        // Si es una sala secundaria, no filtrar saldo global para no cruzar billeteras entre salas
+        if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+          return 0;
+        }
+        const fallback = await supabase.from('wallets').select('balance').eq('phone', phone).maybeSingle();
+        return fallback.data ? fallback.data.balance : 0;
+      }
+      if (error.code !== 'PGRST116') throw error;
+    }
     return data ? data.balance : 0;
   } catch (e: any) {
-
     return 0;
   }
 }
 
-// Cola por teléfono para garantizar atomicidad y prevenir condiciones de carrera (double-spending)
+// Cola por teléfono y sala para garantizar atomicidad y prevenir condiciones de carrera (double-spending)
 const walletUpdateQueues = new Map<string, Promise<any>>();
 
-async function updateWalletBalance(rawPhone: string, amount: number, description: string = 'Transacción de billetera', type: string = 'other'): Promise<number> {
+async function updateWalletBalance(rawPhone: string, amount: number, description: string = 'Transacción de billetera', type: string = 'other', tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
   if (!phone) return 0;
+  const targetTenant = (tenantId || 'default').toLowerCase();
+  const queueKey = `${targetTenant}:${phone}`;
 
-  const currentQueue = walletUpdateQueues.get(phone) || Promise.resolve();
+  const currentQueue = walletUpdateQueues.get(queueKey) || Promise.resolve();
 
   const execution = currentQueue.catch(() => 0).then(async () => {
     try {
-      const currentBalance = await getWalletBalance(phone);
+      const currentBalance = await getWalletBalance(phone, targetTenant);
       const newBalance = currentBalance + amount;
 
-      const payload: any = { phone, balance: newBalance };
+      const payload: any = { phone, balance: newBalance, tenant_id: targetTenant };
 
-      const { data: existing, error: selectError } = await supabase.from('wallets').select('phone').eq('phone', phone).maybeSingle();
-      if (selectError) throw selectError;
+      let existingQ = supabase.from('wallets').select('id, phone').eq('phone', phone);
+      if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+        existingQ = existingQ.eq('tenant_id', targetTenant);
+      }
+      const { data: existing, error: selectError } = await existingQ.maybeSingle();
 
       if (existing) {
-        const { error: updateError } = await supabase.from('wallets').update({ balance: newBalance }).eq('phone', phone);
-        if (updateError) throw updateError;
+        let updateQ = supabase.from('wallets').update({ balance: newBalance }).eq('phone', phone);
+        if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+          updateQ = updateQ.eq('tenant_id', targetTenant);
+        }
+        await updateQ;
       } else {
-        const { error: insertError } = await supabase.from('wallets').insert(payload);
-        if (insertError) throw insertError;
+        const { error: insertErr } = await supabase.from('wallets').insert(payload);
+        if (insertErr && insertErr.code === '42703') {
+          delete payload.tenant_id;
+          await supabase.from('wallets').insert(payload);
+        }
       }
 
-      // Registrar transacción
-      const { error: txError } = await supabase.from('wallet_transactions').insert({
+      // Registrar transacción con tenant_id
+      const txPayload: any = {
         player_phone: phone,
         amount: amount,
         description,
-        type
-      });
-      if (txError) {
-        console.warn('[updateWalletBalance] Error registrando transacción de billetera:', txError);
+        type,
+        tenant_id: targetTenant
+      };
+      const { error: txError } = await supabase.from('wallet_transactions').insert(txPayload);
+      if (txError && txError.code === '42703') {
+        delete txPayload.tenant_id;
+        await supabase.from('wallet_transactions').insert(txPayload);
       }
 
-      // Publish update
-      getChannel().publish('wallet_updated', { phone, balance: newBalance });
+      // Publish update en canal de la sala
+      getChannel(targetTenant).publish('wallet_updated', { phone, balance: newBalance, tenantId: targetTenant });
       return newBalance;
     } catch (e: any) {
       console.error('[updateWalletBalance] Error actualizando balance:', e);
@@ -431,7 +462,7 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
     }
   });
 
-  walletUpdateQueues.set(phone, execution);
+  walletUpdateQueues.set(queueKey, execution);
   return execution;
 }
 
@@ -676,12 +707,32 @@ app.get('/api/tenant/info', async (req, res) => {
 });
 
 // Endpoint para que los organizadores creen su sala de bingo
+// Endpoint para que los organizadores creen su sala de bingo con su propio administrador independiente
 app.post('/api/tenants', async (req, res) => {
   try {
-    const { name, slug: rawSlug, access_code: rawCode, primary_color, logo_url, banner_url, organizer_name, contact_phone } = req.body;
+    const { 
+      name, 
+      slug: rawSlug, 
+      access_code: rawCode, 
+      primary_color, 
+      logo_url, 
+      banner_url, 
+      organizer_name, 
+      contact_phone,
+      admin_email,
+      admin_password
+    } = req.body;
 
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'El nombre de la sala es obligatorio.' });
+    }
+
+    if (!admin_email || !admin_email.trim()) {
+      return res.status(400).json({ error: 'El correo electrónico del administrador de la sala es obligatorio.' });
+    }
+
+    if (!admin_password || admin_password.length < 6) {
+      return res.status(400).json({ error: 'La contraseña de administrador debe tener al menos 6 caracteres.' });
     }
 
     // Normalizar slug (solo letras, números y guiones)
@@ -704,7 +755,10 @@ app.post('/api/tenants', async (req, res) => {
       ? rawCode.trim().toUpperCase()
       : Math.random().toString(36).substring(2, 8).toUpperCase();
 
-    const tenantPayload = {
+    const cleanAdminEmail = admin_email.trim().toLowerCase();
+    const hashedAdminPassword = hashPassword(admin_password);
+
+    const tenantPayload: any = {
       id: slug,
       name: name.trim(),
       slug: slug,
@@ -714,7 +768,11 @@ app.post('/api/tenants', async (req, res) => {
       logo_url: logo_url || null,
       banner_url: banner_url || null,
       plan: 'pro',
-      max_cards_per_game: 20000
+      max_cards_per_game: 20000,
+      admin_email: cleanAdminEmail,
+      admin_password: hashedAdminPassword,
+      admin_name: (organizer_name || name).trim(),
+      contact_phone: contact_phone ? contact_phone.trim() : null
     };
 
     let tenantRecord = tenantPayload;
@@ -733,12 +791,24 @@ app.post('/api/tenants', async (req, res) => {
       tenantsCache.set(slug, { tenant: createdTenant, timestamp: Date.now() });
     }
 
+    const host = req.headers.host || 'bingolite.click';
+    const forwardedProto = req.headers['x-forwarded-proto'];
+    const proto = (typeof forwardedProto === 'string' ? forwardedProto : '') || (req.secure ? 'https' : 'http');
+    const fullUrl = `${proto}://${host}/sala/${slug}`;
+    const adminUrl = `${proto}://${host}/sala/${slug}/admin`;
+
+    // Sanitizar respuesta (no retornar hash de contraseña)
+    const sanitizedTenant = { ...tenantRecord };
+    delete sanitizedTenant.admin_password;
+
     res.json({
       success: true,
-      message: '¡Sala de bingo creada con éxito!',
-      tenant: tenantRecord,
-      url: `https://bingolite.click/sala/${slug}`,
-      access_code: accessCode
+      message: '¡Sala de bingo creada con éxito con su propio administrador independiente!',
+      tenant: sanitizedTenant,
+      url: fullUrl,
+      admin_url: adminUrl,
+      access_code: accessCode,
+      admin_email: cleanAdminEmail
     });
   } catch (error: any) {
     console.error('[CreateTenant] Excepción:', error);
@@ -764,6 +834,102 @@ app.post('/api/tenants/verify-code', async (req, res) => {
     }
   } catch (err: any) {
     res.status(500).json({ error: 'Error verificando código de sala.' });
+  }
+});
+
+// Endpoint de autenticación exclusivo para administradores de sala independiente
+app.post('/api/admin/tenant-login', async (req, res) => {
+  try {
+    const { email: rawEmail, password, room_slug } = req.body;
+    const email = (rawEmail || '').trim().toLowerCase();
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Correo y contraseña de administrador requeridos.' });
+    }
+
+    const targetRoomSlug = (room_slug || (req as any).tenantId || '').trim().toLowerCase();
+
+    // 1. Identificar si es un Super Administrador Global del sistema
+    const superAdminEmails = [
+      'comamosexpress@gmail.com', 
+      'stcganas@gmail.com',
+      ...(process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()) : [])
+    ];
+
+    if (superAdminEmails.includes(email)) {
+      return res.json({
+        success: true,
+        user: {
+          uid: `superadmin-${email}`,
+          email,
+          name: 'Super Administrador Global',
+          role: 'admin',
+          isSuperAdmin: true,
+          tenant_id: targetRoomSlug || 'global'
+        }
+      });
+    }
+
+    // 2. Administrador de sala específica
+    let targetTenant: any = null;
+    if (targetRoomSlug && targetRoomSlug !== 'default' && targetRoomSlug !== 'global') {
+      targetTenant = await getTenantInfo(targetRoomSlug);
+    } else {
+      // Buscar tenant por admin_email
+      for (const [key, val] of tenantsCache.entries()) {
+        if ((val.tenant.admin_email || '').toLowerCase() === email) {
+          targetTenant = val.tenant;
+          break;
+        }
+      }
+      if (!targetTenant) {
+        try {
+          const { data } = await supabase.from('tenants').select('*').eq('admin_email', email).maybeSingle();
+          if (data) targetTenant = data;
+        } catch (e) {}
+      }
+    }
+
+    if (!targetTenant) {
+      return res.status(401).json({ 
+        error: 'No se encontró ninguna sala de bingo asignada a este correo de administrador.' 
+      });
+    }
+
+    // Comprobación estricta de aislamiento de administración por sala:
+    // Si el usuario intentó acceder a la sala X pero sus credenciales pertenecen a la sala Y:
+    if (targetRoomSlug && targetRoomSlug !== 'default' && targetTenant.slug !== targetRoomSlug) {
+      return res.status(403).json({ 
+        error: `Tus credenciales de administrador pertenecen a la sala "${targetTenant.name || targetTenant.slug}". No tienes autorización para administrar la sala "${targetRoomSlug}".` 
+      });
+    }
+
+    // Validar contraseña
+    if (!targetTenant.admin_password) {
+      return res.status(401).json({ error: 'Esta sala aún no tiene credenciales de administrador configuradas.' });
+    }
+
+    const isMatch = verifyPassword(password, targetTenant.admin_password);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Contraseña de administrador incorrecta para esta sala.' });
+    }
+
+    // Devolver sesión aislada de administrador de sala
+    res.json({
+      success: true,
+      user: {
+        uid: `admin-${targetTenant.slug}`,
+        email: targetTenant.admin_email,
+        name: targetTenant.admin_name || targetTenant.name,
+        role: 'admin',
+        isSuperAdmin: false,
+        tenant_id: targetTenant.slug,
+        tenant_name: targetTenant.name
+      }
+    });
+  } catch (err: any) {
+    console.error('Error en tenant-login:', err);
+    res.status(500).json({ error: 'Error interno en autenticación de administrador.' });
   }
 });
 
@@ -1251,45 +1417,60 @@ async function broadcastGameUpdate(gameId: number, manualState?: any) {
 
 app.get('/api/wallet', async (req, res) => {
   try {
-    const { phone: rawPhone, gameId } = req.query;
+    const { phone: rawPhone, gameId, tenantId: qTenantId } = req.query;
     const phone = normalizePhone(rawPhone as string);
     if (!phone) return res.status(400).json({ error: 'Phone is required' });
+
+    const tenantId = (qTenantId as string) || (req as any).tenantId || 'default';
 
     // Touch player presence
     touchPlayerPresence(phone);
 
-    const balance = await getWalletBalance(phone);
+    const balance = await getWalletBalance(phone, tenantId);
     const activated = gameId ? await isWalletActivated(phone, parseInt(gameId as string)) : false;
 
-    // Check if player already exists and has a password
-    const { data: player } = await supabase.from('players').select('id, password').eq('phone', phone).maybeSingle();
+    // Check if player already exists in this tenant and has a password
+    let playerQ = supabase.from('players').select('id, password').eq('phone', phone);
+    if (tenantId !== 'default' && tenantId !== 'bingo-lite') {
+      playerQ = playerQ.eq('tenant_id', tenantId);
+    }
+    const { data: player } = await playerQ.maybeSingle();
     const hasPassword = !!(player?.password && player.password.trim() !== '');
 
     res.json({ balance, activated, hasPassword });
   } catch (err: any) {
-
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 app.get('/api/wallet/history', async (req, res) => {
-  const { phone: rawPhone } = req.query;
+  const { phone: rawPhone, tenantId: qTenantId } = req.query;
   if (!rawPhone || typeof rawPhone !== 'string') return res.status(400).json({ error: 'Favor proporcionar un número de teléfono válido' });
   const phone = normalizePhone(rawPhone);
+  const tenantId = (qTenantId as string) || (req as any).tenantId || 'default';
   try {
-    console.log(`[API] Fetching history for ${phone}`);
-    const { data: history, error } = await supabase.from('wallet_transactions').select('*').eq('player_phone', phone).order('created_at', { ascending: false });
+    console.log(`[API] Fetching history for ${phone} in tenant ${tenantId}`);
+    let query = supabase.from('wallet_transactions').select('*').eq('player_phone', phone);
+    if (tenantId !== 'default' && tenantId !== 'bingo-lite') {
+      query = query.eq('tenant_id', tenantId);
+    }
+    const { data: history, error } = await query.order('created_at', { ascending: false });
     if (error) {
       if (error.code === 'PGRST205' || error.code === '42P01') {
         console.warn('History table not found, returning empty');
         return res.json([]);
       }
-
+      if (error.code === '42703') { // Columna tenant_id no existe en BD
+        if (tenantId !== 'default' && tenantId !== 'bingo-lite') {
+          return res.json([]); // En salas externas no filtrar transacciones de otras salas
+        }
+        const fallback = await supabase.from('wallet_transactions').select('*').eq('player_phone', phone).order('created_at', { ascending: false });
+        return res.json(fallback.data || []);
+      }
       throw error;
     }
     res.json(history || []);
   } catch (err: any) {
-    // ignored
     res.status(500).json({ error: 'Error interno al cargar historial' });
   }
 });
@@ -2256,11 +2437,70 @@ app.get('/api/sellers/:code/stats', async (req, res) => {
 
 app.post('/api/players/login', async (req, res) => {
   try {
-    const { phone: rawPhone, password } = req.body;
+    const { phone: rawPhone, password, access_code, room_slug, tenant_id } = req.body;
     const phone = normalizePhone(rawPhone);
 
     if (!phone) return res.status(400).json({ error: 'Teléfono requerido' });
+    if (!password) return res.status(400).json({ error: 'Contraseña requerida' });
+    if (!access_code || !access_code.trim()) {
+      return res.status(400).json({ error: 'El código de seguridad de la sala es obligatorio' });
+    }
 
+    const inputCode = access_code.trim().toUpperCase();
+
+    // 1. Identificar la sala (tenant)
+    let targetTenantId = (room_slug || tenant_id || (req as any).tenantId || '').toLowerCase();
+    let tenantInfo: any = null;
+
+    if (targetTenantId && targetTenantId !== 'default') {
+      tenantInfo = await getTenantInfo(targetTenantId);
+    } else {
+      // Si no se proporcionó sala explícita (e.g. desde la página principal),
+      // buscar qué sala tiene este access_code
+      for (const [key, val] of tenantsCache.entries()) {
+        if ((val.tenant.access_code || '').toUpperCase() === inputCode) {
+          tenantInfo = val.tenant;
+          targetTenantId = val.tenant.slug || val.tenant.id;
+          break;
+        }
+      }
+
+      if (!tenantInfo) {
+        try {
+          const { data: foundTenant } = await supabase
+            .from('tenants')
+            .select('*')
+            .ilike('access_code', inputCode)
+            .maybeSingle();
+          if (foundTenant) {
+            tenantInfo = foundTenant;
+            targetTenantId = foundTenant.slug || foundTenant.id;
+          }
+        } catch (e) {}
+      }
+
+      // Si aún no se encuentra, verificar si es el código de la sala oficial
+      if (!tenantInfo && inputCode === 'LITE777') {
+        tenantInfo = await getTenantInfo('bingo-lite');
+        targetTenantId = 'bingo-lite';
+      }
+    }
+
+    if (!tenantInfo) {
+      return res.status(401).json({
+        error: 'Código de seguridad no válido. No se encontró ninguna sala activa con este código.'
+      });
+    }
+
+    // 2. Validar el código de seguridad de la sala
+    const roomValidCode = (tenantInfo.access_code || 'BINGO2026').toUpperCase();
+    if (inputCode !== roomValidCode) {
+      return res.status(401).json({
+        error: `El código de seguridad "${inputCode}" es incorrecto para la sala ${tenantInfo.name || targetTenantId}. Solicita el código correcto al organizador.`
+      });
+    }
+
+    // Modo mantenimiento
     const globalSettings = await getGameSettings('global');
     if (globalSettings.maintenance_mode) {
       const allowedPhones: string[] = (globalSettings.maintenance_allowed_phones || ['3145261451']).map((p: string) => normalizePhone(p));
@@ -2272,47 +2512,69 @@ app.post('/api/players/login', async (req, res) => {
       }
     }
 
-    const { data: player, error: fetchError } = await supabase
+    // 3. Buscar al jugador ESTRICTAMENTE dentro de esta sala (tenant_id)
+    let playerQuery = supabase
       .from('players')
       .select('*')
-      .eq('phone', phone)
-      .maybeSingle();
+      .eq('phone', phone);
 
-    if (fetchError) throw fetchError;
+    if (targetTenantId && targetTenantId !== 'default' && targetTenantId !== 'bingo-lite') {
+      playerQuery = playerQuery.eq('tenant_id', targetTenantId);
+    } else {
+      playerQuery = playerQuery.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
+
+    let { data: player, error: fetchError } = await playerQuery.maybeSingle();
+
+    if (fetchError) {
+      // Si la columna tenant_id aún no existe en Supabase (error 42703), buscar por teléfono
+      if (fetchError.code === '42703') {
+        const fallbackRes = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
+        player = fallbackRes.data;
+      } else {
+        throw fetchError;
+      }
+    }
 
     if (!player) {
-      return res.status(404).json({ error: 'Usuario no encontrado. Por favor regístrate primero.' });
+      return res.status(404).json({
+        error: `No estás registrado en la sala "${tenantInfo.name || targetTenantId}". Cada sala es privada e independiente. Por favor regístrate en esta sala para poder ingresar.`,
+        notRegisteredInRoom: true,
+        roomSlug: tenantInfo.slug || targetTenantId
+      });
     }
 
     if (player.is_blocked) {
-      return res.status(403).json({ error: 'Tu cuenta ha sido bloqueada. Contacta al administrador.' });
+      return res.status(403).json({ error: 'Tu cuenta ha sido bloqueada en esta sala. Contacta al organizador.' });
     }
 
-    // Check password if set in DB
+    // 4. Validar contraseña
     if (player.password && player.password.trim() !== '') {
-      if (!password) {
-        return res.status(401).json({ error: 'Contraseña requerida', passwordRequired: true });
-      }
       const isMatch = verifyPassword(password, player.password);
       if (!isMatch) {
-        return res.status(401).json({ error: 'Contraseña incorrecta. Por favor verifícala.', passwordRequired: true });
+        return res.status(401).json({ error: 'Contraseña incorrecta. Por favor verifícala.' });
       }
 
-      // Auto-migración transparente a PBKDF2 si estaba en texto plano
+      // Auto-migración a PBKDF2 si estaba en texto plano
       if (!player.password.startsWith('pbkdf2$')) {
         const secureHash = hashPassword(password);
-        supabase.from('players').update({ password: secureHash }).eq('phone', phone).then(() => {
-          console.log(`[Seguridad] Contraseña de jugador ${phone} migrada exitosamente a PBKDF2.`);
-        }).catch((e: any) => console.warn('[Seguridad] Error en auto-migración de contraseña:', e));
+        supabase.from('players').update({ password: secureHash }).eq('id', player.id).catch(() => {});
       }
+    } else {
+      // Si el jugador no tenía contraseña asignada, establecer la ingresada
+      const secureHash = hashPassword(password);
+      supabase.from('players').update({ password: secureHash }).eq('id', player.id).catch(() => {});
     }
 
-    // SANITIZACIÓN: Nunca devolver el campo password al cliente en JSON
+    // Sanitización
     delete player.password;
+    player.tenant_id = targetTenantId;
+    player.room_slug = tenantInfo.slug || targetTenantId;
 
     res.json(player);
   } catch (err: any) {
-    res.status(500).json({ error: 'No se pudo conectar a Supabase.' });
+    console.error('Error en login de jugador:', err);
+    res.status(500).json({ error: 'No se pudo conectar a la base de datos.' });
   }
 });
 
@@ -2363,21 +2625,22 @@ app.post('/api/players/change-password', async (req, res) => {
 });
 
 app.get('/api/games', async (req, res) => {
+  const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase();
   const now = Date.now();
-  if (cachedGamesList && (now - lastGamesListFetchTime < GAMES_LIST_CACHE_TTL)) {
+  if (!targetTenant && cachedGamesList && (now - lastGamesListFetchTime < GAMES_LIST_CACHE_TTL)) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     return res.json(cachedGamesList);
   }
 
-  console.log('--- FETCHING ALL GAMES ---');
+  console.log(`--- FETCHING GAMES (Tenant: ${targetTenant || 'all'}) ---`);
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
 
   try {
-    const { data, error } = await supabase
+    let gamesQuery = supabase
       .from('game')
       .select(`
         *,
@@ -2387,6 +2650,12 @@ app.get('/api/games', async (req, res) => {
         )
       `)
       .order('id', { ascending: false });
+
+    if (targetTenant && targetTenant !== 'global' && targetTenant !== 'default') {
+      gamesQuery = gamesQuery.eq('tenant_id', targetTenant);
+    }
+
+    const { data, error } = await gamesQuery;
 
     if (error) {
       // ignored
@@ -3211,11 +3480,15 @@ app.post('/api/games', async (req, res) => {
       active_lottery, active_draw, lottery_name, lottery_date, lottery_time, lottery_digits,
       lottery_prize_type, lottery_prize_value
     } = req.body;
-    console.log('Creation data:', { name, start_time, type, prize_type, active_lottery, active_draw });
+    const targetTenant = (req.body.tenant_id || (req as any).tenantId || req.query.tenantId || '').toLowerCase();
+    console.log('Creation data:', { name, start_time, type, prize_type, active_lottery, active_draw, targetTenant });
 
     const newGame: any = {
       name, start_time, prize, card_value, status: 'scheduled', drawn_balls: []
     };
+    if (targetTenant && targetTenant !== 'global' && targetTenant !== 'default') {
+      newGame.tenant_id = targetTenant;
+    }
 
     const { data: game, error } = await supabase.from('game').insert(newGame).select().single();
 
@@ -7336,10 +7609,10 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         if (finalStatus === 'approved') {
           await activateWallet(phone, game.id);
         }
-      } else if (!isFreeGame) {
+      } else if (!isFreeGame && payment_method !== 'free' && req.body.is_free !== 'true' && req.body.is_free !== true) {
         return res.status(400).json({ error: 'Por favor, adjunta el comprobante de pago o usa tu billetera.' });
       } else {
-        // Free game, no receipt needed
+        // Free game or free registration, no receipt needed
         receipt_url = 'FREE_GAME';
       }
     }
@@ -7366,14 +7639,22 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       console.log(`[Free Game Auto-Approval] Player ${phone} set to APPROVED with ${finalCardCount} cards.`);
     }
 
-    const { data: existingPlayer, error: selectError } = await supabase
+    const effectiveTenant = (rawTenantId || (req as any).tenantId || 'default').toLowerCase();
+    let selectPlayerQuery = supabase
       .from('players')
       .select('*')
-      .eq('phone', phone)
-      .maybeSingle();
+      .eq('phone', phone);
 
-    if (selectError) {
+    if (effectiveTenant && effectiveTenant !== 'default' && effectiveTenant !== 'bingo-lite') {
+      selectPlayerQuery = selectPlayerQuery.eq('tenant_id', effectiveTenant);
+    } else {
+      selectPlayerQuery = selectPlayerQuery.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
 
+    let { data: existingPlayer, error: selectError } = await selectPlayerQuery.maybeSingle();
+    if (selectError && selectError.code === '42703') {
+      const fallback = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
+      existingPlayer = fallback.data;
     }
 
     const currentReceipt = receipt_url ? {
@@ -7905,10 +8186,15 @@ app.get('/api/players', async (req, res) => {
 
     // 2. Get all players and only fetch card_number and game_id columns (avoiding huge b, i, n, g, o arrays)
     // filtered to the current game if active to drastically reduce egress.
+    const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase();
     let playersQuery = supabase
       .from('players')
       .select('*, cards(card_number, game_id)')
       .order('created_at', { ascending: false });
+
+    if (targetTenant && targetTenant !== 'global' && targetTenant !== 'default') {
+      playersQuery = playersQuery.eq('tenant_id', targetTenant);
+    }
 
     if (game?.id) {
       playersQuery = playersQuery.eq('cards.game_id', game.id);
@@ -8441,7 +8727,25 @@ app.post('/api/admin/recharge-requests/:id/reject', async (req, res) => {
 app.get('/api/players/:phone/cards', async (req, res) => {
   try {
     const phone = normalizePhone(req.params.phone);
-    const { data: player, error: playerErr } = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
+    const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase();
+
+    let playerQuery = supabase.from('players').select('*').eq('phone', phone);
+    if (targetTenant && targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+      playerQuery = playerQuery.eq('tenant_id', targetTenant);
+    } else {
+      playerQuery = playerQuery.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
+
+    let { data: player, error: playerErr } = await playerQuery.maybeSingle();
+
+    if (playerErr && playerErr.code === '42703') {
+      if (targetTenant && targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+        return res.status(404).json({ error: 'Player not found' });
+      }
+      const fallback = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
+      player = fallback.data;
+      playerErr = fallback.error;
+    }
 
     if (playerErr || !player) return res.status(404).json({ error: 'Player not found' });
 

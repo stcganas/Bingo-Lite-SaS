@@ -18,11 +18,19 @@ CREATE TABLE IF NOT EXISTS public.tenants (
     is_active BOOLEAN DEFAULT true,
     access_code VARCHAR(32) NOT NULL DEFAULT 'BINGO2026',
     max_cards_per_game INTEGER DEFAULT 20000,
+    admin_email TEXT,
+    admin_password TEXT,
+    admin_name TEXT,
+    contact_phone TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- Asegurar columna access_code si la tabla ya existía
+-- Asegurar columnas de seguridad si la tabla ya existía
 ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS access_code VARCHAR(32) DEFAULT 'BINGO2026';
+ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS admin_email TEXT;
+ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS admin_password TEXT;
+ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS admin_name TEXT;
+ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS contact_phone TEXT;
 
 -- 2. REGISTRAR EL TENANT POR DEFECTO Y LA SALA BINGO LITE
 INSERT INTO public.tenants (id, name, slug, subdomain, access_code, max_cards_per_game)
@@ -86,3 +94,45 @@ CREATE INDEX IF NOT EXISTS idx_wallets_tenant_phone ON public.wallets(tenant_id,
 ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Public read tenants" ON public.tenants;
 CREATE POLICY "Public read tenants" ON public.tenants FOR SELECT USING (true);
+
+-- 6. AISLAMIENTO ESTRICTO DE USUARIOS Y BILLETERAS POR SALA (TENANT)
+-- Asegura que un jugador con el mismo teléfono pueda pertenecer a diferentes salas
+-- de forma 100% independiente, sin cruzar saldos de billeteras, historial ni cartones.
+DO $$
+BEGIN
+    -- Tabla players: eliminar restricción única global por teléfono si existe
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'players_phone_key' 
+        AND conrelid = 'public.players'::regclass
+    ) THEN
+        ALTER TABLE public.players DROP CONSTRAINT players_phone_key;
+    END IF;
+
+    -- Agregar restricción compuesta única por tenant y teléfono
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'players_tenant_phone_unique' 
+        AND conrelid = 'public.players'::regclass
+    ) THEN
+        ALTER TABLE public.players ADD CONSTRAINT players_tenant_phone_unique UNIQUE (tenant_id, phone);
+    END IF;
+
+    -- Tabla wallets: eliminar restricción única global si existe
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'wallets_phone_key' 
+        AND conrelid = 'public.wallets'::regclass
+    ) THEN
+        ALTER TABLE public.wallets DROP CONSTRAINT wallets_phone_key;
+    END IF;
+
+    -- Agregar restricción única en wallets por tenant y teléfono
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'wallets_tenant_phone_unique' 
+        AND conrelid = 'public.wallets'::regclass
+    ) THEN
+        ALTER TABLE public.wallets ADD CONSTRAINT wallets_tenant_phone_unique UNIQUE (tenant_id, phone);
+    END IF;
+END $$;

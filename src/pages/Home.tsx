@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Ticket, Shield, LogIn, Clock, Trophy, Zap, Star, ChevronRight, Phone, CheckCircle2, Building, ArrowRight, Calendar, MessageCircle, X, Bell, Users, Award, Plus, Key, Gift, ShieldCheck } from 'lucide-react';
+import { Ticket, Shield, LogIn, Clock, Trophy, Zap, Star, ChevronRight, Phone, CheckCircle2, Building, ArrowRight, Calendar, MessageCircle, X, Bell, Users, Award, Plus, Key, Gift, ShieldCheck, Lock, Eye, EyeOff } from 'lucide-react';
 import { formatCurrency } from '../utils/format';
 import { useAuth } from '../AuthContext';
 import { useTenant } from '../TenantContext';
@@ -20,7 +20,8 @@ export default function Home() {
   const [freeGames, setFreeGames] = useState<any[]>([]);
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [showPasswordInput, setShowPasswordInput] = useState(false);
+  const [roomCode, setRoomCode] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<any>(null);
   const [showWhatsappModal, setShowWhatsappModal] = useState(false);
@@ -127,36 +128,61 @@ export default function Home() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!phone.trim()) {
+      toast.error("Por favor ingresa tu número de WhatsApp");
+      return;
+    }
+    if (!password.trim()) {
+      toast.error("Por favor ingresa tu contraseña de usuario");
+      return;
+    }
+    if (!roomCode.trim()) {
+      toast.error("Por favor ingresa el código de seguridad de la sala");
+      return;
+    }
+
     setLoading(true);
     try {
-      await loginPlayer(phone, password);
+      const data = await loginPlayer(
+        phone, 
+        password, 
+        undefined, 
+        roomCode.trim().toUpperCase(), 
+        tenantSlug || ''
+      );
+      const targetSlug = data.room_slug || tenantSlug;
+      toast.success(`¡Acceso concedido a la sala ${tenant?.name || targetSlug || ''}!`);
+      if (targetSlug && targetSlug !== 'default' && targetSlug !== 'bingo-lite') {
+        navigate(`/sala/${targetSlug}/player`);
+      } else {
+        navigate(tenantPrefix ? `${tenantPrefix}/player` : '/player');
+      }
     } catch (error: any) {
-      if (error.message && error.message.includes('Contraseña requerida')) {
-        setShowPasswordInput(true);
-        toast.error("Este número de WhatsApp está protegido con contraseña. Por favor ingrésala.");
-      } else if (error.message && error.message.includes('Contraseña incorrecta')) {
-        setShowPasswordInput(true);
-        toast.error("Contraseña incorrecta. Por favor verifícala.");
-      } else if (error.message && error.message.includes('Usuario no encontrado')) {
+      const msg = error.message || 'Error al iniciar sesión';
+      if (msg.includes('No estás registrado en la sala') || msg.includes('notRegisteredInRoom') || msg.includes('Usuario no encontrado')) {
         setShowUserNotFound(true);
         setTimeout(() => {
-          navigate(`${tenantPrefix ? `${tenantPrefix}/register` : '/register'}?phone=${encodeURIComponent(phone)}`);
+          const registerUrl = tenantPrefix ? `${tenantPrefix}/register` : '/register';
+          navigate(`${registerUrl}?phone=${encodeURIComponent(phone)}`);
         }, 3500);
       } else {
-        toast.error(error.message || "Error al iniciar sesión");
-        console.error("Error signing in", error);
+        toast.error(msg);
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // Use an effect to redirect when user is loaded after login
+  // Redirigir únicamente si el usuario pertenece estrictamente a esta sala
   useEffect(() => {
     if (user && user.role === 'player') {
-      navigate(tenantPrefix ? `${tenantPrefix}/player` : '/player');
+      const userTenant = (user.tenant_id || 'default').toLowerCase();
+      const currentTenant = (tenantSlug || 'default').toLowerCase();
+      if (userTenant === currentTenant || (!tenantSlug && (userTenant === 'default' || userTenant === 'bingo-lite'))) {
+        navigate(tenantPrefix ? `${tenantPrefix}/player` : '/player');
+      }
     }
-  }, [user, navigate, tenantPrefix]);
+  }, [user, navigate, tenantPrefix, tenantSlug]);
 
   const scrollToLogin = () => {
     const loginSection = document.getElementById('login-section');
@@ -499,7 +525,8 @@ export default function Home() {
               </p>
             </div>
           
-          <form onSubmit={handleLogin} className="space-y-6 relative z-10 flex flex-col items-center w-full">
+          <form onSubmit={handleLogin} className="space-y-4 relative z-10 flex flex-col items-center w-full">
+            {/* Campo 1: WhatsApp */}
             <div className="relative group/input w-full">
               <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none z-20">
                 <div className="p-2 bg-emerald-500/30 backdrop-blur-sm rounded-xl border border-white/20 shadow-lg">
@@ -511,33 +538,65 @@ export default function Home() {
                 required
                 type="tel"
                 placeholder="Número de WhatsApp (Ej: 3001234567)"
-                className="w-full p-4 pl-16 bg-black/60 backdrop-blur-md border-2 border-white/50 focus:border-emerald-500 focus:bg-black/80 rounded-2xl outline-none transition-all font-bold text-lg text-white placeholder:text-white/60 placeholder:text-base placeholder:font-medium placeholder:normal-case placeholder:tracking-normal shadow-[0_0_15px_rgba(255,255,255,0.05)]"
+                className="w-full p-4 pl-16 bg-black/60 backdrop-blur-md border-2 border-white/50 focus:border-emerald-500 focus:bg-black/80 rounded-2xl outline-none transition-all font-bold text-base sm:text-lg text-white placeholder:text-white/60 placeholder:text-sm sm:placeholder:text-base placeholder:font-medium placeholder:normal-case placeholder:tracking-normal shadow-[0_0_15px_rgba(255,255,255,0.05)]"
                 value={phone}
                 onChange={e => setPhone(e.target.value)}
               />
             </div>
 
-            {showPasswordInput && (
-              <div className="relative group/input w-full animate-fadeIn">
-                <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none z-20">
-                  <div className="p-2 bg-emerald-500/30 backdrop-blur-sm rounded-xl border border-white/20 shadow-lg">
-                    <Key className="text-white" size={18} />
-                  </div>
+            {/* Campo 2: Contraseña */}
+            <div className="relative group/input w-full">
+              <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none z-20">
+                <div className="p-2 bg-emerald-500/30 backdrop-blur-sm rounded-xl border border-white/20 shadow-lg">
+                  <Key className="text-white" size={18} />
                 </div>
-                <input 
-                  required
-                  type="password"
-                  placeholder="Ingresa tu contraseña"
-                  className="w-full p-4 pl-16 bg-black/60 backdrop-blur-md border-2 border-white/50 focus:border-emerald-500 focus:bg-black/80 rounded-2xl outline-none transition-all font-bold text-lg text-white placeholder:text-white/60 placeholder:text-base placeholder:font-medium placeholder:normal-case placeholder:tracking-normal shadow-[0_0_15px_rgba(255,255,255,0.05)]"
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                />
+              </div>
+              <input 
+                required
+                type={showPassword ? "text" : "password"}
+                placeholder="Ingresa tu contraseña de usuario"
+                className="w-full p-4 pl-16 pr-12 bg-black/60 backdrop-blur-md border-2 border-white/50 focus:border-emerald-500 focus:bg-black/80 rounded-2xl outline-none transition-all font-bold text-base sm:text-lg text-white placeholder:text-white/60 placeholder:text-sm sm:placeholder:text-base placeholder:font-medium placeholder:normal-case placeholder:tracking-normal shadow-[0_0_15px_rgba(255,255,255,0.05)]"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+              />
+              <button 
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute inset-y-0 right-3 flex items-center text-white/60 hover:text-white transition z-20"
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+
+            {/* Campo 3: Código de Seguridad de la Sala */}
+            <div className="relative group/input w-full">
+              <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none z-20">
+                <div className="p-2 bg-yellow-500/30 backdrop-blur-sm rounded-xl border border-yellow-400/30 shadow-lg">
+                  <Lock className="text-yellow-400" size={18} />
+                </div>
+              </div>
+              <input 
+                required
+                type="text"
+                maxLength={10}
+                placeholder={tenantSlug ? "Código de seguridad de la sala (PIN)" : "Código de seguridad de la sala (Ej: 1234)"}
+                className="w-full p-4 pl-16 bg-black/60 backdrop-blur-md border-2 border-yellow-400/60 focus:border-yellow-400 focus:bg-black/80 rounded-2xl outline-none transition-all font-mono font-black text-base sm:text-lg text-yellow-300 placeholder:text-yellow-200/50 placeholder:font-sans placeholder:text-xs sm:placeholder:text-sm placeholder:font-semibold uppercase tracking-widest shadow-[0_0_15px_rgba(234,179,8,0.1)]"
+                value={roomCode}
+                onChange={e => setRoomCode(e.target.value.toUpperCase())}
+              />
+            </div>
+
+            {tenantSlug && (
+              <div className="flex items-center gap-2 px-3 py-1 bg-white/10 backdrop-blur-md rounded-full border border-white/20 text-xs text-white/90 font-bold">
+                <ShieldCheck size={14} className="text-emerald-400" />
+                <span>Sala activa: <span className="text-yellow-300 uppercase">{tenant?.name || tenantSlug}</span></span>
               </div>
             )}
+
             <button 
               type="submit"
               disabled={loading}
-              className="w-full max-w-[280px] py-3.5 bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-500 text-white font-black text-sm rounded-xl shadow-[0_10px_40px_-10px_rgba(16,185,129,0.5)] transition-all transform active:scale-[0.98] flex items-center justify-center gap-2 border-b-4 border-emerald-700 uppercase tracking-wider whitespace-nowrap"
+              className="w-full max-w-[280px] mt-2 py-3.5 bg-emerald-500 hover:bg-emerald-400 active:bg-emerald-500 text-white font-black text-sm rounded-xl shadow-[0_10px_40px_-10px_rgba(16,185,129,0.5)] transition-all transform active:scale-[0.98] flex items-center justify-center gap-2 border-b-4 border-emerald-700 uppercase tracking-wider whitespace-nowrap"
             >
               {loading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -547,8 +606,8 @@ export default function Home() {
                 </>
               )}
             </button>
-            <p className="text-center text-[11px] text-white/50 font-bold uppercase tracking-widest mt-8 w-full">
-              PLATAFORMA 100% SEGURA
+            <p className="text-center text-[11px] text-white/50 font-bold uppercase tracking-widest mt-4 w-full">
+              SALA 100% PRIVADA &bull; PLATAFORMA SEGURA
             </p>
           </form>
           </div>

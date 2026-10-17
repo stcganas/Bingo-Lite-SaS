@@ -15,14 +15,17 @@ export default function SaaSMarketingLanding() {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
 
-  // Formulario de nueva sala
+  // Formulario de nueva sala con administrador independiente
   const [roomForm, setRoomForm] = useState({
     name: '',
     slug: '',
     access_code: '',
     primary_color: '#2563eb',
     contact_phone: '',
-    organizer_name: ''
+    organizer_name: '',
+    admin_email: '',
+    admin_password: '',
+    admin_password_confirm: ''
   });
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -52,13 +55,39 @@ export default function SaaSMarketingLanding() {
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+
+    if (!roomForm.admin_email || !roomForm.admin_password) {
+      setFormError('Debes ingresar el correo y la contraseña para el Administrador de tu sala.');
+      return;
+    }
+
+    if (roomForm.admin_password.length < 6) {
+      setFormError('La contraseña del administrador debe tener al menos 6 caracteres.');
+      return;
+    }
+
+    if (roomForm.admin_password !== roomForm.admin_password_confirm) {
+      setFormError('Las contraseñas de administrador no coinciden.');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       const res = await apiFetch('/api/tenants', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(roomForm)
+        body: JSON.stringify({
+          name: roomForm.name,
+          slug: roomForm.slug,
+          access_code: roomForm.access_code,
+          primary_color: roomForm.primary_color,
+          contact_phone: roomForm.contact_phone,
+          organizer_name: roomForm.organizer_name,
+          admin_name: roomForm.organizer_name,
+          admin_email: roomForm.admin_email,
+          admin_password: roomForm.admin_password
+        })
       });
 
       const data = await res.json();
@@ -66,7 +95,16 @@ export default function SaaSMarketingLanding() {
         throw new Error(data.error || 'No se pudo crear la sala');
       }
 
-      setCreatedResult(data);
+      const roomSlug = data.tenant?.slug || roomForm.slug;
+      const dynamicUrl = `${window.location.origin}/sala/${roomSlug}`;
+      const adminUrl = `${window.location.origin}/sala/${roomSlug}/admin`;
+      setCreatedResult({
+        ...data,
+        url: dynamicUrl,
+        adminUrl,
+        roomSlug,
+        adminEmail: roomForm.admin_email
+      });
     } catch (err: any) {
       setFormError(err.message || 'Error al conectar con el servidor.');
     } finally {
@@ -371,8 +409,8 @@ export default function SaaSMarketingLanding() {
 
       {/* MODAL: CREAR SALA DE BINGO */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-          <div className="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 text-left shadow-2xl relative overflow-hidden">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
+          <div className="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 text-left shadow-2xl relative my-8">
             {createdResult ? (
               // RESULTADO DE SALA CREADA
               <div className="space-y-6 text-center">
@@ -381,12 +419,12 @@ export default function SaaSMarketingLanding() {
                 </div>
                 <div>
                   <h3 className="text-2xl font-black text-white">¡Tu Sala está Lista!</h3>
-                  <p className="text-sm text-slate-400 mt-1">Comparte el enlace con tus jugadores para que comiencen a comprar cartones.</p>
+                  <p className="text-xs text-slate-400 mt-1">Sala y administrador independiente creados con aislamiento total de datos.</p>
                 </div>
 
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 text-left">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-4 text-left">
                   <div>
-                    <label className="text-xs font-bold text-slate-400 uppercase">Enlace Directo de tu Sala:</label>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Enlace para Jugadores:</label>
                     <div className="flex items-center gap-2 mt-1">
                       <input
                         readOnly
@@ -404,7 +442,7 @@ export default function SaaSMarketingLanding() {
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-400 uppercase">Código Seguro de Acceso:</label>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Código Seguro de Acceso (PIN):</label>
                     <div className="flex items-center gap-2 mt-1">
                       <span className="font-mono text-xl font-black text-amber-400 tracking-wider bg-slate-900 px-4 py-1.5 rounded-xl border border-slate-800">
                         {createdResult.access_code}
@@ -417,18 +455,48 @@ export default function SaaSMarketingLanding() {
                         {copiedCode ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
                       </button>
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-1 font-semibold">Tus jugadores recibirán este código automáticamente en su WhatsApp al registrarse.</p>
+                    <p className="text-[10px] text-slate-500 mt-1 font-semibold">Tus jugadores requerirán este código para ingresar.</p>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-900">
+                    <label className="text-[11px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                      <Lock size={12} />
+                      <span>Panel Exclusivo de Administrador:</span>
+                    </label>
+                    <div className="flex items-center gap-2 mt-1">
+                      <input
+                        readOnly
+                        value={createdResult.adminUrl}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono select-all"
+                      />
+                      <button
+                        onClick={() => copyToClipboard(createdResult.adminUrl, 'link')}
+                        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white transition shrink-0"
+                        title="Copiar Enlace Admin"
+                      >
+                        {copiedLink ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Usuario Admin: <span className="text-slate-200 font-bold">{createdResult.adminEmail}</span> (Acceso restringido únicamente a esta sala).
+                    </p>
                   </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                  <a
-                    href={createdResult.url}
+                  <Link
+                    to={`/sala/${createdResult.roomSlug || createdResult.tenant?.slug || roomForm.slug}/admin`}
+                    className="flex-1 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-sm shadow-lg shadow-amber-500/20 transition text-center flex items-center justify-center gap-2"
+                  >
+                    <span>Ir a mi Panel Admin</span>
+                    <ExternalLink size={16} />
+                  </Link>
+                  <Link
+                    to={`/sala/${createdResult.roomSlug || createdResult.tenant?.slug || roomForm.slug}`}
                     className="flex-1 py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-extrabold text-sm shadow-lg shadow-blue-600/30 transition text-center flex items-center justify-center gap-2"
                   >
-                    <span>Ir a mi Sala</span>
-                    <ExternalLink size={16} />
-                  </a>
+                    <span>Ver Sala</span>
+                  </Link>
                   <button
                     onClick={() => {
                       setShowCreateModal(false);
@@ -442,11 +510,11 @@ export default function SaaSMarketingLanding() {
               </div>
             ) : (
               // FORMULARIO DE CREACIÓN
-              <form onSubmit={handleCreateRoom} className="space-y-5">
+              <form onSubmit={handleCreateRoom} className="space-y-4">
                 <div className="flex justify-between items-start">
                   <div>
                     <h3 className="text-xl font-black text-white">Crear Nueva Sala de Bingo</h3>
-                    <p className="text-xs text-slate-400 mt-0.5">Configura tu sala en segundos. No requiere tarjeta de crédito.</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Configura tu sala y tu usuario de administrador independiente.</p>
                   </div>
                   <button
                     type="button"
@@ -463,76 +531,160 @@ export default function SaaSMarketingLanding() {
                   </div>
                 )}
 
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                    Nombre de tu Organización o Sala *
-                  </label>
-                  <input
-                    required
-                    type="text"
-                    placeholder="Ej. Bingo Los Ganadores"
-                    value={roomForm.name}
-                    onChange={handleNameChange}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-sm focus:border-blue-500 outline-none transition"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                    Enlace de tu sala (URL)
-                  </label>
-                  <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-300">
-                    <span className="text-slate-500">https://bingolite.click/sala/</span>
+                {/* SECCIÓN 1: DATOS DE LA SALA */}
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Nombre de tu Organización o Sala *
+                    </label>
                     <input
                       required
                       type="text"
-                      placeholder="mi-sala"
-                      value={roomForm.slug}
-                      onChange={e => setRoomForm({...roomForm, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')})}
-                      className="bg-transparent text-blue-400 font-bold outline-none flex-1 ml-0.5"
+                      placeholder="Ej. Bingo Los Ganadores"
+                      value={roomForm.name}
+                      onChange={handleNameChange}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-sm focus:border-blue-500 outline-none transition"
                     />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                      Código Seguro de Sala
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ej. ORO777"
-                      value={roomForm.access_code}
-                      onChange={e => setRoomForm({...roomForm, access_code: e.target.value.toUpperCase()})}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-amber-400 font-mono font-bold text-sm focus:border-amber-500 outline-none transition"
-                    />
-                    <p className="text-[10px] text-slate-500 mt-1">PIN que recibirán tus jugadores en WhatsApp.</p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                      Color de Marca
+                      Enlace de tu sala (URL)
                     </label>
-                    <div className="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-xl p-2.5">
+                    <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-300">
+                      <span className="text-slate-500">{typeof window !== 'undefined' ? `${window.location.host}/sala/` : 'bingolite.click/sala/'}</span>
                       <input
-                        type="color"
-                        value={roomForm.primary_color}
-                        onChange={e => setRoomForm({...roomForm, primary_color: e.target.value})}
-                        className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
+                        required
+                        type="text"
+                        placeholder="mi-sala"
+                        value={roomForm.slug}
+                        onChange={e => setRoomForm({...roomForm, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')})}
+                        className="bg-transparent text-blue-400 font-bold outline-none flex-1 ml-0.5"
                       />
-                      <span className="text-xs font-mono text-slate-300">{roomForm.primary_color}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Código Seguro de Sala (PIN)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej. ORO777"
+                        value={roomForm.access_code}
+                        onChange={e => setRoomForm({...roomForm, access_code: e.target.value.toUpperCase()})}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-amber-400 font-mono font-bold text-sm focus:border-amber-500 outline-none transition"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Color de Marca
+                      </label>
+                      <div className="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-xl p-2">
+                        <input
+                          type="color"
+                          value={roomForm.primary_color}
+                          onChange={e => setRoomForm({...roomForm, primary_color: e.target.value})}
+                          className="w-7 h-7 rounded-lg cursor-pointer bg-transparent border-0"
+                        />
+                        <span className="text-xs font-mono text-slate-300">{roomForm.primary_color}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="pt-3 flex gap-3">
+                {/* SECCIÓN 2: DATOS DEL ADMINISTRADOR */}
+                <div className="pt-3 border-t border-slate-800 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                      Administrador Independiente
+                    </span>
+                    <span className="text-[10px] text-slate-500">Credenciales exclusivas para esta sala</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Nombre del Organizador
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ej. Carlos Mendoza"
+                        value={roomForm.organizer_name}
+                        onChange={e => setRoomForm({...roomForm, organizer_name: e.target.value})}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white text-xs focus:border-amber-500 outline-none transition"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Teléfono / WhatsApp
+                      </label>
+                      <input
+                        type="tel"
+                        placeholder="Ej. 3001234567"
+                        value={roomForm.contact_phone}
+                        onChange={e => setRoomForm({...roomForm, contact_phone: e.target.value})}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white text-xs focus:border-amber-500 outline-none transition"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                      Correo Electrónico de Administrador *
+                    </label>
+                    <input
+                      required
+                      type="email"
+                      placeholder="admin@misala.com"
+                      value={roomForm.admin_email}
+                      onChange={e => setRoomForm({...roomForm, admin_email: e.target.value})}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white text-xs focus:border-amber-500 outline-none transition"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Contraseña de Admin *
+                      </label>
+                      <input
+                        required
+                        type="password"
+                        placeholder="Mínimo 6 caracteres"
+                        value={roomForm.admin_password}
+                        onChange={e => setRoomForm({...roomForm, admin_password: e.target.value})}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white text-xs focus:border-amber-500 outline-none transition"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
+                        Confirmar Contraseña *
+                      </label>
+                      <input
+                        required
+                        type="password"
+                        placeholder="Repite la contraseña"
+                        value={roomForm.admin_password_confirm}
+                        onChange={e => setRoomForm({...roomForm, admin_password_confirm: e.target.value})}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white text-xs focus:border-amber-500 outline-none transition"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex gap-3">
                   <button
                     type="submit"
                     disabled={isSubmitting}
                     className="flex-1 py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-sm shadow-lg shadow-blue-600/30 transition disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {isSubmitting ? (
-                      <span>Creando tu sala...</span>
+                      <span>Creando sala y credenciales...</span>
                     ) : (
                       <>
                         <Sparkles size={16} />
