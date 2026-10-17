@@ -66,6 +66,24 @@
     - **Jugadores y Billeteras Aisladas:** `/api/admin/all-players`, `/api/players` y `/api/admin/players/wallets` protegidos y filtrados por `tenant_id`. Salas nuevas arrancan en blanco (0 jugadores).
     - **Recargas y Estadísticas Aisladas:** `/api/admin/recharge-requests`, `/api/admin/games-stats-history` y `/api/admin/winners` protegidos con `requireAdmin` y filtrados por `tenant_id`. Los historiales, premios y contadores no filtran información entre salas.
     - **Estado Limpio Inicial de Partidas:** En `/api/game`, si una sala nueva no ha creado partidas, devuelve un estado en espera limpio (`guestState`) con su identidad visual y sin heredar el juego ni las balotas de la sala oficial.
+14. **Solución Integral de Juegos, Patrones, Ajustes y Modo Mantenimiento Multi-Tenant:**
+    - **Creación y Guardado de Juegos (`POST /api/games` & `PATCH /api/games/:id`):** 
+      - Verificación y creación preventiva del registro de sala en la tabla `tenants` de Supabase para evitar violación de Foreign Key constraint (`game_tenant_id_fkey`).
+      - Sanitización de valores numéricos (`card_value`, `prize`, premios de patrones) eliminando formateos de texto y símbolos para evitar errores de sintaxis en columnas `NUMERIC` de PostgreSQL.
+      - Asignación estricta de `tenant_id` en `game` y `game_patterns`.
+    - **Creación y Gestión de Patrones (`/api/patterns`):**
+      - Partición de caché en memoria por sala (`cachedPatternsByTenant`).
+      - Carga combinada de figuras globales estándar del sistema + figuras personalizadas creadas por la sala (`tenant_id = :targetTenant OR tenant_id = 'default'`).
+      - Si la base de datos no tiene figuras registradas, se auto-siembran las figuras clásicas en Supabase y en memoria para garantizar que el asistente de creación de juegos nunca quede bloqueado sin opciones.
+      - Almacenamiento y eliminación segura protegida por pertenencia a sala (`tenant_id`).
+    - **Aislamiento Total de Ajustes y Configuraciones (`settings`):**
+      - `saveGameSettings` y `getGameSettings` particionados por sala (`room_settings_${tenantId}`).
+      - Configuraciones de Nequi, enlaces de WhatsApp, títulos de encabezado, opacidades, volúmenes de audio y DJ Soundboard se guardan de forma aislada por sala y ya no sobreescriben la configuración global.
+    - **Modo Mantenimiento Aislado por Sala:**
+      - La activación de mantenimiento en una sala (`POST /api/admin/maintenance`) solo afecta a esa sala en particular (`bingo-tenant-${slug}`) y no bloquea a otras salas.
+      - En frontend (`App.tsx`), `MaintenanceWrapper` protege las rutas globales y la página principal (`/` - `SaaSMarketingLanding.tsx`), garantizando que la landing page y las rutas administrativas (`/admin`, `/sala/:slug/admin`) NUNCA se bloqueen por mantenimiento.
+    - **Consolidación y Migración Total de Base de Datos:**
+      - Creado script unificado e idempotente: `comprehensive_multitenant_fix_migration.sql` con la definición y ajuste de las 21 tablas del sistema, campos `tenant_id`, tabla faltante `admin_sessions`, restricciones compuestas y políticas RLS.
 
 ---
 
@@ -85,9 +103,9 @@
 
 ## 4. Tareas Técnicas Pendientes y Despliegue:
 1. **Ejecución de Migración DDL en Supabase:**
-   - **Archivo:** `saas_multitenant_migration.sql`.
-   - **Detalle:** La tabla `tenants` (con columnas `admin_email`, `admin_password`, `admin_name`, `contact_phone`) y las columnas `tenant_id` en `sellers`, `game`, `players` deben aplicarse en la base de datos de producción de Supabase.
-   - **Acción requerida:** Ejecutar el script SQL en el Editor SQL de Supabase.
+   - **Archivo:** `comprehensive_multitenant_fix_migration.sql` (reemplaza y consolida las migraciones anteriores).
+   - **Detalle:** Contiene la creación de las 21 tablas, adición de `tenant_id` en `patterns`, `game_patterns`, `settings`, creación de `admin_sessions`, siembra de patrones predeterminados y políticas RLS blindadas.
+   - **Acción requerida:** Copiar y ejecutar en el SQL Editor de Supabase.
 2. **Sincronización a GitHub:**
    - Commits locales listos en la rama `main` para ser subidos desde GitHub Desktop (`Push origin`).
 3. **Despliegue a Producción (Render.com):**

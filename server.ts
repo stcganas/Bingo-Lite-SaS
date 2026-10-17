@@ -17,8 +17,23 @@ import { GoogleGenAI } from '@google/genai';
 const gameSettingsCache = new Map<string, { value: any, timestamp: number }>();
 const SETTINGS_CACHE_TTL = 30000; // 30 seconds
 
-async function getGameSettings(gameId: number | 'global') {
-  const key = gameId === 'global' ? 'app_global_settings' : `gameSettings_${gameId}`;
+function resolveSettingsKey(gameIdOrScope: number | string, tenantId?: string): { key: string; tenant: string } {
+  if (gameIdOrScope === 'global' || (typeof gameIdOrScope === 'string' && isNaN(Number(gameIdOrScope)))) {
+    const rawTid = (tenantId || (typeof gameIdOrScope === 'string' && gameIdOrScope !== 'global' ? gameIdOrScope : 'default')).toLowerCase();
+    const tid = rawTid === 'global' ? 'default' : rawTid;
+    return {
+      key: tid === 'default' ? 'app_global_settings' : `room_settings_${tid}`,
+      tenant: tid
+    };
+  }
+  return {
+    key: `gameSettings_${gameIdOrScope}`,
+    tenant: (tenantId || 'default').toLowerCase()
+  };
+}
+
+async function getGameSettings(gameId: number | string, tenantId?: string) {
+  const { key } = resolveSettingsKey(gameId, tenantId);
   const now = Date.now();
   const cached = gameSettingsCache.get(key);
   if (cached && (now - cached.timestamp < SETTINGS_CACHE_TTL)) {
@@ -26,13 +41,23 @@ async function getGameSettings(gameId: number | 'global') {
   }
   try {
     const { data, error } = await supabase.from('settings').select('value').eq('key', key).maybeSingle();
-    if (error) {
-      // ignored
-      return cached ? cached.value : {};
+    if (!error && data && data.value) {
+      const val = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+      gameSettingsCache.set(key, { value: val, timestamp: now });
+      return val;
     }
-    const val = (data && data.value) ? JSON.parse(data.value) : {};
-    gameSettingsCache.set(key, { value: val, timestamp: now });
-    return val;
+    // Fallback: If room-specific settings row is empty, fallback to app_global_settings for defaults
+    if (key !== 'app_global_settings') {
+      const globalCached = gameSettingsCache.get('app_global_settings');
+      if (globalCached && (now - globalCached.timestamp < SETTINGS_CACHE_TTL)) {
+        return globalCached.value;
+      }
+      const { data: globalData } = await supabase.from('settings').select('value').eq('key', 'app_global_settings').maybeSingle();
+      if (globalData && globalData.value) {
+        const gVal = typeof globalData.value === 'string' ? JSON.parse(globalData.value) : globalData.value;
+        return gVal;
+      }
+    }
   } catch (e: any) {
     // ignored
   }
@@ -41,47 +66,54 @@ async function getGameSettings(gameId: number | 'global') {
 
 const settingsUpdateQueue = new Map<string, Promise<any>>();
 
-async function saveGameSettings(gameId: number | 'global', settings: any) {
-  const key = gameId === 'global' ? 'app_global_settings' : `gameSettings_${gameId}`;
+async function saveGameSettings(gameId: number | string, settings: any, tenantId?: string) {
+  const { key, tenant } = resolveSettingsKey(gameId, tenantId);
   gameSettingsCache.delete(key); // Invalidate cache immediately on save
 
-
-  // Get the existing queue or start a new one, and handle any previous failures so they don't block subsequent updates
   const currentQueue = settingsUpdateQueue.get(key) || Promise.resolve();
   const safeQueue = currentQueue.catch(() => ({}));
 
   const nextUpdate = safeQueue.then(async () => {
     try {
       const { data, error: fetchError } = await supabase.from('settings').select('value').eq('key', key).maybeSingle();
-      if (fetchError) throw fetchError;
-
-      let currentSettings = {};
-      if (data && data.value) {
+      let currentSettings: any = {};
+      if (!fetchError && data && data.value) {
         try {
-          currentSettings = JSON.parse(data.value);
+          currentSettings = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
         } catch (e) {
-
+          currentSettings = {};
         }
       }
 
       const updated = { ...currentSettings, ...settings };
-      const payload: any = { key, value: JSON.stringify(updated) };
+      const payload: any = {
+        key,
+        value: typeof updated === 'string' ? updated : JSON.stringify(updated),
+        tenant_id: tenant,
+        updated_at: new Date().toISOString()
+      };
 
-      const { error: upsertError } = await supabase.from('settings').upsert(payload, { onConflict: 'key' });
-      if (upsertError) throw upsertError;
-
+      let { error: upsertError } = await supabase.from('settings').upsert(payload, { onConflict: 'key' });
+      if (upsertError && upsertError.message && upsertError.message.includes('tenant_id')) {
+        delete payload.tenant_id;
+        const retry = await supabase.from('settings').upsert(payload, { onConflict: 'key' });
+        upsertError = retry.error;
+      }
+      if (upsertError) {
+        console.warn(`[saveGameSettings] Supabase notice for key [${key}]:`, upsertError.message);
+      }
+      gameSettingsCache.set(key, { value: updated, timestamp: Date.now() });
       return updated;
     } catch (e: any) {
-
+      console.warn(`[saveGameSettings] Exception for key [${key}]:`, e?.message || e);
       return {};
     }
   });
 
   settingsUpdateQueue.set(key, nextUpdate);
-
-  // Optional: Clean up the queue if it's idle for a while (not strictly necessary for few keys)
   return nextUpdate;
 }
+
 
 // Helper to normalize phone numbers
 function normalizePhone(phone: string): string {
@@ -2059,7 +2091,8 @@ app.patch('/api/admin/winners/:ids/status', async (req, res) => {
 // Audio Settings Endpoints
 app.get('/api/settings/audio', async (req, res) => {
   try {
-    const settings = await getGameSettings('global');
+    const targetTenant = getTenantIdFromRequest(req);
+    const settings = await getGameSettings('global', targetTenant);
     res.json({
       url: settings.background_audio_url || '',
       active: settings.background_audio_active === true
@@ -2069,13 +2102,14 @@ app.get('/api/settings/audio', async (req, res) => {
   }
 });
 
-app.post('/api/admin/settings/audio', async (req, res) => {
+app.post('/api/admin/settings/audio', requireAdmin, async (req, res) => {
   try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
     const { url, active } = req.body;
     await saveGameSettings('global', {
       background_audio_url: url,
       background_audio_active: active
-    });
+    }, targetTenant);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Error saving audio settings' });
@@ -2085,17 +2119,19 @@ app.post('/api/admin/settings/audio', async (req, res) => {
 // DJ Soundboard Settings Endpoints
 app.get('/api/settings/dj-board', async (req, res) => {
   try {
-    const settings = await getGameSettings('global');
+    const targetTenant = getTenantIdFromRequest(req);
+    const settings = await getGameSettings('global', targetTenant);
     res.json(settings.dj_slots || {});
   } catch (err) {
     res.status(500).json({ error: 'Error fetching DJ soundboard settings' });
   }
 });
 
-app.post('/api/admin/settings/dj-board', async (req, res) => {
+app.post('/api/admin/settings/dj-board', requireAdmin, async (req, res) => {
   try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
     const { slots } = req.body;
-    await saveGameSettings('global', { dj_slots: slots });
+    await saveGameSettings('global', { dj_slots: slots }, targetTenant);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Error saving DJ soundboard settings' });
@@ -2104,7 +2140,8 @@ app.post('/api/admin/settings/dj-board', async (req, res) => {
 
 app.get('/api/settings/dj-bg', async (req, res) => {
   try {
-    const settings = await getGameSettings('global');
+    const targetTenant = getTenantIdFromRequest(req);
+    const settings = await getGameSettings('global', targetTenant);
     res.json({
       url: settings.dj_bg_url || null,
       name: settings.dj_bg_name || null,
@@ -2115,8 +2152,9 @@ app.get('/api/settings/dj-bg', async (req, res) => {
   }
 });
 
-app.post('/api/admin/settings/dj-bg', async (req, res) => {
+app.post('/api/admin/settings/dj-bg', requireAdmin, async (req, res) => {
   try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
     const { url, name, playlist } = req.body;
 
     const updates: any = {};
@@ -2124,7 +2162,7 @@ app.post('/api/admin/settings/dj-bg', async (req, res) => {
     if (name !== undefined) updates.dj_bg_name = name;
     if (playlist !== undefined) updates.dj_bg_playlist = playlist;
 
-    await saveGameSettings('global', updates);
+    await saveGameSettings('global', updates, targetTenant);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Error saving DJ BG settings' });
@@ -2134,7 +2172,8 @@ app.post('/api/admin/settings/dj-bg', async (req, res) => {
 // Player Commission Settings
 app.get('/api/settings/player-commission', async (req, res) => {
   try {
-    const settings = await getGameSettings('global');
+    const targetTenant = getTenantIdFromRequest(req);
+    const settings = await getGameSettings('global', targetTenant);
     res.json({
       percentage: settings.player_commission_percentage || 10
     });
@@ -2143,50 +2182,57 @@ app.get('/api/settings/player-commission', async (req, res) => {
   }
 });
 
-app.post('/api/admin/settings/player-commission', async (req, res) => {
+app.post('/api/admin/settings/player-commission', requireAdmin, async (req, res) => {
   try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
     const { percentage } = req.body;
     await saveGameSettings('global', {
       player_commission_percentage: percentage
-    });
+    }, targetTenant);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Error saving player commission settings' });
   }
 });
 
-// Maintenance & Updates Mode Endpoints
+// Maintenance & Updates Mode Endpoints (Estrictamente Aislados por Sala / Tenant)
 app.get('/api/maintenance-status', async (req, res) => {
   try {
-    const settings = await getGameSettings('global');
+    const targetTenant = getTenantIdFromRequest(req);
+    const settings = await getGameSettings('global', targetTenant);
     res.json({
       maintenance_mode: settings.maintenance_mode === true,
-      maintenance_message: settings.maintenance_message || 'Estamos actualizando la plataforma para traerte mejoras increíbles. Vuelve pronto.'
+      maintenance_message: settings.maintenance_message || 'Esta sala de bingo se encuentra en mantenimiento y actualizaciones. Vuelve pronto.',
+      tenant_id: targetTenant
     });
   } catch (err) {
     res.status(500).json({ error: 'Error fetching maintenance status' });
   }
 });
 
-app.post('/api/admin/maintenance', async (req, res) => {
+app.post('/api/admin/maintenance', requireAdmin, async (req, res) => {
   try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
     const { maintenance_mode, maintenance_message } = req.body;
     const updates: any = {};
     if (maintenance_mode !== undefined) updates.maintenance_mode = Boolean(maintenance_mode);
     if (maintenance_message !== undefined) updates.maintenance_message = maintenance_message;
 
-    await saveGameSettings('global', updates);
+    // Guardar exclusivamente para la sala que ejecuta la acción
+    await saveGameSettings('global', updates, targetTenant);
 
     try {
-      await getChannel().publish('maintenance_updated', {
+      // Publicar exclusivamente en el canal aislado de esta sala
+      await getChannel(targetTenant).publish('maintenance_updated', {
         maintenance_mode: updates.maintenance_mode,
-        maintenance_message: updates.maintenance_message
+        maintenance_message: updates.maintenance_message,
+        tenant_id: targetTenant
       });
     } catch (pubErr) {
       console.warn('[Maintenance] Error publishing maintenance update:', pubErr);
     }
 
-    res.json({ success: true, ...updates });
+    res.json({ success: true, tenant_id: targetTenant, ...updates });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -2977,13 +3023,13 @@ app.post('/api/players/login', async (req, res) => {
       });
     }
 
-    // Modo mantenimiento
-    const globalSettings = await getGameSettings('global');
-    if (globalSettings.maintenance_mode) {
-      const allowedPhones: string[] = (globalSettings.maintenance_allowed_phones || ['3145261451']).map((p: string) => normalizePhone(p));
+    // Modo mantenimiento aislado por sala
+    const roomSettings = await getGameSettings('global', targetTenantId);
+    if (roomSettings.maintenance_mode) {
+      const allowedPhones: string[] = (roomSettings.maintenance_allowed_phones || ['3145261451']).map((p: string) => normalizePhone(p));
       if (!allowedPhones.includes(phone)) {
         return res.status(503).json({
-          error: 'La aplicación se encuentra en mantenimiento y actualizaciones.',
+          error: `La sala "${tenantInfo.name || targetTenantId}" se encuentra en mantenimiento y actualizaciones.`,
           maintenance: true
         });
       }
@@ -3993,18 +4039,54 @@ app.post('/api/games', requireAdmin, async (req, res) => {
     } = req.body;
     console.log('Creation data:', { name, start_time, type, prize_type, active_lottery, active_draw, targetTenant });
 
+    // 1. Garantizar que el tenant exista en la tabla tenants de Supabase para evitar violación de Foreign Key
+    if (targetTenant && targetTenant !== 'default') {
+      try {
+        const { data: tData } = await supabase.from('tenants').select('id').eq('id', targetTenant).maybeSingle();
+        if (!tData) {
+          const tInfo = await getTenantInfo(targetTenant);
+          await supabase.from('tenants').insert({
+            id: targetTenant,
+            name: tInfo.name || targetTenant,
+            slug: targetTenant,
+            subdomain: targetTenant,
+            access_code: tInfo.access_code || 'BINGO2026',
+            primary_color: tInfo.primary_color || '#2563eb'
+          });
+        }
+      } catch (tCheckErr) {
+        console.warn('[CreateGame] Notice comprobando tenant en BD:', tCheckErr);
+      }
+    }
+
+    // 2. Sanitizar datos numéricos y de texto para evitar errores de sintaxis en PostgreSQL
+    const cleanCardValue = Number(String(card_value || 0).replace(/[^0-9.]/g, '')) || 0;
+    const cleanPrize = prize !== undefined && prize !== null ? String(prize).trim() : '0';
+
     const newGame: any = {
-      name, start_time, prize, card_value, status: 'scheduled', drawn_balls: []
+      name: name ? String(name).trim() : 'Gran Bingo',
+      start_time: start_time || new Date().toISOString(),
+      prize: cleanPrize,
+      card_value: cleanCardValue,
+      status: 'scheduled',
+      drawn_balls: []
     };
     if (targetTenant && targetTenant !== 'global') {
       newGame.tenant_id = targetTenant;
     }
 
-    const { data: game, error } = await supabase.from('game').insert(newGame).select().single();
+    let { data: game, error } = await supabase.from('game').insert(newGame).select().single();
+    if (error && error.message && error.message.includes('tenant_id')) {
+      // Fallback si la columna tenant_id no estuviese presente
+      delete newGame.tenant_id;
+      const retry = await supabase.from('game').insert(newGame).select().single();
+      game = retry.data;
+      error = retry.error;
+    }
 
     if (error || !game) {
-
-      return res.status(500).json({ error: error?.message });
+      console.error('Error insertando juego en BD:', error);
+      return res.status(500).json({ error: error?.message || 'Error al guardar el juego en la base de datos' });
     }
 
     console.log('Game basic record created with ID:', game.id);
@@ -4021,46 +4103,65 @@ app.post('/api/games', requireAdmin, async (req, res) => {
       lottery_digits: lottery_digits || '3',
       lottery_prize_type: lottery_prize_type || 'cash',
       lottery_prize_value: lottery_prize_value || ''
-    });
+    }, targetTenant);
 
     if (patterns && patterns.length > 0) {
       console.log(`Adding ${patterns.length} patterns to game ${game.id}`);
-      const gamePatterns = patterns.map((p: any) => ({
-        game_id: game.id,
-        pattern_id: p.pattern_id,
-        prize: p.prize
-      }));
-      const { error: pErr } = await supabase.from('game_patterns').insert(gamePatterns);
-
+      const gamePatterns = patterns.map((p: any) => {
+        const cleanPz = Number(String(p.prize || 0).replace(/\./g, '').replace(/,/g, '').replace(/[^0-9]/g, '')) || 0;
+        return {
+          game_id: game.id,
+          pattern_id: Number(p.pattern_id),
+          prize: cleanPz,
+          tenant_id: targetTenant
+        };
+      });
+      let { error: pErr } = await supabase.from('game_patterns').insert(gamePatterns);
+      if (pErr && pErr.message && pErr.message.includes('tenant_id')) {
+        const fallbackPatterns = gamePatterns.map(({ tenant_id, ...rest }) => rest);
+        const retryPErr = await supabase.from('game_patterns').insert(fallbackPatterns);
+        if (retryPErr.error) {
+          console.warn('Error inserting game patterns (fallback):', retryPErr.error.message);
+        }
+      } else if (pErr) {
+        console.warn('Error inserting game patterns:', pErr.message);
+      }
     }
 
     let rematchGamePatternIds: number[] = [];
     if (rematchPatterns && rematchPatterns.length > 0) {
       console.log(`Adding ${rematchPatterns.length} rematch patterns to game ${game.id}`);
-      const rematchGamePatterns = rematchPatterns.map((p: any) => ({
-        game_id: game.id,
-        pattern_id: p.pattern_id,
-        prize: p.prize
-      }));
-      const { data: insertedRematch, error: rErr } = await supabase.from('game_patterns').insert(rematchGamePatterns).select();
-      if (rErr) {
-
-      } else if (insertedRematch) {
+      const rematchGamePatterns = rematchPatterns.map((p: any) => {
+        const cleanPz = Number(String(p.prize || 0).replace(/\./g, '').replace(/,/g, '').replace(/[^0-9]/g, '')) || 0;
+        return {
+          game_id: game.id,
+          pattern_id: Number(p.pattern_id),
+          prize: cleanPz,
+          tenant_id: targetTenant
+        };
+      });
+      let { data: insertedRematch, error: rErr } = await supabase.from('game_patterns').insert(rematchGamePatterns).select();
+      if (rErr && rErr.message && rErr.message.includes('tenant_id')) {
+        const fallbackRematch = rematchGamePatterns.map(({ tenant_id, ...rest }) => rest);
+        const retryRematch = await supabase.from('game_patterns').insert(fallbackRematch).select();
+        insertedRematch = retryRematch.data;
+      }
+      if (insertedRematch) {
         rematchGamePatternIds = insertedRematch.map(r => r.id);
       }
     }
 
     if (rematchGamePatternIds.length > 0) {
-      await saveGameSettings(game.id, { rematch_game_pattern_ids: rematchGamePatternIds });
+      await saveGameSettings(game.id, { rematch_game_pattern_ids: rematchGamePatternIds }, targetTenant);
     }
 
     console.log('Game creation process completed successfully.');
 
     // Notify all players about the new game
     try {
-      const gameSettings = await getGameSettings(game.id);
+      const gameSettings = await getGameSettings(game.id, targetTenant);
       const { title: notifTitle, message: notifMessage } = formatGameNotificationDetails(
-        { ...game, name, prize, card_value, is_free: type === 'free', type },
+        { ...game, name, prize: cleanPrize, card_value: cleanCardValue, is_free: type === 'free', type },
         gameSettings,
         start_time
       );
@@ -4070,18 +4171,18 @@ app.post('/api/games', requireAdmin, async (req, res) => {
         title: notifTitle,
         message: notifMessage,
         url: getAppUrl(req),
-        tenantId: (req as any).tenantId
+        tenantId: targetTenant
       });
     } catch (notifErr) {
       console.warn('Error sending formatted game creation push:', notifErr);
     }
 
     invalidateGameCaches();
-    setTimeout(() => getChannel().publish('games_updated', {}), 500);
+    setTimeout(() => getChannel(targetTenant).publish('games_updated', {}), 500);
     res.json(game);
   } catch (err: any) {
     console.log('CRITICAL ERROR in POST /api/games:', err.message || err);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 
@@ -4094,9 +4195,9 @@ app.patch('/api/games/:id', requireAdmin, async (req, res) => {
     if (!existingGame) return res.status(404).json({ error: 'Juego no encontrado' });
 
     const adminUser = (req as any).adminUser;
+    const targetTenant = (existingGame.tenant_id || 'default').toLowerCase();
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
-      const gTenant = (existingGame.tenant_id || 'default').toLowerCase();
-      if (gTenant !== adminUser.tenant_id.toLowerCase()) {
+      if (targetTenant !== adminUser.tenant_id.toLowerCase()) {
         return res.status(403).json({ error: 'Acceso denegado: Este juego pertenece a otra sala.' });
       }
     }
@@ -4105,15 +4206,16 @@ app.patch('/api/games/:id', requireAdmin, async (req, res) => {
 
     // Only update fields allowed to be updated without breaking existing sold cards
     const updateData: any = {};
-    if (name) updateData.name = name;
+    if (name) updateData.name = String(name).trim();
     if (start_time) updateData.start_time = start_time;
-    if (prize) updateData.prize = prize;
-    if (card_value) updateData.card_value = card_value;
+    if (prize !== undefined) updateData.prize = String(prize).trim();
+    if (card_value !== undefined) {
+      updateData.card_value = Number(String(card_value).replace(/[^0-9.]/g, '')) || 0;
+    }
 
     const { data: updatedGame, error } = await supabase.from('game').update(updateData).eq('id', id).select().single();
 
     if (error) {
-
       return res.status(500).json({ error: error.message });
     }
 
@@ -4123,7 +4225,7 @@ app.patch('/api/games/:id', requireAdmin, async (req, res) => {
     if (updatedGame) {
       try {
         const fullGame = await getGameFullState(updatedGame.id);
-        const gameSettings = await getGameSettings(updatedGame.id);
+        const gameSettings = await getGameSettings(updatedGame.id, targetTenant);
         const { title: notifTitle, message: notifMessage } = formatGameNotificationDetails(
           fullGame || updatedGame,
           gameSettings,
@@ -4135,14 +4237,14 @@ app.patch('/api/games/:id', requireAdmin, async (req, res) => {
           title: `🎮 ¡Sorteo Actualizado: ${updatedGame.name || 'Bingo'}!`,
           message: notifMessage,
           url: getAppUrl(req),
-          tenantId: (req as any).tenantId
+          tenantId: targetTenant
         }).catch(e => console.warn('[Notification] Game edit push note error:', e));
       } catch (e) {
         console.warn('[Notification] Game edit push format error:', e);
       }
     }
 
-    setTimeout(() => getChannel().publish('games_updated', {}), 500);
+    setTimeout(() => getChannel(targetTenant).publish('games_updated', {}), 500);
     res.json(updatedGame);
   } catch (err: any) {
     console.log('CRITICAL ERROR in PATCH /api/games/:id:', err.message || err);
@@ -4507,47 +4609,159 @@ app.get('/api/game', async (req, res) => {
   }
 });
 
-// Get Patterns (with in-memory cache)
-let cachedPatterns: any[] | null = null;
-let lastPatternsFetchTime = 0;
-const PATTERNS_CACHE_TTL = 60000; // 1 minute cache
+// Get Patterns (with in-memory cache partitioned by tenant)
+const cachedPatternsByTenant = new Map<string, { patterns: any[]; timestamp: number }>();
+const PATTERNS_CACHE_TTL = 30000; // 30 seconds
+
+const SYSTEM_DEFAULT_PATTERNS = [
+  {
+    name: 'Línea Horizontal',
+    grid: [
+      [false, false, false, false, false],
+      [false, false, false, false, false],
+      [true, true, true, true, true],
+      [false, false, false, false, false],
+      [false, false, false, false, false]
+    ],
+    is_active: true
+  },
+  {
+    name: 'Línea Vertical',
+    grid: [
+      [false, false, true, false, false],
+      [false, false, true, false, false],
+      [false, false, true, false, false],
+      [false, false, true, false, false],
+      [false, false, true, false, false]
+    ],
+    is_active: true
+  },
+  {
+    name: 'Diagonal',
+    grid: [
+      [true, false, false, false, false],
+      [false, true, false, false, false],
+      [false, false, true, false, false],
+      [false, false, false, true, false],
+      [false, false, false, false, true]
+    ],
+    is_active: true
+  },
+  {
+    name: 'Cuatro Esquinas',
+    grid: [
+      [true, false, false, false, true],
+      [false, false, false, false, false],
+      [false, false, false, false, false],
+      [false, false, false, false, false],
+      [true, false, false, false, true]
+    ],
+    is_active: true
+  },
+  {
+    name: 'Cartón Lleno (Bingo)',
+    grid: [
+      [true, true, true, true, true],
+      [true, true, true, true, true],
+      [true, true, true, true, true],
+      [true, true, true, true, true],
+      [true, true, true, true, true]
+    ],
+    is_active: true
+  },
+  {
+    name: 'Letra X',
+    grid: [
+      [true, false, false, false, true],
+      [false, true, false, true, false],
+      [false, false, true, false, false],
+      [false, true, false, true, false],
+      [true, false, false, false, true]
+    ],
+    is_active: true
+  },
+  {
+    name: 'Marco Exterior',
+    grid: [
+      [true, true, true, true, true],
+      [true, false, false, false, true],
+      [true, false, false, false, true],
+      [true, false, false, false, true],
+      [true, true, true, true, true]
+    ],
+    is_active: true
+  }
+];
 
 app.get('/api/patterns', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  const targetTenant = getTenantIdFromRequest(req);
   const now = Date.now();
-  if (cachedPatterns && (now - lastPatternsFetchTime < PATTERNS_CACHE_TTL)) {
-    return res.json(cachedPatterns);
+  const cached = cachedPatternsByTenant.get(targetTenant);
+  if (cached && (now - cached.timestamp < PATTERNS_CACHE_TTL)) {
+    return res.json(cached.patterns);
   }
+
   try {
-    const { data, error } = await supabase.from('patterns').select('*').order('name', { ascending: true });
-    if (error) {
-      return res.json(cachedPatterns || []);
+    // 1. Intentar consultar filtrando por tenant_id de la sala o por patrones globales del sistema
+    let query = supabase.from('patterns').select('*');
+    if (targetTenant && targetTenant !== 'default') {
+      query = query.or(`tenant_id.eq.${targetTenant},tenant_id.eq.default,tenant_id.is.null`);
     }
-    cachedPatterns = data || [];
-    lastPatternsFetchTime = now;
-    res.json(cachedPatterns);
+    let { data, error } = await query.order('name', { ascending: true });
+
+    // Fallback si la columna tenant_id no existiese aún en BD
+    if (error && error.message && error.message.includes('tenant_id')) {
+      const fallback = await supabase.from('patterns').select('*').order('name', { ascending: true });
+      data = fallback.data;
+      error = fallback.error;
+    }
+
+    // 2. Si la base de datos no tiene patrones registrados, sembrar automáticamente las figuras estándar
+    if (!error && (!data || data.length === 0)) {
+      try {
+        const toSeed = SYSTEM_DEFAULT_PATTERNS.map(p => ({ ...p, tenant_id: 'default' }));
+        const { data: insertedDefaults } = await supabase.from('patterns').insert(toSeed).select();
+        if (insertedDefaults && insertedDefaults.length > 0) {
+          data = insertedDefaults;
+        } else {
+          data = SYSTEM_DEFAULT_PATTERNS.map((p, idx) => ({ id: idx + 1, ...p, tenant_id: 'default' }));
+        }
+      } catch (seedErr) {
+        data = SYSTEM_DEFAULT_PATTERNS.map((p, idx) => ({ id: idx + 1, ...p, tenant_id: 'default' }));
+      }
+    }
+
+    const finalPatterns = data || [];
+    cachedPatternsByTenant.set(targetTenant, { patterns: finalPatterns, timestamp: now });
+    res.json(finalPatterns);
   } catch (err: any) {
-    res.json(cachedPatterns || []);
+    console.warn('[GetPatterns] Fallback a figuras del sistema por excepción:', err?.message || err);
+    const fallbackList = SYSTEM_DEFAULT_PATTERNS.map((p, idx) => ({ id: idx + 1, ...p, tenant_id: 'default' }));
+    res.json(fallbackList);
   }
 });
 
-// Create/Update Pattern
+// Create/Update Pattern (Aislado por Sala / Tenant)
 app.post('/api/patterns', requireAdmin, async (req, res) => {
   const { id, name, grid, is_active } = req.body;
-  cachedPatterns = null; // Invalidate cache
+  const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+  cachedPatternsByTenant.delete(targetTenant);
+  cachedPatternsByTenant.delete('default');
 
   if (id) {
-    // Try updating with is_active first, fallback to without is_active if column doesn't exist
-    let updatePayload: any = { name, grid, is_active: is_active ?? true };
+    let updatePayload: any = { name, grid, is_active: is_active ?? true, tenant_id: targetTenant };
     let { data, error } = await supabase.from('patterns')
       .update(updatePayload)
       .eq('id', id)
       .select()
       .single();
 
-    if (error && error.message && error.message.includes('is_active')) {
+    if (error && error.message && (error.message.includes('tenant_id') || error.message.includes('is_active'))) {
+      const fallbackPayload: any = { name, grid };
+      if (is_active !== undefined) fallbackPayload.is_active = is_active;
       const fallback = await supabase.from('patterns')
-        .update({ name, grid })
+        .update(fallbackPayload)
         .eq('id', id)
         .select()
         .single();
@@ -4558,16 +4772,17 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   } else {
-    // Try inserting with is_active first, fallback to without is_active if column doesn't exist
-    let newPattern: any = { name, grid, is_active: is_active ?? true };
+    let newPattern: any = { name, grid, is_active: is_active ?? true, tenant_id: targetTenant };
     let { data, error } = await supabase.from('patterns')
       .insert(newPattern)
       .select()
       .single();
 
-    if (error && error.message && error.message.includes('is_active')) {
+    if (error && error.message && (error.message.includes('tenant_id') || error.message.includes('is_active'))) {
+      const fallbackPayload: any = { name, grid };
+      if (is_active !== undefined) fallbackPayload.is_active = is_active;
       const fallback = await supabase.from('patterns')
-        .insert({ name, grid })
+        .insert(fallbackPayload)
         .select()
         .single();
       data = fallback.data;
@@ -4579,9 +4794,21 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
   }
 });
 
-// Delete Pattern (Hard delete)
+// Delete Pattern (Hard delete con protección de pertenencia a sala)
 app.delete('/api/patterns/:id', requireAdmin, async (req, res) => {
-  cachedPatterns = null; // Invalidate cache
+  const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+  const adminUser = (req as any).adminUser;
+  cachedPatternsByTenant.delete(targetTenant);
+  cachedPatternsByTenant.delete('default');
+
+  // Si no es Super Admin, verificar que el patrón pertenezca a su sala
+  if (!adminUser?.isSuperAdmin) {
+    const { data: existingPattern } = await supabase.from('patterns').select('id, tenant_id').eq('id', req.params.id).maybeSingle();
+    if (existingPattern && existingPattern.tenant_id && existingPattern.tenant_id !== targetTenant && existingPattern.tenant_id !== 'default') {
+      return res.status(403).json({ error: 'Acceso denegado: Este patrón pertenece a otra sala.' });
+    }
+  }
+
   const { error } = await supabase.from('patterns').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
   res.json({ success: true });
@@ -5829,8 +6056,9 @@ app.post('/api/game/status', requireAdmin, async (req, res) => {
   if (req.body.bg_volume !== undefined) globalSettingsUpdates.bg_volume = req.body.bg_volume;
   if (req.body.fx_volume !== undefined) globalSettingsUpdates.fx_volume = req.body.fx_volume;
 
+  const targetTenant = (req as any).tenantId || (game?.tenant_id) || getTenantIdFromRequest(req);
   if (Object.keys(globalSettingsUpdates).length > 0) {
-    await saveGameSettings('global', globalSettingsUpdates);
+    await saveGameSettings('global', globalSettingsUpdates, targetTenant);
   }
 
   if (!game) {
@@ -5853,7 +6081,7 @@ app.post('/api/game/status', requireAdmin, async (req, res) => {
   if (req.body.nequi_number !== undefined) settingsUpdates.nequi_number = req.body.nequi_number;
 
   if (Object.keys(settingsUpdates).length > 0) {
-    await saveGameSettings(game.id, settingsUpdates);
+    await saveGameSettings(game.id, settingsUpdates, targetTenant);
   }
 
   if (Object.keys(updates).length > 0) {
@@ -7931,11 +8159,12 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
       return res.status(400).json({ error: 'Número de WhatsApp requerido' });
     }
 
-    const globalSettings = await getGameSettings('global');
-    if (globalSettings.maintenance_mode) {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const roomSettings = await getGameSettings('global', targetTenant);
+    if (roomSettings.maintenance_mode) {
       if (phone !== '3145261451') {
         return res.status(503).json({
-          error: 'La aplicación se encuentra en mantenimiento y actualizaciones. Solo el administrador y el jugador autorizado (3145261451) pueden ingresar en este momento.',
+          error: 'Esta sala se encuentra en mantenimiento y actualizaciones. Solo el administrador y el jugador autorizado (3145261451) pueden ingresar en este momento.',
           maintenance: true
         });
       }
@@ -9970,9 +10199,9 @@ async function sendPushNotification({ recipient, phone, title, message, url, ten
 
   console.log(`[Notification] Initiating send: recipient=${recipient}, phone=${phone}, title=${finalTitle}, tenant=${scopedTenant} (${roomName})`);
   try {
-    const globalSettings = await getGameSettings('global') || {};
-    if (globalSettings.maintenance_mode && recipient === 'all') {
-      console.log('[Notification] Suppressed broadcast push notification due to maintenance mode.');
+    const roomSettings = await getGameSettings('global', scopedTenant) || {};
+    if (roomSettings.maintenance_mode && recipient === 'all') {
+      console.log(`[Notification] Suppressed broadcast push notification for room [${scopedTenant}] due to maintenance mode.`);
       return { success: true, message: 'Skipped due to maintenance mode' };
     }
     const onesignalAppId = process.env.ONESIGNAL_APP_ID || process.env.VITE_ONESIGNAL_APP_ID || globalSettings.onesignal_app_id;

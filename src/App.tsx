@@ -569,38 +569,63 @@ function MaintenanceWrapper({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const location = useLocation();
 
+  // Detectar si la ruta actual pertenece a una sala (/sala/:slug o /sala/:slug/*)
+  const roomMatch = location.pathname.match(/\/sala\/([a-zA-Z0-9_-]+)/i);
+  const currentRoomSlug = roomMatch ? roomMatch[1].toLowerCase() : null;
+
   useEffect(() => {
-    apiFetch('/api/maintenance-status')
+    // REGLA CRÍTICA: La página principal del SaaS (/) y rutas públicas globales jamás entran en mantenimiento
+    if (!currentRoomSlug) {
+      setMaintenance({ active: false, message: '' });
+      return;
+    }
+
+    // Consultar el estado de mantenimiento específico para esta sala
+    apiFetch(`/api/maintenance-status?slug=${currentRoomSlug}`)
       .then(res => res.json())
       .then(data => {
-        if (data) {
-          setMaintenance({ active: data.maintenance_mode, message: data.maintenance_message });
+        if (data && (data.tenant_id === currentRoomSlug || !data.tenant_id)) {
+          setMaintenance({ active: Boolean(data.maintenance_mode), message: data.maintenance_message || '' });
         }
       })
       .catch(() => {});
 
-    const channel = getBingoChannel();
+    // Escuchar actualizaciones de tiempo real exclusivas para esta sala
+    const channel = getBingoChannel(currentRoomSlug);
     const handleMaintenanceUpdate = (msg: any) => {
       if (msg.data) {
-        setMaintenance({
-          active: msg.data.maintenance_mode,
-          message: msg.data.maintenance_message || ''
-        });
+        const msgTenant = (msg.data.tenant_id || '').toLowerCase();
+        if (!msgTenant || msgTenant === currentRoomSlug) {
+          setMaintenance({
+            active: Boolean(msg.data.maintenance_mode),
+            message: msg.data.maintenance_message || ''
+          });
+        }
       }
     };
     channel.subscribe('maintenance_updated', handleMaintenanceUpdate);
     return () => {
       channel.unsubscribe('maintenance_updated', handleMaintenanceUpdate);
     };
-  }, []);
+  }, [currentRoomSlug]);
+
+  // Si estamos en la landing page o fuera de una sala, jamás mostrar pantalla de mantenimiento
+  if (!currentRoomSlug) {
+    return <>{children}</>;
+  }
+
+  // Rutas administrativas (tanto /admin como /sala/:slug/admin) nunca deben ser bloqueadas
+  const isAdminRoute = location.pathname.includes('/admin');
+  if (isAdminRoute) {
+    return <>{children}</>;
+  }
 
   if (maintenance.active) {
-    const isAdminRoute = location.pathname.startsWith('/admin');
     const isAdmin = user?.role === 'admin';
     const cleanUserPhone = user?.phone ? user.phone.replace(/\D/g, '').slice(-10) : '';
     const isAuthorizedPlayer = cleanUserPhone === '3145261451';
 
-    if (!isAdminRoute && !isAdmin && !isAuthorizedPlayer) {
+    if (!isAdmin && !isAuthorizedPlayer) {
       return <MaintenanceScreen message={maintenance.message} />;
     }
   }
