@@ -144,15 +144,16 @@ function sanitizeUploadedFileMimeType(file: any) {
 }
 
 // Store online players in memory
-const onlinePlayers = new Map<string, { timestamp: number, name: string, phone: string }>();
+const onlinePlayers = new Map<string, { timestamp: number, name: string, phone: string, tenant_id?: string }>();
 
-function touchPlayerPresence(phone: string, name?: string) {
+function touchPlayerPresence(phone: string, name?: string, tenantId?: string) {
   if (!phone) return;
   const normalized = normalizePhone(phone);
   onlinePlayers.set(normalized, {
     timestamp: Date.now(),
     name: name || 'Jugador',
-    phone: normalized
+    phone: normalized,
+    tenant_id: tenantId ? tenantId.toLowerCase() : 'default'
   });
 }
 
@@ -166,36 +167,38 @@ setInterval(() => {
   }
 }, 30000);
 
-// Players lists memory caching to prevent Supabase rate limits (invalidated on updates)
-let cachedActiveGamePlayers: any = null;
-let lastActiveGamePlayersFetchTime = 0;
+// Players lists memory caching partitioned by tenant to guarantee total multi-tenant isolation
+const cachedActiveGamePlayersByTenant = new Map<string, { data: any; timestamp: number }>();
 const ACTIVE_GAME_PLAYERS_CACHE_TTL = 15000; // 15 seconds cache
 
-let cachedAllPlayers: any = null;
-let lastAllPlayersFetchTime = 0;
+const cachedAllPlayersByTenant = new Map<string, { data: any; timestamp: number }>();
 const ALL_PLAYERS_CACHE_TTL = 15000; // 15 seconds cache
 
-function invalidatePlayersCaches() {
-  cachedActiveGamePlayers = null;
-  lastActiveGamePlayersFetchTime = 0;
-  cachedAllPlayers = null;
-  lastAllPlayersFetchTime = 0;
+function invalidatePlayersCaches(tenantId?: string) {
+  if (tenantId) {
+    cachedActiveGamePlayersByTenant.delete(tenantId.toLowerCase());
+    cachedAllPlayersByTenant.delete(tenantId.toLowerCase());
+  } else {
+    cachedActiveGamePlayersByTenant.clear();
+    cachedAllPlayersByTenant.clear();
+  }
 }
 
-// Game and games list memory caching to prevent Supabase rate limits (invalidated on updates)
-let cachedCurrentGame: any = null;
-let lastCurrentGameFetchTime = 0;
+// Game and games list memory caching partitioned by tenant
+const cachedCurrentGameByTenant = new Map<string, { data: any; timestamp: number }>();
 const CURRENT_GAME_CACHE_TTL = 10000; // 10 seconds cache
 
-let cachedGamesList: any = null;
-let lastGamesListFetchTime = 0;
+const cachedGamesListByTenant = new Map<string, { data: any; timestamp: number }>();
 const GAMES_LIST_CACHE_TTL = 15000; // 15 seconds cache
 
-function invalidateGameCaches(gameId?: number) {
-  cachedCurrentGame = null;
-  lastCurrentGameFetchTime = 0;
-  cachedGamesList = null;
-  lastGamesListFetchTime = 0;
+function invalidateGameCaches(gameId?: number, tenantId?: string) {
+  if (tenantId) {
+    cachedCurrentGameByTenant.delete(tenantId.toLowerCase());
+    cachedGamesListByTenant.delete(tenantId.toLowerCase());
+  } else {
+    cachedCurrentGameByTenant.clear();
+    cachedGamesListByTenant.clear();
+  }
   if (gameId) {
     invalidateGameCardsCache(gameId);
   } else {
@@ -662,26 +665,43 @@ const tenantsCache = new Map<string, { tenant: any; timestamp: number }>();
 const TENANTS_CACHE_TTL = 60000; // 1 minuto
 
 function getTenantIdFromRequest(req: express.Request): string {
-  // 1. Detección por ruta de URL (/sala/:slug o /sala/:slug/*)
+  // 1. Header explícito (X-Tenant-ID o X-Tenant-Slug)
+  const headerTenant = req.headers['x-tenant-id'] || req.headers['x-tenant-slug'];
+  if (typeof headerTenant === 'string' && headerTenant.trim()) {
+    return headerTenant.trim().toLowerCase();
+  }
+
+  // 2. Query param (?slug=... o ?tenant=... o ?tenantId=... o ?tenant_id=...)
+  const queryTenant = req.query.slug || req.query.tenant || req.query.tenantId || req.query.tenant_id;
+  if (typeof queryTenant === 'string' && queryTenant.trim()) {
+    return queryTenant.trim().toLowerCase();
+  }
+
+  // 3. Detección por ruta de URL (/sala/:slug o /sala/:slug/*)
   const pathToCheck = req.originalUrl || req.path || '';
   const salaMatch = pathToCheck.match(/\/sala\/([a-zA-Z0-9_-]+)/i);
   if (salaMatch && salaMatch[1]) {
     return salaMatch[1].trim().toLowerCase();
   }
 
-  // 2. Query param (?slug=... o ?tenant=...)
-  const queryTenant = req.query.slug || req.query.tenant;
-  if (typeof queryTenant === 'string' && queryTenant.trim()) {
-    return queryTenant.trim().toLowerCase();
+  // 4. Token de autorización en header (Admin HMAC o Player HMAC)
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const rawToken = authHeader.substring(7).trim();
+    if (rawToken) {
+      if (rawToken.startsWith('plyr.')) {
+        const pData = verifyPlayerToken(rawToken);
+        if (pData?.tenant_id) return pData.tenant_id.trim().toLowerCase();
+      } else {
+        const aData = verifyAdminToken(rawToken);
+        if (aData?.tenant_id && aData.tenant_id !== 'global') {
+          return aData.tenant_id.trim().toLowerCase();
+        }
+      }
+    }
   }
 
-  // 3. Header explícito (X-Tenant-ID o X-Tenant-Slug)
-  const headerTenant = req.headers['x-tenant-id'] || req.headers['x-tenant-slug'];
-  if (typeof headerTenant === 'string' && headerTenant.trim()) {
-    return headerTenant.trim().toLowerCase();
-  }
-
-  // 4. Subdominio automático (ej: sala1.bingolite.click -> "sala1")
+  // 5. Subdominio automático (ej: sala1.bingolite.click -> "sala1")
   const host = (req.headers.host || req.hostname || '').toLowerCase();
   const cleanHost = host.split(':')[0];
   const parts = cleanHost.split('.');
@@ -1780,20 +1800,27 @@ app.post('/api/admin/wallet/recharge', async (req, res) => {
   res.json({ success: true, newBalance: await getWalletBalance(phone, actualTenant) });
 });
 
-app.get('/api/admin/players/wallets', async (req, res) => {
+app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
   try {
     const adminUser = (req as any).adminUser;
+    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id.toLowerCase()
+      : (((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase());
+
     let query = supabase.from('players').select('name, phone, tenant_id');
-    if (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id) {
-      query = query.eq('tenant_id', adminUser.tenant_id);
+    if (targetTenant && targetTenant !== 'global') {
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        query = query.eq('tenant_id', targetTenant);
+      }
     }
     const { data: players, error } = await query;
     if (error) throw error;
 
-    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id) ? adminUser.tenant_id : 'default';
     const wallets = await Promise.all((players || []).map(async (p: any) => ({
       ...p,
-      balance: await getWalletBalance(p.phone, p.tenant_id || targetTenant)
+      balance: await getWalletBalance(p.phone, p.tenant_id || targetTenant || 'default')
     })));
     res.json(wallets);
   } catch (err: any) {
@@ -1801,31 +1828,62 @@ app.get('/api/admin/players/wallets', async (req, res) => {
   }
 });
 
-// GET Winners History (Global)
-app.get('/api/admin/winners', async (req, res) => {
+// GET Winners History (Aislado por Sala / Tenant)
+app.get('/api/admin/winners', requireAdmin, async (req, res) => {
   try {
+    const adminUser = (req as any).adminUser;
+    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id.toLowerCase()
+      : (((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase());
+
+    // Si pertenece a una sala específica, obtener primero los juegos de su sala
+    let allowedGameIds: number[] | null = null;
+    if (targetTenant && targetTenant !== 'global') {
+      let gQuery = supabase.from('game').select('id');
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        gQuery = gQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        gQuery = gQuery.eq('tenant_id', targetTenant);
+      }
+      const { data: tenantGames } = await gQuery;
+      allowedGameIds = (tenantGames || []).map(g => g.id);
+      if (allowedGameIds.length === 0) {
+        return res.json([]);
+      }
+    }
+
     // 1. Fetch raw game_patterns with winners
-    let { data: rawData, error }: { data: any[] | null, error: any } = await supabase
+    let patternsQuery = supabase
       .from('game_patterns')
       .select('id, game_id, pattern_id, winner_player_id, prize, won_at, payment_status, rejection_reason')
       .not('winner_player_id', 'is', null)
       .order('won_at', { ascending: false });
 
+    if (allowedGameIds) {
+      patternsQuery = patternsQuery.in('game_id', allowedGameIds);
+    }
+
+    let { data: rawData, error }: { data: any[] | null, error: any } = await patternsQuery;
+
     // Fallback if payment_status or rejection_reason columns don't exist
     if (error && error.code === '42703') {
       console.warn('Columnas payment_status o rejection_reason no existen; reintentando sin ellas.');
-      const fallbackData = await supabase
+      let fallbackQuery = supabase
         .from('game_patterns')
         .select('id, game_id, pattern_id, winner_player_id, prize, won_at')
         .not('winner_player_id', 'is', null)
         .order('won_at', { ascending: false });
 
+      if (allowedGameIds) {
+        fallbackQuery = fallbackQuery.in('game_id', allowedGameIds);
+      }
+
+      const fallbackData = await fallbackQuery;
       rawData = fallbackData.data as any;
       error = fallbackData.error;
     }
 
     if (error) {
-
       throw error;
     }
 
@@ -2371,21 +2429,45 @@ app.post('/api/admin/trigger-dj-bg', async (req, res) => {
 });
 
 
-app.get('/api/admin/sellers', async (req, res) => {
+app.get('/api/admin/sellers', requireAdmin, async (req, res) => {
   try {
-    const { data: sellers, error } = await supabase.from('sellers').select('*').order('created_at', { ascending: false });
+    const adminUser = (req as any).adminUser;
+    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id.toLowerCase()
+      : (((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase());
+
+    let query = supabase.from('sellers').select('*').order('created_at', { ascending: false });
+
+    if (targetTenant && targetTenant !== 'global') {
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        query = query.eq('tenant_id', targetTenant);
+      }
+    }
+
+    const { data: sellers, error } = await query;
     if (error) {
-      // ignored
+      // Si la columna tenant_id aún no existe en Supabase, reintentar sin filtrar
+      if (error.code === '42703') {
+        const fallback = await supabase.from('sellers').select('*').order('created_at', { ascending: false });
+        return res.json({ success: true, sellers: fallback.data || [] });
+      }
       return res.status(500).json({ error: error.message });
     }
     res.json({ success: true, sellers: sellers || [] });
-  } catch (error) {
+  } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/api/admin/sellers', async (req, res) => {
+app.post('/api/admin/sellers', requireAdmin, async (req, res) => {
   try {
+    const adminUser = (req as any).adminUser;
+    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id.toLowerCase()
+      : (((req.body.tenant_id as string) || (req as any).tenantId || 'default').toLowerCase());
+
     const { name, phone, email, commission_percentage } = req.body;
 
     // 1. Create user in Supabase Auth
@@ -2393,7 +2475,7 @@ app.post('/api/admin/sellers', async (req, res) => {
       email,
       password: '123456',
       email_confirm: true,
-      user_metadata: { role: 'seller', name, full_name: name }
+      user_metadata: { role: 'seller', name, full_name: name, tenant_id: targetTenant }
     });
 
     if (authError) return res.status(500).json({ error: authError.message });
@@ -2401,27 +2483,49 @@ app.post('/api/admin/sellers', async (req, res) => {
     // 2. Generate random code
     const code = Math.random().toString(36).substr(2, 4).toUpperCase();
 
-    // 3. Insert into sellers table
-    const { data, error } = await supabase.from('sellers').insert([{
+    // 3. Insert into sellers table with tenant_id
+    const sellerPayload: any = {
       id: authUser.user.id,
       name,
       phone,
       email,
       code,
-      commission_percentage
-    }]).select().single();
+      commission_percentage,
+      tenant_id: targetTenant
+    };
+
+    let { data, error } = await supabase.from('sellers').insert([sellerPayload]).select().single();
+
+    // Fallback if tenant_id column does not exist yet
+    if (error && error.code === '42703') {
+      delete sellerPayload.tenant_id;
+      const retry = await supabase.from('sellers').insert([sellerPayload]).select().single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, seller: data });
-  } catch (error) {
+  } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.put('/api/admin/sellers/:id', async (req, res) => {
+app.put('/api/admin/sellers/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, phone, email, commission_percentage } = req.body;
+    const adminUser = (req as any).adminUser;
+
+    // Verificar pertenencia por sala
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const { data: existingSeller } = await supabase.from('sellers').select('id, tenant_id').eq('id', id).maybeSingle();
+      if (!existingSeller) return res.status(404).json({ error: 'Revendedor no encontrado' });
+      const sTenant = (existingSeller.tenant_id || 'default').toLowerCase();
+      if (sTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ error: 'Acceso denegado: Este revendedor pertenece a otra sala.' });
+      }
+    }
 
     // Check if email changed and update auth
     if (email || name) {
@@ -2436,14 +2540,25 @@ app.put('/api/admin/sellers/:id', async (req, res) => {
     const { data, error } = await supabase.from('sellers').update({ name, phone, email, commission_percentage }).eq('id', id).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, seller: data });
-  } catch (error) {
+  } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.delete('/api/admin/sellers/:id', async (req, res) => {
+app.delete('/api/admin/sellers/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+    const adminUser = (req as any).adminUser;
+
+    // Verificar pertenencia por sala
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const { data: existingSeller } = await supabase.from('sellers').select('id, tenant_id').eq('id', id).maybeSingle();
+      if (!existingSeller) return res.status(404).json({ error: 'Revendedor no encontrado' });
+      const sTenant = (existingSeller.tenant_id || 'default').toLowerCase();
+      if (sTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ error: 'Acceso denegado: Este revendedor pertenece a otra sala.' });
+      }
+    }
 
     // Delete from auth first
     const { error: authError } = await supabase.auth.admin.deleteUser(id);
@@ -2454,7 +2569,7 @@ app.delete('/api/admin/sellers/:id', async (req, res) => {
     await supabase.from('sellers').delete().eq('id', id);
 
     res.json({ success: true });
-  } catch (error) {
+  } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
@@ -2981,13 +3096,14 @@ app.post('/api/players/change-password', async (req, res) => {
 });
 
 app.get('/api/games', async (req, res) => {
-  const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase();
+  const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || '').toLowerCase();
   const now = Date.now();
-  if (!targetTenant && cachedGamesList && (now - lastGamesListFetchTime < GAMES_LIST_CACHE_TTL)) {
+  const cachedEntry = cachedGamesListByTenant.get(targetTenant);
+  if (cachedEntry && (now - cachedEntry.timestamp < GAMES_LIST_CACHE_TTL)) {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
-    return res.json(cachedGamesList);
+    return res.json(cachedEntry.data);
   }
 
   console.log(`--- FETCHING GAMES (Tenant: ${targetTenant || 'all'}) ---`);
@@ -3007,8 +3123,12 @@ app.get('/api/games', async (req, res) => {
       `)
       .order('id', { ascending: false });
 
-    if (targetTenant && targetTenant !== 'global' && targetTenant !== 'default') {
-      gamesQuery = gamesQuery.eq('tenant_id', targetTenant);
+    if (targetTenant && targetTenant !== 'global') {
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        gamesQuery = gamesQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        gamesQuery = gamesQuery.eq('tenant_id', targetTenant);
+      }
     }
 
     const { data, error } = await gamesQuery;
@@ -3059,8 +3179,7 @@ app.get('/api/games', async (req, res) => {
     }));
 
     console.log(`Successfully formatted ${formattedGames.length} games.`);
-    cachedGamesList = formattedGames;
-    lastGamesListFetchTime = Date.now();
+    cachedGamesListByTenant.set(targetTenant, { data: formattedGames, timestamp: Date.now() });
     res.json(formattedGames);
   } catch (err: any) {
     // ignored
@@ -4203,53 +4322,75 @@ app.post('/api/games/:id/activate', requireAdmin, async (req, res) => {
   }
 });
 
-async function getActiveGame() {
+async function getActiveGame(tenantId?: string) {
   try {
+    const normTenant = (tenantId || '').trim().toLowerCase();
+
+    // Helper para aplicar filtro estricto de sala/tenant a cualquier consulta de juego
+    const applyTenantFilter = (q: any) => {
+      if (normTenant && normTenant !== 'global') {
+        if (normTenant === 'default' || normTenant === 'bingo-lite') {
+          return q.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+        } else {
+          return q.eq('tenant_id', normTenant);
+        }
+      }
+      return q;
+    };
+
     // First try to find a paid game that is active (playing, paused, waiting or scheduled)
-    let { data: paidGame } = await supabase.from('game')
+    let paidQuery = supabase.from('game')
       .select('*')
       .in('status', ['waiting', 'playing', 'paused', 'scheduled'])
       .eq('is_free', false)
       .order('id', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    paidQuery = applyTenantFilter(paidQuery);
+    let { data: paidGame } = await paidQuery.maybeSingle();
 
     if (paidGame) {
       return await getGameFullState(paidGame.id);
     }
 
     // If no paid active game, try any active game
-    let { data: anyActiveGame } = await supabase.from('game')
+    let anyActiveQuery = supabase.from('game')
       .select('*')
       .in('status', ['waiting', 'playing', 'paused', 'scheduled'])
       .order('id', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    anyActiveQuery = applyTenantFilter(anyActiveQuery);
+    let { data: anyActiveGame } = await anyActiveQuery.maybeSingle();
 
     if (anyActiveGame) {
       return await getGameFullState(anyActiveGame.id);
     }
 
     // If still no game, try scheduled paid game
-    let { data: scheduledPaid } = await supabase.from('game')
+    let scheduledPaidQuery = supabase.from('game')
       .select('*')
       .eq('status', 'scheduled')
       .eq('is_free', false)
       .order('start_time', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    scheduledPaidQuery = applyTenantFilter(scheduledPaidQuery);
+    let { data: scheduledPaid } = await scheduledPaidQuery.maybeSingle();
 
     if (scheduledPaid) {
       return await getGameFullState(scheduledPaid.id);
     }
 
     // Finally, any scheduled game
-    let { data: scheduledAny } = await supabase.from('game')
+    let scheduledAnyQuery = supabase.from('game')
       .select('*')
       .eq('status', 'scheduled')
       .order('start_time', { ascending: true })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+
+    scheduledAnyQuery = applyTenantFilter(scheduledAnyQuery);
+    let { data: scheduledAny } = await scheduledAnyQuery.maybeSingle();
 
     if (scheduledAny) {
       return await getGameFullState(scheduledAny.id);
@@ -4261,55 +4402,60 @@ async function getActiveGame() {
   return null;
 }
 
-// Get Current Game
+// Get Current Game (Aislado por Sala / Multi-tenant)
 app.get('/api/game', async (req, res) => {
   const { id } = req.query;
+  const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
   const now = Date.now();
 
-  if (!id && cachedCurrentGame && (now - lastCurrentGameFetchTime < CURRENT_GAME_CACHE_TTL)) {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    return res.json(cachedCurrentGame);
+  if (!id) {
+    const cachedEntry = cachedCurrentGameByTenant.get(targetTenant);
+    if (cachedEntry && (now - cachedEntry.timestamp < CURRENT_GAME_CACHE_TTL)) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      return res.json(cachedEntry.data);
+    }
   }
 
-  console.log('GET /api/game requested', id ? `for ID: ${id}` : '');
+  console.log('GET /api/game requested', id ? `for ID: ${id}` : `(Tenant: ${targetTenant})`);
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   try {
     let activeGameFull;
     if (id) {
       activeGameFull = await getGameFullState(parseInt(id as string));
     } else {
-      activeGameFull = await getActiveGame();
+      activeGameFull = await getActiveGame(targetTenant);
     }
 
     if (!activeGameFull) {
-      const globalSettings = await getGameSettings('global');
-      console.log('GET /api/game returning global settings (no active game) header_image_url:', globalSettings.header_image_url);
+      const tenantInfo = await getTenantInfo(targetTenant);
+      const tenantSettings = await getGameSettings(targetTenant);
+      console.log(`GET /api/game returning clean room state for tenant [${targetTenant}]`);
       const guestState = {
         id: null,
         status: 'waiting',
-        stream_id: globalSettings.stream_id || '',
-        stream_active: globalSettings.stream_active || false,
-        ai_knowledge_base: globalSettings.ai_knowledge_base,
-        ai_model: globalSettings.ai_model || 'gemini-3.8-flash',
-        ai_animator_enabled: globalSettings.ai_animator_enabled !== false,
-        ai_chat_enabled: globalSettings.ai_chat_enabled !== false,
-        ai_fraud_detection_enabled: globalSettings.ai_fraud_detection_enabled !== false,
-        whatsapp_template: globalSettings.whatsapp_template,
-        whatsapp_group_link: globalSettings.whatsapp_group_link || 'https://chat.whatsapp.com/CDgs5mXL8HWGJjbJn0VxHk',
-        nequi_number: globalSettings.nequi_number || '3235304996',
-        header_image_url: globalSettings.header_image_url || null,
-        header_opacity: globalSettings.header_opacity !== undefined ? globalSettings.header_opacity : 0.4,
-        header_title: globalSettings.header_title || 'BINGO ONLINE',
-        header_subtitle: globalSettings.header_subtitle || 'Juega desde tu celular, gana premios al instante y diviértete en grande.',
+        stream_id: tenantSettings.stream_id || tenantInfo.stream_id || '',
+        stream_active: tenantSettings.stream_active || false,
+        ai_knowledge_base: tenantSettings.ai_knowledge_base || tenantInfo.description || '',
+        ai_model: tenantSettings.ai_model || 'gemini-3.8-flash',
+        ai_animator_enabled: tenantSettings.ai_animator_enabled !== false,
+        ai_chat_enabled: tenantSettings.ai_chat_enabled !== false,
+        ai_fraud_detection_enabled: tenantSettings.ai_fraud_detection_enabled !== false,
+        whatsapp_template: tenantSettings.whatsapp_template || '',
+        whatsapp_group_link: tenantSettings.whatsapp_group_link || tenantInfo.whatsapp_group_link || '',
+        nequi_number: tenantSettings.nequi_number || tenantInfo.contact_phone || '',
+        header_image_url: tenantSettings.header_image_url || tenantInfo.banner_url || null,
+        header_opacity: tenantSettings.header_opacity !== undefined ? tenantSettings.header_opacity : 0.4,
+        header_title: tenantSettings.header_title || tenantInfo.name || 'BINGO ONLINE',
+        header_subtitle: tenantSettings.header_subtitle || 'Juega desde tu celular, gana premios al instante y diviértete en grande.',
+        primary_color: tenantInfo.primary_color || '#2563eb',
+        tenant_id: targetTenant,
         patterns: []
       };
-      cachedCurrentGame = guestState;
-      lastCurrentGameFetchTime = Date.now();
+      cachedCurrentGameByTenant.set(targetTenant, { data: guestState, timestamp: Date.now() });
       return res.json(guestState);
     }
 
-    cachedCurrentGame = activeGameFull;
-    lastCurrentGameFetchTime = Date.now();
+    cachedCurrentGameByTenant.set(targetTenant, { data: activeGameFull, timestamp: Date.now() });
     res.json(activeGameFull);
   } catch (err: any) {
     // ignored
@@ -4321,6 +4467,7 @@ app.get('/api/game', async (req, res) => {
       ai_animator_enabled: true,
       header_title: 'BINGO ONLINE',
       header_subtitle: 'Juega desde tu celular, gana premios al instante y diviértete en grande.',
+      tenant_id: targetTenant,
       patterns: []
     });
   }
@@ -8516,22 +8663,38 @@ app.post('/api/log/client-error', express.json(), (req, res) => {
   res.json({ success: true });
 });
 
-// Get All Registered Players (Admin)
-app.get('/api/admin/all-players', async (req, res) => {
+// Get All Registered Players (Admin - Aislado por Sala / Tenant)
+app.get('/api/admin/all-players', requireAdmin, async (req, res) => {
   try {
+    const adminUser = (req as any).adminUser;
+    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id.toLowerCase()
+      : (((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase());
+
     const now = Date.now();
-    if (cachedAllPlayers && (now - lastAllPlayersFetchTime < ALL_PLAYERS_CACHE_TTL)) {
-      return res.json(cachedAllPlayers);
+    const cachedEntry = cachedAllPlayersByTenant.get(targetTenant);
+    if (cachedEntry && (now - cachedEntry.timestamp < ALL_PLAYERS_CACHE_TTL)) {
+      return res.json(cachedEntry.data);
     }
 
-    const { data: players, error } = await supabase
+    let query = supabase
       .from('players')
       .select('*')
       .order('created_at', { ascending: false });
 
+    if (targetTenant && targetTenant !== 'global') {
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        query = query.eq('tenant_id', targetTenant);
+      }
+    }
+
+    const { data: players, error } = await query;
+
     if (error) return res.status(500).json({ error: error.message });
 
-    const activeGameForGifts = await getActiveGame();
+    const activeGameForGifts = await getActiveGame(targetTenant);
     const giftsMap = await getGiftStatsMap(activeGameForGifts?.id);
 
     const enriched = (players || []).map((p: any) => {
@@ -8547,8 +8710,7 @@ app.get('/api/admin/all-players', async (req, res) => {
       };
     });
 
-    cachedAllPlayers = enriched;
-    lastAllPlayersFetchTime = now;
+    cachedAllPlayersByTenant.set(targetTenant, { data: enriched, timestamp: now });
     res.json(enriched);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -8556,7 +8718,7 @@ app.get('/api/admin/all-players', async (req, res) => {
 });
 
 // Toggle Player Block Status (Admin)
-app.post('/api/admin/players/:id/toggle-block', async (req, res) => {
+app.post('/api/admin/players/:id/toggle-block', requireAdmin, async (req, res) => {
   try {
     const { data: player, error: fetchError } = await supabase
       .from('players')
@@ -8581,7 +8743,7 @@ app.post('/api/admin/players/:id/toggle-block', async (req, res) => {
 
     if (updateError) throw updateError;
 
-    invalidatePlayersCaches();
+    invalidatePlayersCaches(player.tenant_id);
     res.json({ success: true, is_blocked: !player.is_blocked });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -8589,7 +8751,7 @@ app.post('/api/admin/players/:id/toggle-block', async (req, res) => {
 });
 
 // Update Player Details (Admin)
-app.put('/api/admin/players/:id', async (req, res) => {
+app.put('/api/admin/players/:id', requireAdmin, async (req, res) => {
   try {
     const { data: existingPlayer } = await supabase
       .from('players')
@@ -8615,7 +8777,7 @@ app.put('/api/admin/players/:id', async (req, res) => {
       .eq('id', req.params.id);
 
     if (error) throw error;
-    invalidatePlayersCaches();
+    invalidatePlayersCaches(existingPlayer.tenant_id);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -8623,7 +8785,7 @@ app.put('/api/admin/players/:id', async (req, res) => {
 });
 
 // Delete Player (Admin)
-app.delete('/api/admin/players/:id', async (req, res) => {
+app.delete('/api/admin/players/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -8679,28 +8841,32 @@ app.delete('/api/admin/players/:id', async (req, res) => {
   }
 });
 
-// Get Players
+// Get Players (Aislado por Sala / Multi-tenant)
 app.get('/api/players', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   try {
+    const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
     const now = Date.now();
-    if (cachedActiveGamePlayers && (now - lastActiveGamePlayersFetchTime < ACTIVE_GAME_PLAYERS_CACHE_TTL)) {
-      return res.json(cachedActiveGamePlayers);
+    const cachedEntry = cachedActiveGamePlayersByTenant.get(targetTenant);
+    if (cachedEntry && (now - cachedEntry.timestamp < ACTIVE_GAME_PLAYERS_CACHE_TTL)) {
+      return res.json(cachedEntry.data);
     }
 
-    // 1. Get active game
-    let game = await getActiveGame();
+    // 1. Get active game for this tenant
+    let game = await getActiveGame(targetTenant);
 
-    // 2. Get all players and only fetch card_number and game_id columns (avoiding huge b, i, n, g, o arrays)
-    // filtered to the current game if active to drastically reduce egress.
-    const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase();
+    // 2. Query players filtered strictly by this tenant
     let playersQuery = supabase
       .from('players')
       .select('*, cards(card_number, game_id)')
       .order('created_at', { ascending: false });
 
-    if (targetTenant && targetTenant !== 'global' && targetTenant !== 'default') {
-      playersQuery = playersQuery.eq('tenant_id', targetTenant);
+    if (targetTenant && targetTenant !== 'global') {
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        playersQuery = playersQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        playersQuery = playersQuery.eq('tenant_id', targetTenant);
+      }
     }
 
     if (game?.id) {
@@ -8714,7 +8880,7 @@ app.get('/api/players', async (req, res) => {
     // Auto-heal/auto-approve any players stuck in 'pending' for free games or gift invitations
     const isCurrentGameFree = Boolean(game && (game.is_free || game.type === 'free' || parseAmountWithDecimals(game.card_value || '0') === 0));
 
-    for (const p of players) {
+    for (const p of (players || [])) {
       if (p.status === 'pending') {
         const isGiftReceipt = Boolean(p.receipt_url && p.receipt_url.includes('GIFT_'));
         const isFreeReceipt = Boolean(p.receipt_url && (p.receipt_url.includes('FREE_GAME') || p.receipt_url.includes('free')));
@@ -8735,7 +8901,7 @@ app.get('/api/players', async (req, res) => {
 
     const giftsMap = await getGiftStatsMap(game?.id);
 
-    const formattedPlayers = players.map((p: any) => {
+    const formattedPlayers = (players || []).map((p: any) => {
       let history = [];
       try {
         const parsed = JSON.parse(p.receipt_url || '[]');
@@ -8770,8 +8936,7 @@ app.get('/api/players', async (req, res) => {
     // Return players active in the current game, pending players, or approved players
     const activeCurrentPlayers = formattedPlayers.filter(p => p.is_active_in_game || p.status === 'pending' || p.status === 'approved');
 
-    cachedActiveGamePlayers = activeCurrentPlayers;
-    lastActiveGamePlayersFetchTime = now;
+    cachedActiveGamePlayersByTenant.set(targetTenant, { data: activeCurrentPlayers, timestamp: now });
     res.json(activeCurrentPlayers);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -8912,7 +9077,7 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/players/approve-all', async (req, res) => {
+app.post('/api/admin/players/approve-all', requireAdmin, async (req, res) => {
   try {
     const adminUser = (req as any).adminUser;
     let query = supabase.from('players').select('id, tenant_id').eq('status', 'pending');
@@ -9062,15 +9227,23 @@ app.post('/api/players/:id/reject', requireAdmin, async (req, res) => {
 });
 
 // Admin endpoint: List all pending and processed recharge requests
-app.get('/api/admin/recharge-requests', async (req, res) => {
+app.get('/api/admin/recharge-requests', requireAdmin, async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   try {
     const adminUser = (req as any).adminUser;
+    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id.toLowerCase()
+      : (((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase());
+
     let query = supabase.from('players')
       .select('id, name, phone, receipt_url, created_at, tenant_id');
 
-    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
-      query = query.eq('tenant_id', adminUser.tenant_id);
+    if (targetTenant && targetTenant !== 'global') {
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        query = query.eq('tenant_id', targetTenant);
+      }
     }
 
     const { data: players, error } = await query.order('created_at', { ascending: false });
@@ -9122,7 +9295,7 @@ app.get('/api/admin/recharge-requests', async (req, res) => {
 });
 
 // Admin endpoint: Approve a manual recharge request
-app.post('/api/admin/recharge-requests/:id/approve', async (req, res) => {
+app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, res) => {
   try {
     const parts = req.params.id.split(':::');
     if (parts.length < 2) return res.status(400).json({ error: 'ID de solicitud inválido' });
@@ -9185,7 +9358,7 @@ app.post('/api/admin/recharge-requests/:id/approve', async (req, res) => {
       .update({ receipt_url: JSON.stringify(receipts) })
       .eq('id', playerId);
 
-    invalidatePlayersCaches();
+    invalidatePlayersCaches(player.tenant_id);
 
     // 3. Notify player
     await sendPushNotification({
@@ -9202,7 +9375,7 @@ app.post('/api/admin/recharge-requests/:id/approve', async (req, res) => {
 });
 
 // Admin endpoint: Reject a manual recharge request
-app.post('/api/admin/recharge-requests/:id/reject', async (req, res) => {
+app.post('/api/admin/recharge-requests/:id/reject', requireAdmin, async (req, res) => {
   try {
     const parts = req.params.id.split(':::');
     if (parts.length < 2) return res.status(400).json({ error: 'ID de solicitud inválido' });
@@ -11326,25 +11499,35 @@ app.post('/api/players/ping', (req, res) => {
     if (!phone) {
       return res.status(400).json({ error: 'Phone is required for ping' });
     }
-    touchPlayerPresence(phone, name);
+    const tId = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default');
+    touchPlayerPresence(phone, name, tId);
     res.json({ success: true, online_count: onlinePlayers.size });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Online players list and count for admins
+// Online players list and count for admins (Aislado por Sala / Tenant)
 app.get('/api/admin/online-players', (req, res) => {
   try {
+    const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
     const now = Date.now();
     const activeOnline: any[] = [];
     for (const [key, value] of onlinePlayers.entries()) {
       if (now - value.timestamp <= 120000) {
-        activeOnline.push({
-          phone: value.phone,
-          name: value.name,
-          last_active: value.timestamp
-        });
+        const pTenant = ((value as any).tenant_id || 'default').toLowerCase();
+        if (
+          !targetTenant ||
+          targetTenant === 'global' ||
+          pTenant === targetTenant ||
+          ((targetTenant === 'default' || targetTenant === 'bingo-lite') && (pTenant === 'default' || pTenant === 'bingo-lite'))
+        ) {
+          activeOnline.push({
+            phone: value.phone,
+            name: value.name,
+            last_active: value.timestamp
+          });
+        }
       } else {
         onlinePlayers.delete(key);
       }
@@ -11358,11 +11541,16 @@ app.get('/api/admin/online-players', (req, res) => {
   }
 });
 
-// Games stats and historical summary endpoint
-app.get('/api/admin/games-stats-history', async (req, res) => {
+// Games stats and historical summary endpoint (Aislado por Sala / Tenant)
+app.get('/api/admin/games-stats-history', requireAdmin, async (req, res) => {
   try {
-    // 1. Fetch all games with their patterns
-    const { data: games, error: gamesError } = await supabase
+    const adminUser = (req as any).adminUser;
+    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id.toLowerCase()
+      : (((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase());
+
+    // 1. Fetch games with their patterns filtered by tenant
+    let gamesQuery = supabase
       .from('game')
       .select(`
           id,
@@ -11377,19 +11565,40 @@ app.get('/api/admin/games-stats-history', async (req, res) => {
         `)
       .order('id', { ascending: false });
 
+    let playersQuery = supabase
+      .from('players')
+      .select('id, name, phone, created_at, status, tenant_id');
+
+    if (targetTenant && targetTenant !== 'global') {
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        gamesQuery = gamesQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+        playersQuery = playersQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        gamesQuery = gamesQuery.eq('tenant_id', targetTenant);
+        playersQuery = playersQuery.eq('tenant_id', targetTenant);
+      }
+    }
+
+    const { data: games, error: gamesError } = await gamesQuery;
     if (gamesError) {
       throw gamesError;
     }
 
-    // 2. Fetch all cards to compute statistics per game
-    const { data: cards, error: cardsError } = await supabase
-      .from('cards')
-      .select('game_id, card_number, player_id, players(name, phone)');
+    // 2. Fetch cards only for the filtered games
+    const gameIds = (games || []).map(g => g.id);
+    let cards: any[] = [];
+    if (gameIds.length > 0) {
+      const { data: cardsData, error: cardsError } = await supabase
+        .from('cards')
+        .select('game_id, card_number, player_id, players(name, phone)')
+        .in('game_id', gameIds);
+      if (cardsError) throw cardsError;
+      cards = cardsData || [];
+    }
 
-    // 3. Fetch count of all registered players
-    const { data: allRegPlayers, error: playersError } = await supabase
-      .from('players')
-      .select('id, name, phone, created_at, status');
+    // 3. Fetch count of registered players for this tenant
+    const { data: allRegPlayers, error: playersError } = await playersQuery;
+    if (playersError) throw playersError;
 
     const totalRegistered = allRegPlayers?.length || 0;
 
