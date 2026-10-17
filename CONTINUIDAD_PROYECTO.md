@@ -60,17 +60,36 @@
     - **Clausura de Registro Público de Admins:** `/admin/register` bloqueó la creación libre de cuentas administrativas, redirigiendo a los organizadores a crear su sala en la landing page.
     - **Protección RLS a Nivel de Base de Datos:** En `saas_multitenant_migration.sql`, se revocó el acceso a `admin_password` y `admin_email` a los roles `anon` y `authenticated`. Se bloquearon escrituras directas sobre tablas críticas (`game`, `cards`, `wallets`, `wallet_transactions`, `settings`).
 
+13. **Aislamiento Total de Datos en Salas Nuevas (Cero Datos Residuales):**
+    - **Partición Estricta de Cachés en Memoria:** Se reemplazaron variables globales compartidas por `Map<tenantId, data>` (`cachedActiveGamePlayersByTenant`, `cachedAllPlayersByTenant`, `cachedCurrentGameByTenant`, `cachedGamesListByTenant`). Ninguna sala recibe datos cacheados de otra.
+    - **Vendedores Aislados (`/api/admin/sellers`):** Endpoint protegido con `requireAdmin` y filtrado estricto por `tenant_id`. Las salas nuevas inician con 0 revendedores y las nuevas creaciones se asocian de forma permanente a su sala.
+    - **Jugadores y Billeteras Aisladas:** `/api/admin/all-players`, `/api/players` y `/api/admin/players/wallets` protegidos y filtrados por `tenant_id`. Salas nuevas arrancan en blanco (0 jugadores).
+    - **Recargas y Estadísticas Aisladas:** `/api/admin/recharge-requests`, `/api/admin/games-stats-history` y `/api/admin/winners` protegidos con `requireAdmin` y filtrados por `tenant_id`. Los historiales, premios y contadores no filtran información entre salas.
+    - **Estado Limpio Inicial de Partidas:** En `/api/game`, si una sala nueva no ha creado partidas, devuelve un estado en espera limpio (`guestState`) con su identidad visual y sin heredar el juego ni las balotas de la sala oficial.
+
 ---
 
-## 3. Tareas Pendientes y Bloqueos Identificados
+## 3. Estado del Motor de Bingo y Tareas Pendientes
 
-### ⚠️ Tareas Técnicas Pendientes:
+### ⚙️ Diagnóstico del Motor de Bingo Autónomo (`serverAutoplay`):
+- **Estado Actual:** El backend cuenta con un bucle central (`setInterval`) y una variable global única:
+  ```typescript
+  serverAutoplay = { isRunning: false, gameId: null, isDrawing: false, ... }
+  ```
+- **Comportamiento:** Actualmente el servidor extrae balotas automáticamente para **un único juego activo a la vez**. Los eventos de Ably (`game_update`, `ball_drawn`) se transmiten por el canal principal.
+- **Siguiente Fase de Evolución Multi-Tenant del Motor:**
+  1. Transformar `serverAutoplay` en un mapa de motores por sala: `Map<string, RoomAutoplayEngine>`.
+  2. Particionar canales de Ably por sala (`game_update_${tenantId}`, `ball_drawn_${tenantId}`) para que múltiples salas puedan realizar sorteos automáticos independientes y simultáneos.
+
+---
+
+## 4. Tareas Técnicas Pendientes y Despliegue:
 1. **Ejecución de Migración DDL en Supabase:**
    - **Archivo:** `saas_multitenant_migration.sql`.
-   - **Detalle:** La tabla `tenants` (con columnas `admin_email`, `admin_password`, `admin_name`, `contact_phone`) y las columnas `tenant_id` deben aplicarse en la base de datos de producción de Supabase. El backend actualmente opera con sincronización y fallback seguro en memoria RAM (`schema cache`).
+   - **Detalle:** La tabla `tenants` (con columnas `admin_email`, `admin_password`, `admin_name`, `contact_phone`) y las columnas `tenant_id` en `sellers`, `game`, `players` deben aplicarse en la base de datos de producción de Supabase.
    - **Acción requerida:** Ejecutar el script SQL en el Editor SQL de Supabase.
-2. **Confirmación y Push de Cambios Locales en Git:**
-   - Cambios listos para commit en el repositorio remoto `https://github.com/stcganas/Bingo-Lite-SaS.git`.
+2. **Sincronización a GitHub:**
+   - Commits locales listos en la rama `main` para ser subidos desde GitHub Desktop (`Push origin`).
 3. **Despliegue a Producción (Render.com):**
    - El archivo `render.yaml` ya se encuentra optimizado para desplegar el servicio web con `tsx server.ts`.
 
