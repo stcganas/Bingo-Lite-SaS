@@ -53,6 +53,12 @@
     - Rutas exclusivas por sala: `/sala/:slug/admin` y `/sala/:slug/admin/login` protegidas por `ProtectedRoute` en `App.tsx`.
     - Endpoints del backend (`/api/games`, `/api/players`, `/api/wallet`, etc.) filtran por `tenant_id` para garantizar que un administrador solo vea y controle los juegos, jugadores y estadísticas de su propia sala.
     - Formulario en `SaaSMarketingLanding.tsx` actualizado para requerir correo y contraseña del administrador, mostrando en el resultado el enlace directo a su panel administrativo (`/sala/:slug/admin`).
+12. **Blindaje de Máxima Seguridad y Cierre Total de Brechas (Zero-Trust Security):**
+    - **Validación Obligatoria de Contraseñas:** Se eliminó cualquier omisión en `server.ts`. Los Super Admins deben validar obligatoriamente su contraseña contra Supabase Auth y los administradores de sala contra su hash PBKDF2/SHA-512.
+    - **Tokens Criptográficos HMAC-SHA256:** El backend emite tokens firmados con caducidad de 7 días. El middleware `requireAdmin` valida la firma criptográfica antes de conceder acceso a cualquier endpoint `/api/admin/*`.
+    - **Eliminación de Rol Admin por Defecto:** En `AuthContext.tsx`, nadie recibe rol 'admin' por defecto. Solo los correos estrictamente verificados (`comamosexpress@gmail.com`, `stcganas@gmail.com`) pueden obtener privilegios de Super Administrador.
+    - **Clausura de Registro Público de Admins:** `/admin/register` bloqueó la creación libre de cuentas administrativas, redirigiendo a los organizadores a crear su sala en la landing page.
+    - **Protección RLS a Nivel de Base de Datos:** En `saas_multitenant_migration.sql`, se revocó el acceso a `admin_password` y `admin_email` a los roles `anon` y `authenticated`. Se bloquearon escrituras directas sobre tablas críticas (`game`, `cards`, `wallets`, `wallet_transactions`, `settings`).
 
 ---
 
