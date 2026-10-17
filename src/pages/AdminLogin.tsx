@@ -48,7 +48,7 @@ export default function AdminLogin() {
           navigate(`/sala/${slug}/admin`);
         } else if (tenantRes.user.isSuperAdmin) {
           navigate('/admin');
-        } else if (tenantRes.user.tenant_id) {
+        } else if (tenantRes.user.tenant_id && tenantRes.user.tenant_id !== 'global') {
           navigate(`/sala/${tenantRes.user.tenant_id}/admin`);
         } else {
           navigate('/admin');
@@ -56,17 +56,22 @@ export default function AdminLogin() {
         return;
       }
 
-      // 2. Si falló y no especificó sala, intentar con Supabase Auth (superadmins legacy)
+      // 2. Si no especificó sala y el correo es de Super Admin, intentar loginAdmin con Supabase
       if (!slug) {
-        const { success: legacySuccess, error: legacyError } = await loginAdmin(email, password);
-        if (legacySuccess) {
-          navigate('/admin');
+        const cleanEmail = email.trim().toLowerCase();
+        if (cleanEmail === 'comamosexpress@gmail.com' || cleanEmail === 'stcganas@gmail.com') {
+          const { success: legacySuccess, error: legacyError } = await loginAdmin(email, password);
+          if (legacySuccess) {
+            navigate('/admin');
+            return;
+          }
+          setError(legacyError || 'Contraseña de Super Administrador incorrecta.');
           return;
         }
       }
 
       // Si hubo error específico de tenant, mostrarlo
-      const loginError = tenantRes.error || 'Credenciales incorrectas.';
+      const loginError = tenantRes.error || 'Credenciales de administrador incorrectas.';
       const lowerErr = loginError.toLowerCase();
       if (lowerErr.includes('otra sala') || lowerErr.includes('no pertenece')) {
         setError('Acceso denegado: Este usuario de administrador pertenece a otra sala y no tiene permiso aquí.');

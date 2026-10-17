@@ -568,6 +568,63 @@ if (ablyKey) {
 const ably = ablyInstance;
 
 // ============================================================================
+// CRIPTOGRAFÍA Y TOKENS SEGUROS DE ADMINISTRACIÓN
+// ============================================================================
+const ADMIN_HMAC_SECRET = process.env.ADMIN_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || 'bingo-ultra-secure-hmac-salt-2026';
+
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password: string, storedHash: string): boolean {
+  try {
+    if (!storedHash || !storedHash.includes(':')) return false;
+    const [salt, originalHash] = storedHash.split(':');
+    const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+    return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+  } catch (e) {
+    return false;
+  }
+}
+
+interface AdminTokenPayload {
+  uid: string;
+  email: string;
+  role: 'admin';
+  isSuperAdmin: boolean;
+  tenant_id: string;
+  exp: number;
+}
+
+function createAdminToken(payload: Omit<AdminTokenPayload, 'exp'>): string {
+  const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 7 días de validez
+  const data: AdminTokenPayload = { ...payload, exp };
+  const encodedData = Buffer.from(JSON.stringify(data)).toString('base64url');
+  const signature = crypto.createHmac('sha256', ADMIN_HMAC_SECRET).update(encodedData).digest('base64url');
+  return `${encodedData}.${signature}`;
+}
+
+function verifyAdminToken(token: string): AdminTokenPayload | null {
+  try {
+    if (!token || !token.includes('.')) return null;
+    const [encodedData, signature] = token.split('.');
+    const expectedSignature = crypto.createHmac('sha256', ADMIN_HMAC_SECRET).update(encodedData).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+      return null;
+    }
+    const data: AdminTokenPayload = JSON.parse(Buffer.from(encodedData, 'base64url').toString('utf8'));
+    if (data.exp && data.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+// ============================================================================
 // INFRAESTRUCTURA SAAS & MULTI-TENANCY
 // ============================================================================
 const tenantsCache = new Map<string, { tenant: any; timestamp: number }>();
@@ -837,7 +894,7 @@ app.post('/api/tenants/verify-code', async (req, res) => {
   }
 });
 
-// Endpoint de autenticación exclusivo para administradores de sala independiente
+// Endpoint de autenticación blindado para administradores (Super Admins y Admins de Sala)
 app.post('/api/admin/tenant-login', async (req, res) => {
   try {
     const { email: rawEmail, password, room_slug } = req.body;
@@ -857,12 +914,36 @@ app.post('/api/admin/tenant-login', async (req, res) => {
     ];
 
     if (superAdminEmails.includes(email)) {
+      // SEGURIDAD CRÍTICA: Validar obligatoriamente la contraseña del Super Administrador con Supabase
+      if (!supabase) {
+        return res.status(500).json({ error: 'Servicio de autenticación no disponible.' });
+      }
+
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+
+      if (authError || !authData?.user) {
+        return res.status(401).json({ error: 'Contraseña de Super Administrador incorrecta.' });
+      }
+
+      // Emitir token HMAC firmado de sesión administrativa
+      const adminToken = createAdminToken({
+        uid: authData.user.id,
+        email,
+        role: 'admin',
+        isSuperAdmin: true,
+        tenant_id: targetRoomSlug || 'global'
+      });
+
       return res.json({
         success: true,
+        token: adminToken,
         user: {
-          uid: `superadmin-${email}`,
+          uid: authData.user.id,
           email,
-          name: 'Super Administrador Global',
+          name: authData.user.user_metadata?.full_name || 'Super Administrador Global',
           role: 'admin',
           isSuperAdmin: true,
           tenant_id: targetRoomSlug || 'global'
@@ -890,21 +971,27 @@ app.post('/api/admin/tenant-login', async (req, res) => {
       }
     }
 
-    if (!targetTenant) {
+    if (!targetTenant || !targetTenant.admin_email) {
       return res.status(401).json({ 
         error: 'No se encontró ninguna sala de bingo asignada a este correo de administrador.' 
       });
     }
 
     // Comprobación estricta de aislamiento de administración por sala:
-    // Si el usuario intentó acceder a la sala X pero sus credenciales pertenecen a la sala Y:
     if (targetRoomSlug && targetRoomSlug !== 'default' && targetTenant.slug !== targetRoomSlug) {
       return res.status(403).json({ 
-        error: `Tus credenciales de administrador pertenecen a la sala "${targetTenant.name || targetTenant.slug}". No tienes autorización para administrar la sala "${targetRoomSlug}".` 
+        error: `Acceso denegado: Tus credenciales de administrador pertenecen a la sala "${targetTenant.name || targetTenant.slug}". No tienes autorización para administrar la sala "${targetRoomSlug}".` 
       });
     }
 
-    // Validar contraseña
+    // Verificar que el correo coincida con el registrado para esa sala
+    if (targetTenant.admin_email.toLowerCase() !== email) {
+      return res.status(401).json({ 
+        error: 'El correo no corresponde al administrador registrado en esta sala.' 
+      });
+    }
+
+    // Validar contraseña PBKDF2
     if (!targetTenant.admin_password) {
       return res.status(401).json({ error: 'Esta sala aún no tiene credenciales de administrador configuradas.' });
     }
@@ -914,9 +1001,18 @@ app.post('/api/admin/tenant-login', async (req, res) => {
       return res.status(401).json({ error: 'Contraseña de administrador incorrecta para esta sala.' });
     }
 
-    // Devolver sesión aislada de administrador de sala
+    // Emitir token HMAC firmado de sesión de administrador de sala
+    const adminToken = createAdminToken({
+      uid: `admin-${targetTenant.slug}`,
+      email: targetTenant.admin_email,
+      role: 'admin',
+      isSuperAdmin: false,
+      tenant_id: targetTenant.slug
+    });
+
     res.json({
       success: true,
+      token: adminToken,
       user: {
         uid: `admin-${targetTenant.slug}`,
         email: targetTenant.admin_email,
@@ -1026,25 +1122,48 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
     if (!token) {
       return res.status(401).json({ error: 'No autorizado: Token no proporcionado.' });
     }
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    if (error || !user) {
-      return res.status(401).json({ error: 'No autorizado: Sesión inválida o expirada.' });
+
+    // 1. Validar si es un token HMAC firmado de administrador
+    const adminSession = verifyAdminToken(token);
+    if (adminSession) {
+      const targetTenantId = (req as any).tenantId;
+      // Si es un admin de sala (no superadmin), verificar que no intente gestionar otra sala
+      if (!adminSession.isSuperAdmin && targetTenantId && targetTenantId !== 'default' && targetTenantId !== 'global') {
+        if (adminSession.tenant_id.toLowerCase() !== targetTenantId.toLowerCase()) {
+          return res.status(403).json({ 
+            error: `Acceso denegado: Tus permisos de administrador pertenecen a la sala "${adminSession.tenant_id}". No puedes gestionar "${targetTenantId}".` 
+          });
+        }
+      }
+      (req as any).adminUser = adminSession;
+      return next();
     }
 
-    const role = user.user_metadata?.role;
-    const email = user.email?.toLowerCase();
-    const authorizedEmails = (process.env.ADMIN_EMAILS || 'comamosexpress@gmail.com,stcganas@gmail.com')
-      .toLowerCase()
-      .split(',')
-      .map(e => e.trim());
+    // 2. Si no es un token HMAC, validar si es una sesión de Supabase Auth
+    if (supabase) {
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (!error && user) {
+        const email = user.email?.toLowerCase();
+        const authorizedEmails = (process.env.ADMIN_EMAILS || 'comamosexpress@gmail.com,stcganas@gmail.com')
+          .toLowerCase()
+          .split(',')
+          .map(e => e.trim());
 
-    const isAdmin = role === 'admin' || (email && authorizedEmails.includes(email));
-    if (!isAdmin) {
-      return res.status(403).json({ error: 'Acceso denegado: Se requieren permisos de administrador.' });
+        // SEGURIDAD CRÍTICA: Solo correos autorizados en la lista pueden actuar como Super Admin
+        if (email && authorizedEmails.includes(email)) {
+          (req as any).adminUser = {
+            uid: user.id,
+            email,
+            role: 'admin',
+            isSuperAdmin: true,
+            tenant_id: (req as any).tenantId || 'global'
+          };
+          return next();
+        }
+      }
     }
 
-    (req as any).adminUser = user;
-    next();
+    return res.status(403).json({ error: 'Acceso denegado: Credenciales de administrador no autorizadas.' });
   } catch (err: any) {
     console.error('[requireAdmin] Error validando credenciales:', err);
     return res.status(500).json({ error: 'Error interno al validar la sesión de administrador.' });

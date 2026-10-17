@@ -139,13 +139,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       initialLoadComplete = true;
 
       if (session?.user) {
-        // Set basic user info immediately to stop loading
+        const userEmail = (session.user.email || '').toLowerCase();
+        const isSuperAdmin = userEmail === 'comamosexpress@gmail.com' || userEmail === 'stcganas@gmail.com';
+        const isSeller = session.user.user_metadata?.role === 'seller';
+        
+        // REFUERZO DE SEGURIDAD ESTRICTA: Nadie recibe rol 'admin' por defecto.
+        // Solo los correos autorizados de Super Admin tienen rol 'admin'.
+        const resolvedRole: 'admin' | 'seller' | 'player' = isSuperAdmin ? 'admin' : (isSeller ? 'seller' : 'player');
+
         const basicUser: User = {
           uid: session.user.id,
-          name: session.user.user_metadata.full_name || (session.user.user_metadata.role === 'seller' ? 'Revendedor' : 'Admin'),
-          role: session.user.user_metadata.role === 'seller' ? 'seller' : 'admin',
+          name: session.user.user_metadata?.full_name || (isSuperAdmin ? 'Super Administrador' : (isSeller ? 'Revendedor' : 'Jugador')),
+          role: resolvedRole,
           email: session.user.email,
-          isSuperAdmin: session.user.email === 'comamosexpress@gmail.com' || session.user.email === 'stcganas@gmail.com'
+          isSuperAdmin: isSuperAdmin
         };
         
         // Clear any previous dismissed state on active login so banner shows for authenticated users
@@ -284,14 +291,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const loginAdmin = async (email: string, password: string) => {
     console.log('loginAdmin start');
     if (!supabase) return { success: false, error: 'Configuración de Supabase no encontrada' };
+
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const authorizedSuperAdmins = ['comamosexpress@gmail.com', 'stcganas@gmail.com'];
+
+    // SEGURIDAD CRÍTICA: Impedir que cualquier usuario no superadmin intente login global
+    if (!authorizedSuperAdmins.includes(cleanEmail)) {
+      return { 
+        success: false, 
+        error: 'Acceso denegado: Este correo no tiene autorización de Super Administrador. Si eres organizador de una sala, inicia sesión desde el panel de tu sala.' 
+      };
+    }
+
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
         password,
       });
 
       console.log('loginAdmin result:', error);
-      if (error) return { success: false, error: error.message };
+      if (error || !data.user) {
+        return { success: false, error: error?.message || 'Contraseña de Super Administrador incorrecta.' };
+      }
+
+      // Validar doblemente que el usuario autenticado sea superadmin
+      if (!authorizedSuperAdmins.includes((data.user.email || '').toLowerCase())) {
+        await supabase.auth.signOut().catch(() => {});
+        return { success: false, error: 'Acceso denegado: Usuario no autorizado como Super Administrador.' };
+      }
       
       const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
       if (soundSettings.login) playLoginSound();
@@ -299,22 +326,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return { success: true };
     } catch (err: any) {
       console.error('loginAdmin error:', err);
-      return { success: false, error: err.message || 'Error inesperado' };
+      return { success: false, error: err.message || 'Error inesperado al iniciar sesión.' };
     }
   };
 
   const registerAdmin = async (email: string, password: string) => {
-    if (!supabase) return { success: false, error: 'Configuración de Supabase no encontrada' };
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: window.location.origin + '/admin/login'
-      }
-    });
-
-    if (error) return { success: false, error: error.message };
-    return { success: true };
+    // El registro público de administradores generales queda estrictamente deshabilitado
+    return { 
+      success: false, 
+      error: 'El registro público de administradores está deshabilitado por seguridad. Para gestionar sorteos, crea tu propia sala de bingo en la página principal.' 
+    };
   };
 
   const loginPlayer = async (rawPhone: string, password?: string, name?: string, accessCode?: string, roomSlug?: string) => {
@@ -396,6 +417,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setUser(adminUser);
       localStorage.setItem('bingo_admin_user', JSON.stringify(adminUser));
+      if (data.token) {
+        localStorage.setItem('bingo_admin_token', data.token);
+      }
       
       const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
       if (soundSettings.login) playLoginSound();
@@ -418,6 +442,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       localStorage.removeItem('bingo_player');
       localStorage.removeItem('bingo_admin_user');
+      localStorage.removeItem('bingo_admin_token');
       setUser(null);
       
       try {

@@ -90,10 +90,18 @@ CREATE INDEX IF NOT EXISTS idx_game_tenant_status ON public.game(tenant_id, stat
 CREATE INDEX IF NOT EXISTS idx_players_tenant_phone ON public.players(tenant_id, phone);
 CREATE INDEX IF NOT EXISTS idx_wallets_tenant_phone ON public.wallets(tenant_id, phone);
 
--- 5. HABILITAR RLS PARA TENANTS
+-- 5. HABILITAR RLS PARA TENANTS Y BLINDAR COLUMNAS SENSIBLES
 ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Public read tenants" ON public.tenants;
-CREATE POLICY "Public read tenants" ON public.tenants FOR SELECT USING (true);
+DROP POLICY IF EXISTS "Public read tenants safe" ON public.tenants;
+
+-- REGLA DE MÁXIMA SEGURIDAD:
+-- Revocar lectura y modificación de admin_password y admin_email a usuarios anónimos y autenticados públicos
+REVOKE ALL ON public.tenants FROM anon, authenticated;
+-- Otorgar SELECT únicamente sobre columnas públicas no sensibles para la interfaz de los jugadores
+GRANT SELECT (id, name, slug, subdomain, custom_domain, logo_url, banner_url, primary_color, plan, is_active, access_code, max_cards_per_game, contact_phone, created_at) ON public.tenants TO anon, authenticated;
+
+CREATE POLICY "Public read tenants safe" ON public.tenants FOR SELECT USING (true);
 
 -- 6. AISLAMIENTO ESTRICTO DE USUARIOS Y BILLETERAS POR SALA (TENANT)
 -- Asegura que un jugador con el mismo teléfono pueda pertenecer a diferentes salas
@@ -136,3 +144,12 @@ BEGIN
         ALTER TABLE public.wallets ADD CONSTRAINT wallets_tenant_phone_unique UNIQUE (tenant_id, phone);
     END IF;
 END $$;
+
+-- 7. REFUERZO DE SEGURIDAD EN BASE DE DATOS CONTRA VULNERABILIDADES
+-- Bloquear cualquier INSERT, UPDATE o DELETE directo desde clientes anónimos hacia tablas críticas
+-- El backend (service_role) mantiene control absoluto sobre estas operaciones seguras
+REVOKE INSERT, UPDATE, DELETE ON public.game FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON public.cards FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON public.wallets FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON public.wallet_transactions FROM anon, authenticated;
+REVOKE INSERT, UPDATE, DELETE ON public.settings FROM anon, authenticated;

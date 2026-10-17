@@ -3,12 +3,17 @@ import { supabase } from '../lib/supabase';
 export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, retries = 3): Promise<Response> => {
   const headers = new Headers(init?.headers);
 
-  // Auto-adjuntar token de autenticación de sesión de Supabase si existe
+  // Auto-adjuntar token de administrador (HMAC token) o token de sesión de Supabase
   if (!headers.has('Authorization')) {
     try {
-      const { data } = await supabase.auth.getSession();
-      if (data?.session?.access_token) {
-        headers.set('Authorization', `Bearer ${data.session.access_token}`);
+      const adminToken = typeof window !== 'undefined' ? localStorage.getItem('bingo_admin_token') : null;
+      if (adminToken) {
+        headers.set('Authorization', `Bearer ${adminToken}`);
+      } else {
+        const { data } = await supabase.auth.getSession();
+        if (data?.session?.access_token) {
+          headers.set('Authorization', `Bearer ${data.session.access_token}`);
+        }
       }
     } catch (e) {
       // Continuar sin token si falla la obtención de sesión
