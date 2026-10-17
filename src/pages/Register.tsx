@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link, useParams, useSearchParams } from 'react-router-dom';
-import { Upload, Home as HomeIcon, Loader2, Wallet, CreditCard, Gift, Info, Clock, QrCode, Copy, Check, MessageCircle, Mail, Lock, ShieldCheck, Eye, EyeOff } from 'lucide-react';
+import { Upload, Home as HomeIcon, Loader2, Wallet, CreditCard, Gift, Info, Clock, QrCode, Copy, Check, MessageCircle, Mail, Lock, ShieldCheck, Eye, EyeOff, Key } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../AuthContext';
 import { useTenant } from '../TenantContext';
@@ -46,7 +46,18 @@ export default function Register() {
     player_ref: playerRef,
     card_count: isFreeGame ? 2 : 6,
     password: '',
+    room_code: tenant.access_code || 'LITE777',
   });
+
+  // Pre-cargar y sincronizar el código de la sala automáticamente
+  useEffect(() => {
+    if (tenant?.access_code) {
+      setFormData(prev => ({
+        ...prev,
+        room_code: tenant.access_code || 'LITE777'
+      }));
+    }
+  }, [tenant?.access_code]);
 
   useEffect(() => {
     if (user) {
@@ -217,6 +228,7 @@ export default function Register() {
     data.append('city', formData.city);
     if (formData.email) data.append('email', formData.email.trim());
     data.append('tenant_id', tenant.id || tenantSlug || 'default');
+    data.append('access_code', formData.room_code || tenant.access_code || 'LITE777');
     if (formData.seller_code) data.append('seller_code', formData.seller_code);
     if (formData.player_ref) data.append('player_ref', formData.player_ref);
     if (formData.password) data.append('password', formData.password);
@@ -266,18 +278,18 @@ export default function Register() {
       console.log('Resultado del registro:', result);
 
       if (result.success) {
-        // Log in the player automatically
-        await loginPlayer(normalizedPhone, formData.password, formData.name);
-        
-        const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
-        if (soundSettings.buyCard) playBuyCardSound();
-
         // Construir el Resumen de Cuenta completo para WhatsApp
         const roomName = tenant.name || 'Bingo Lite Oficial';
-        const roomAccessCode = tenant.access_code || 'LITE777';
+        const roomAccessCode = formData.room_code || tenant.access_code || 'LITE777';
         const origin = typeof window !== 'undefined' ? window.location.origin : 'https://bingolite.click';
         const currentSlug = tenantSlug || tenant.slug || 'bingo-lite';
         const roomDirectUrl = `${origin}/sala/${currentSlug}`;
+
+        // Iniciar sesión del jugador automáticamente con el código de sala pre-cargado
+        await loginPlayer(normalizedPhone, formData.password, formData.name, roomAccessCode, currentSlug);
+        
+        const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
+        if (soundSettings.buyCard) playBuyCardSound();
 
         const accountSummary = 
 `🎉 *¡BIENVENIDO A ${roomName.toUpperCase()}!* 🎱
@@ -502,6 +514,29 @@ ${roomDirectUrl}
             </div>
             <p className="text-[10px] text-slate-500 mt-1 font-semibold italic">
               Guárdala bien: la usarás para ingresar a la sala y consultar tus cartones en vivo.
+            </p>
+          </div>
+
+          {/* Campo de Código Seguro de la Sala (Pre-cargado automáticamente) */}
+          <div className="bg-emerald-50/70 p-4 rounded-2xl border-2 border-emerald-200 shadow-xs">
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-sm font-black text-emerald-950 flex items-center gap-1.5">
+                <Key size={15} className="text-emerald-700" /> Código de Seguridad de la Sala *
+              </label>
+              <span className="text-[10px] font-black uppercase text-emerald-800 bg-emerald-200/80 px-2.5 py-0.5 rounded-full border border-emerald-300 flex items-center gap-1">
+                <ShieldCheck size={12} className="text-emerald-700" /> Pre-cargado
+              </span>
+            </div>
+            <div className="relative">
+              <input 
+                type="text" 
+                readOnly
+                className="w-full p-3 bg-white border-2 border-emerald-300 rounded-xl font-mono font-black text-emerald-800 text-lg tracking-widest outline-none shadow-inner cursor-default"
+                value={formData.room_code || tenant.access_code || 'LITE777'}
+              />
+            </div>
+            <p className="text-[11px] text-emerald-800 font-bold mt-1.5 leading-snug">
+              🏢 Código oficial de <strong>{tenant.name || 'la sala'}</strong> pre-establecido para vincular tus cartones y permitir tu ingreso automático.
             </p>
           </div>
 

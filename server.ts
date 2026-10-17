@@ -2914,11 +2914,6 @@ app.post('/api/players/login', async (req, res) => {
 
     if (!phone) return res.status(400).json({ error: 'Teléfono requerido' });
     if (!password) return res.status(400).json({ error: 'Contraseña requerida' });
-    if (!access_code || !access_code.trim()) {
-      return res.status(400).json({ error: 'El código de seguridad de la sala es obligatorio' });
-    }
-
-    const inputCode = access_code.trim().toUpperCase();
 
     // 1. Identificar la sala (tenant)
     let targetTenantId = (room_slug || tenant_id || (req as any).tenantId || '').toLowerCase();
@@ -2926,7 +2921,17 @@ app.post('/api/players/login', async (req, res) => {
 
     if (targetTenantId && targetTenantId !== 'default') {
       tenantInfo = await getTenantInfo(targetTenantId);
-    } else {
+    }
+
+    const inputCode = (access_code && typeof access_code === 'string' && access_code.trim())
+      ? access_code.trim().toUpperCase()
+      : (tenantInfo?.access_code ? String(tenantInfo.access_code).trim().toUpperCase() : '');
+
+    if (!inputCode) {
+      return res.status(400).json({ error: 'El código de seguridad de la sala es obligatorio' });
+    }
+
+    if (!tenantInfo) {
       // Si no se proporcionó sala explícita (e.g. desde la página principal),
       // buscar qué sala tiene este access_code
       for (const [key, val] of tenantsCache.entries()) {
@@ -9945,7 +9950,25 @@ function getAppUrl(req?: any): string {
 // Helper to send notifications and save to DB
 async function sendPushNotification({ recipient, phone, title, message, url, tenantId }: { recipient: 'all' | 'single', phone?: string, title: string, message: string, url?: string, tenantId?: string }) {
   const scopedTenant = (tenantId || 'default').toLowerCase();
-  console.log(`[Notification] Initiating send: recipient=${recipient}, phone=${phone}, title=${title}, tenant=${scopedTenant}`);
+  let tenantInfo: any = null;
+  try {
+    tenantInfo = await getTenantInfo(scopedTenant);
+  } catch (e) { }
+
+  const roomName = tenantInfo?.name || (scopedTenant !== 'default' && scopedTenant !== 'global' ? scopedTenant.toUpperCase() : 'Bingo Lite');
+
+  // Firma o nombre de la sala para que el usuario identifique claramente el origen
+  let finalTitle = (title || '').trim();
+  if (roomName && !finalTitle.toLowerCase().includes(roomName.toLowerCase())) {
+    finalTitle = `[${roomName}] ${finalTitle}`;
+  }
+
+  let finalMessage = (message || '').trim();
+  if (roomName && !finalMessage.toLowerCase().includes(roomName.toLowerCase())) {
+    finalMessage = `${finalMessage}\n— ${roomName}`;
+  }
+
+  console.log(`[Notification] Initiating send: recipient=${recipient}, phone=${phone}, title=${finalTitle}, tenant=${scopedTenant} (${roomName})`);
   try {
     const globalSettings = await getGameSettings('global') || {};
     if (globalSettings.maintenance_mode && recipient === 'all') {
@@ -10003,14 +10026,14 @@ async function sendPushNotification({ recipient, phone, title, message, url, ten
       }
     }
 
-    // Save to DB for the in-app Bell — ALWAYS include tenant_id for room isolation
+    // Save to DB for the in-app Bell — ALWAYS include tenant_id for room isolation and room signature
     if (playersToNotifyInApp.length > 0 && supabase) {
       const uniqueInApp = Array.from(new Set(playersToNotifyInApp));
       console.log(`[Notification] Saving to DB for ${uniqueInApp.length} user keys (tenant: ${scopedTenant})`);
       const notificationsToInsert = uniqueInApp.map(id => ({
         user_id: id,
-        title,
-        message,
+        title: finalTitle,
+        message: finalMessage,
         read: false,
         tenant_id: scopedTenant   // Strict room ownership
       }));
@@ -10038,13 +10061,15 @@ async function sendPushNotification({ recipient, phone, title, message, url, ten
       return { success: true, delivered_in_app: true, push_status: 'not_configured', warning: 'Credenciales de OneSignal no configuradas en el servidor.' };
     }
 
-    const appUrl = url || getAppUrl();
+    const roomSlug = tenantInfo?.slug || (scopedTenant !== 'default' && scopedTenant !== 'global' ? scopedTenant : '');
+    const roomPath = roomSlug ? `/sala/${roomSlug}` : '';
+    const appUrl = url || `${getAppUrl()}${roomPath}`;
 
     // Direct fetch for OneSignal with full Mobile & Desktop Web Push compatibility
     const notificationPayload: any = {
       app_id: onesignalAppId,
-      headings: { "en": title, "es": title },
-      contents: { "en": message, "es": message },
+      headings: { "en": finalTitle, "es": finalTitle },
+      contents: { "en": finalMessage, "es": finalMessage },
       web_url: appUrl,
       priority: 10,
       ttl: 259200,

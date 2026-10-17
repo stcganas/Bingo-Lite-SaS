@@ -20,7 +20,7 @@ export default function Home() {
   const [freeGames, setFreeGames] = useState<any[]>([]);
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [roomCode, setRoomCode] = useState('');
+  const [roomCode, setRoomCode] = useState(tenant?.access_code || '');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<any>(null);
@@ -33,6 +33,13 @@ export default function Home() {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, []);
+
+  // Pre-cargar automáticamente el código de acceso de la sala activa
+  useEffect(() => {
+    if (tenant?.access_code) {
+      setRoomCode(tenant.access_code);
+    }
+  }, [tenant?.access_code]);
 
   const checkIsFree = (g: any) => {
     if (!g) return false;

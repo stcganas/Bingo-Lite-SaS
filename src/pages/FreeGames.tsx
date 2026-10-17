@@ -4,6 +4,7 @@ import { Trophy, Calendar, ArrowLeft, Gift, Loader2, Check } from 'lucide-react'
 import { formatCurrency } from '../utils/format';
 import { apiFetch } from '../utils/api';
 import { useAuth } from '../AuthContext';
+import { useTenant } from '../TenantContext';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
@@ -11,6 +12,7 @@ import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
 export default function FreeGames() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { tenantPrefix } = useTenant();
   const [currentView, setCurrentView] = useState<'games' | 'leaderboard'>('games');
   const [freeGames, setFreeGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,7 +98,7 @@ export default function FreeGames() {
         if (!res.ok && (data.alreadyClaimed || data.error?.includes('Ya has reclamado'))) {
           setClaimedGameIds(prev => new Set([...prev, gameId]));
           toast('Ya adquiriste tus cartones gratis para este juego. ¡Mucha suerte!', { icon: 'ℹ️' });
-          navigate(`/player?gameId=${gameId}`);
+          navigate(`${tenantPrefix || ''}/player?gameId=${gameId}`);
           return;
         }
       } catch (err) {
@@ -105,13 +107,13 @@ export default function FreeGames() {
         setClaimingGameId(null);
       }
     }
-    navigate(`/register?gameId=${gameId}&free=true`);
+    navigate(`${tenantPrefix || ''}/register?gameId=${gameId}&free=true`);
   };
 
   return (
     <div className="min-h-screen bg-slate-50 p-6 pb-24">
       <button 
-        onClick={() => navigate('/')}
+        onClick={() => navigate(tenantPrefix || '/')}
         className="flex items-center gap-2 text-slate-600 font-bold mb-6 hover:text-slate-900 transition"
       >
         <ArrowLeft size={20} /> Volver al Inicio
