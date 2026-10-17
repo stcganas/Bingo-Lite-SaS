@@ -3,12 +3,15 @@ import { supabase } from '../lib/supabase';
 export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, retries = 3): Promise<Response> => {
   const headers = new Headers(init?.headers);
 
-  // Auto-adjuntar token de administrador (HMAC token) o token de sesión de Supabase
+  // Auto-adjuntar token de administrador (HMAC token), token de jugador o token de sesión de Supabase
   if (!headers.has('Authorization')) {
     try {
       const adminToken = typeof window !== 'undefined' ? localStorage.getItem('bingo_admin_token') : null;
+      const playerToken = typeof window !== 'undefined' ? localStorage.getItem('bingo_player_token') : null;
       if (adminToken) {
         headers.set('Authorization', `Bearer ${adminToken}`);
+      } else if (playerToken) {
+        headers.set('Authorization', `Bearer ${playerToken}`);
       } else {
         const { data } = await supabase.auth.getSession();
         if (data?.session?.access_token) {

@@ -374,6 +374,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(playerUser);
       localStorage.setItem('bingo_player', JSON.stringify(playerUser));
       localStorage.setItem(`bingo_player_${resolvedTenant.toLowerCase()}`, JSON.stringify(playerUser));
+      if (data.token) {
+        localStorage.setItem('bingo_player_token', data.token);
+      }
       
       const doOneSignalLogin = async () => {
         try {
@@ -441,6 +444,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Logout error:', e);
     } finally {
       localStorage.removeItem('bingo_player');
+      localStorage.removeItem('bingo_player_token');
       localStorage.removeItem('bingo_admin_user');
       localStorage.removeItem('bingo_admin_token');
       setUser(null);

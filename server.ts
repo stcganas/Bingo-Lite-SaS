@@ -93,7 +93,7 @@ function normalizePhone(phone: string): string {
   return digits;
 }
 
-// Criptografía segura de contraseñas de jugadores con PBKDF2 (NIST SP 800-132)
+// Criptografía segura de contraseñas con PBKDF2 (NIST SP 800-132)
 function hashPassword(password: string): string {
   if (!password) return '';
   const salt = crypto.randomBytes(16).toString('hex');
@@ -103,18 +103,29 @@ function hashPassword(password: string): string {
 
 function verifyPassword(password: string, storedHashOrPlain: string): boolean {
   if (!password || !storedHashOrPlain) return false;
-  // Compatibilidad hacia atrás: si la contraseña en BD es texto plano previo a la migración
-  if (!storedHashOrPlain.startsWith('pbkdf2$')) {
-    return password === storedHashOrPlain;
-  }
-  const parts = storedHashOrPlain.split('$');
-  if (parts.length !== 4) return false;
-  const iterations = parseInt(parts[1], 10);
-  const salt = parts[2];
-  const expectedHash = parts[3];
   try {
-    const calculatedHash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
-    return crypto.timingSafeEqual(Buffer.from(calculatedHash, 'hex'), Buffer.from(expectedHash, 'hex'));
+    // Formato PBKDF2 recomendado (pbkdf2$iterations$salt$hash)
+    if (storedHashOrPlain.startsWith('pbkdf2$')) {
+      const parts = storedHashOrPlain.split('$');
+      if (parts.length !== 4) return false;
+      const iterations = parseInt(parts[1], 10);
+      const salt = parts[2];
+      const expectedHash = parts[3];
+      const calculatedHash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
+      return crypto.timingSafeEqual(Buffer.from(calculatedHash, 'hex'), Buffer.from(expectedHash, 'hex'));
+    }
+
+    // Formato legado salt:hash (10000 iteraciones)
+    if (storedHashOrPlain.includes(':')) {
+      const [salt, originalHash] = storedHashOrPlain.split(':');
+      if (salt && originalHash && originalHash.length === 128) {
+        const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+        return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
+      }
+    }
+
+    // Compatibilidad hacia atrás: si la contraseña en BD es texto plano previo a la migración
+    return password === storedHashOrPlain;
   } catch (e) {
     return false;
   }
@@ -568,26 +579,10 @@ if (ablyKey) {
 const ably = ablyInstance;
 
 // ============================================================================
-// CRIPTOGRAFÍA Y TOKENS SEGUROS DE ADMINISTRACIÓN
+// CRIPTOGRAFÍA Y TOKENS SEGUROS (ADMINISTRACIÓN Y JUGADORES)
 // ============================================================================
-const ADMIN_HMAC_SECRET = process.env.ADMIN_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || 'bingo-ultra-secure-hmac-salt-2026';
-
-function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return `${salt}:${hash}`;
-}
-
-function verifyPassword(password: string, storedHash: string): boolean {
-  try {
-    if (!storedHash || !storedHash.includes(':')) return false;
-    const [salt, originalHash] = storedHash.split(':');
-    const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-    return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(originalHash, 'hex'));
-  } catch (e) {
-    return false;
-  }
-}
+const ADMIN_HMAC_SECRET = process.env.ADMIN_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || crypto.randomBytes(32).toString('hex');
+const PLAYER_HMAC_SECRET = process.env.PLAYER_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || ADMIN_HMAC_SECRET;
 
 interface AdminTokenPayload {
   uid: string;
@@ -615,6 +610,42 @@ function verifyAdminToken(token: string): AdminTokenPayload | null {
       return null;
     }
     const data: AdminTokenPayload = JSON.parse(Buffer.from(encodedData, 'base64url').toString('utf8'));
+    if (data.exp && data.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+interface PlayerTokenPayload {
+  uid: string | number;
+  phone: string;
+  role: 'player';
+  tenant_id: string;
+  exp: number;
+}
+
+function createPlayerToken(payload: Omit<PlayerTokenPayload, 'exp'>): string {
+  const exp = Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60); // 14 días
+  const data: PlayerTokenPayload = { ...payload, exp };
+  const encodedData = Buffer.from(JSON.stringify(data)).toString('base64url');
+  const signature = crypto.createHmac('sha256', PLAYER_HMAC_SECRET).update(encodedData).digest('base64url');
+  return `plyr.${encodedData}.${signature}`;
+}
+
+function verifyPlayerToken(token: string): PlayerTokenPayload | null {
+  try {
+    if (!token || !token.startsWith('plyr.')) return null;
+    const parts = token.slice(5).split('.');
+    if (parts.length !== 2) return null;
+    const [encodedData, signature] = parts;
+    const expectedSignature = crypto.createHmac('sha256', PLAYER_HMAC_SECRET).update(encodedData).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+      return null;
+    }
+    const data: PlayerTokenPayload = JSON.parse(Buffer.from(encodedData, 'base64url').toString('utf8'));
     if (data.exp && data.exp < Math.floor(Date.now() / 1000)) {
       return null;
     }
@@ -832,10 +863,27 @@ app.post('/api/tenants', async (req, res) => {
       contact_phone: contact_phone ? contact_phone.trim() : null
     };
 
+    // PREVENCIÓN ESTRICTA DE SECUESTRO DE SALAS (ROOM TAKEOVER)
+    let existingTenant = null;
+    try {
+      const { data } = await supabase.from('tenants').select('id, slug, admin_email').eq('slug', slug).maybeSingle();
+      if (data) existingTenant = data;
+    } catch (e) {}
+
+    if (!existingTenant && tenantsCache.has(slug)) {
+      existingTenant = tenantsCache.get(slug)?.tenant;
+    }
+
+    if (existingTenant) {
+      return res.status(409).json({ 
+        error: `La sala con identificador "${slug}" ya existe en el sistema. Por favor, elige un nombre diferente.` 
+      });
+    }
+
     let tenantRecord = tenantPayload;
     const { data: createdTenant, error: insertError } = await supabase
       .from('tenants')
-      .upsert(tenantPayload, { onConflict: 'slug' })
+      .insert(tenantPayload)
       .select()
       .single();
 
@@ -1111,30 +1159,42 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
+// Helper para extraer token Bearer del encabezado Authorization
+function extractBearerToken(req: express.Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return null;
+  const token = authHeader.split(' ')[1];
+  return (token && token.trim()) ? token.trim() : null;
+}
+
 // Middleware de seguridad para autenticar y autorizar administradores
 async function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'No autorizado: Token de sesión de administrador requerido.' });
-    }
-    const token = authHeader.split(' ')[1];
+    const token = extractBearerToken(req);
     if (!token) {
-      return res.status(401).json({ error: 'No autorizado: Token no proporcionado.' });
+      return res.status(401).json({ error: 'No autorizado: Token de sesión de administrador requerido.' });
     }
 
     // 1. Validar si es un token HMAC firmado de administrador
     const adminSession = verifyAdminToken(token);
     if (adminSession) {
       const targetTenantId = (req as any).tenantId;
-      // Si es un admin de sala (no superadmin), verificar que no intente gestionar otra sala
-      if (!adminSession.isSuperAdmin && targetTenantId && targetTenantId !== 'default' && targetTenantId !== 'global') {
-        if (adminSession.tenant_id.toLowerCase() !== targetTenantId.toLowerCase()) {
+
+      // Si es un admin de sala (no superadmin), aislar estrictamente a su sala asignada
+      if (!adminSession.isSuperAdmin) {
+        const adminTenant = (adminSession.tenant_id || '').toLowerCase();
+        if (targetTenantId && targetTenantId.toLowerCase() !== adminTenant && targetTenantId !== 'default') {
           return res.status(403).json({ 
-            error: `Acceso denegado: Tus permisos de administrador pertenecen a la sala "${adminSession.tenant_id}". No puedes gestionar "${targetTenantId}".` 
+            error: `Acceso denegado: Tus permisos de administrador pertenecen exclusivamente a la sala "${adminSession.tenant_id}". No puedes gestionar "${targetTenantId}".` 
           });
         }
+        // Sobrescribir tenantId con el tenant verificado del admin para garantizar aislamiento
+        (req as any).tenantId = adminTenant;
+        (req as any).isSuperAdmin = false;
+      } else {
+        (req as any).isSuperAdmin = true;
       }
+
       (req as any).adminUser = adminSession;
       return next();
     }
@@ -1149,7 +1209,7 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
           .split(',')
           .map(e => e.trim());
 
-        // SEGURIDAD CRÍTICA: Solo correos autorizados en la lista pueden actuar como Super Admin
+        // SEGURIDAD CRÍTICA: Solo correos explícitamente autorizados pueden actuar como Super Admin
         if (email && authorizedEmails.includes(email)) {
           (req as any).adminUser = {
             uid: user.id,
@@ -1158,6 +1218,7 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
             isSuperAdmin: true,
             tenant_id: (req as any).tenantId || 'global'
           };
+          (req as any).isSuperAdmin = true;
           return next();
         }
       }
@@ -1168,6 +1229,66 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
     console.error('[requireAdmin] Error validando credenciales:', err);
     return res.status(500).json({ error: 'Error interno al validar la sesión de administrador.' });
   }
+}
+
+// Middleware de seguridad exclusivo para Super Administradores Globales
+async function requireSuperAdmin(req: express.Request, res: express.Response, next: express.NextFunction) {
+  return requireAdmin(req, res, () => {
+    const adminUser = (req as any).adminUser;
+    if (!adminUser || !adminUser.isSuperAdmin) {
+      return res.status(403).json({ 
+        error: 'Acceso denegado: Esta operación sensible requiere permisos exclusivos de Super Administrador Global.' 
+      });
+    }
+    next();
+  });
+}
+
+// Helper para obtener el usuario autenticado (jugador o administrador)
+async function getAuthenticatedUser(req: express.Request): Promise<{ role: 'admin' | 'player'; isSuperAdmin?: boolean; tenant_id?: string; phone?: string; uid?: string | number } | null> {
+  const token = extractBearerToken(req);
+  if (!token) return null;
+
+  // 1. Probar token de administrador
+  const adminSession = verifyAdminToken(token);
+  if (adminSession) {
+    return {
+      role: 'admin',
+      isSuperAdmin: adminSession.isSuperAdmin,
+      tenant_id: adminSession.tenant_id,
+      uid: adminSession.uid
+    };
+  }
+
+  // 2. Probar token de jugador
+  const playerSession = verifyPlayerToken(token);
+  if (playerSession) {
+    return {
+      role: 'player',
+      phone: playerSession.phone,
+      tenant_id: playerSession.tenant_id,
+      uid: playerSession.uid
+    };
+  }
+
+  // 3. Probar sesión de Supabase Auth
+  if (supabase) {
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser(token);
+      if (!error && user) {
+        const email = user.email?.toLowerCase();
+        const authorizedEmails = (process.env.ADMIN_EMAILS || 'comamosexpress@gmail.com,stcganas@gmail.com')
+          .toLowerCase()
+          .split(',')
+          .map(e => e.trim());
+        if (email && authorizedEmails.includes(email)) {
+          return { role: 'admin', isSuperAdmin: true, tenant_id: 'global', uid: user.id };
+        }
+      }
+    } catch {}
+  }
+
+  return null;
 }
 
 // Proteger universalmente todas las rutas administrativas
@@ -1216,6 +1337,11 @@ app.get('/api/notifications/:id', async (req, res) => {
 app.post('/api/notifications/:notification_id/read', async (req, res) => {
   try {
     const { notification_id } = req.params;
+    // Require authentication to prevent IDOR on notification read
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ error: 'Autenticación requerida.' });
+    }
     const { error } = await supabase.from('notifications').update({ read: true }).eq('id', notification_id);
 
     res.json({ success: true });
@@ -1228,6 +1354,11 @@ app.post('/api/notifications/:notification_id/read', async (req, res) => {
 app.post('/api/notifications/user/:id/read-all', async (req, res) => {
   try {
     const { id } = req.params;
+    // Require authentication to prevent IDOR on bulk notification read
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ error: 'Autenticación requerida.' });
+    }
     const decodedId = decodeURIComponent(id);
     const { error } = await supabase.from('notifications').update({ read: true }).eq('user_id', decodedId);
 
@@ -1545,7 +1676,6 @@ app.get('/api/wallet', async (req, res) => {
     // Touch player presence
     touchPlayerPresence(phone);
 
-    const balance = await getWalletBalance(phone, tenantId);
     const activated = gameId ? await isWalletActivated(phone, parseInt(gameId as string)) : false;
 
     // Check if player already exists in this tenant and has a password
@@ -1556,7 +1686,20 @@ app.get('/api/wallet', async (req, res) => {
     const { data: player } = await playerQ.maybeSingle();
     const hasPassword = !!(player?.password && player.password.trim() !== '');
 
-    res.json({ balance, activated, hasPassword });
+    // Verificar si el solicitante está autenticado como el dueño o como administrador
+    const authUser = await getAuthenticatedUser(req);
+    let canViewBalance = false;
+    if (authUser) {
+      if (authUser.role === 'admin') {
+        canViewBalance = true;
+      } else if (authUser.role === 'player' && normalizePhone(authUser.phone || '') === phone) {
+        canViewBalance = true;
+      }
+    }
+
+    const balance = canViewBalance ? await getWalletBalance(phone, tenantId) : 0;
+
+    res.json({ balance, activated, hasPassword, authenticated: canViewBalance });
   } catch (err: any) {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -1567,6 +1710,23 @@ app.get('/api/wallet/history', async (req, res) => {
   if (!rawPhone || typeof rawPhone !== 'string') return res.status(400).json({ error: 'Favor proporcionar un número de teléfono válido' });
   const phone = normalizePhone(rawPhone);
   const tenantId = (qTenantId as string) || (req as any).tenantId || 'default';
+
+  // CONTROL DE ACCESO ESTRICTO: Solo el titular autenticado o un administrador autorizado pueden ver el historial
+  const authUser = await getAuthenticatedUser(req);
+  if (!authUser) {
+    return res.status(401).json({ error: 'No autorizado: Debes iniciar sesión para consultar el historial financiero.' });
+  }
+
+  if (authUser.role === 'player') {
+    if (normalizePhone(authUser.phone || '') !== phone) {
+      return res.status(403).json({ error: 'Acceso denegado: Solo puedes consultar tu propio historial de billetera.' });
+    }
+  } else if (authUser.role === 'admin' && !authUser.isSuperAdmin) {
+    if (authUser.tenant_id && authUser.tenant_id.toLowerCase() !== tenantId.toLowerCase()) {
+      return res.status(403).json({ error: 'Acceso denegado: No puedes consultar datos de jugadores de otra sala.' });
+    }
+  }
+
   try {
     console.log(`[API] Fetching history for ${phone} in tenant ${tenantId}`);
     let query = supabase.from('wallet_transactions').select('*').eq('player_phone', phone);
@@ -1595,21 +1755,45 @@ app.get('/api/wallet/history', async (req, res) => {
 });
 
 app.post('/api/admin/wallet/recharge', async (req, res) => {
-  const { phone: rawPhone, amount } = req.body;
+  const { phone: rawPhone, amount, tenantId: qTenantId } = req.body;
   const phone = normalizePhone(rawPhone);
-  if (!phone || amount === undefined) return res.status(400).json({ error: 'Phone and amount are required' });
-  await updateWalletBalance(phone, amount, `Recarga por el administrador por $${amount}`, 'recharge');
-  res.json({ success: true, newBalance: await getWalletBalance(phone) });
+  const numAmount = parseFloat(amount);
+  if (!phone || isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
+    return res.status(400).json({ error: 'Teléfono y un monto numérico positivo válido son requeridos.' });
+  }
+
+  const adminUser = (req as any).adminUser;
+  let targetTenant = adminUser?.isSuperAdmin ? (qTenantId || (req as any).tenantId || 'default') : (adminUser?.tenant_id || 'default');
+
+  // Verificar que el jugador existe en el tenant asignado
+  let playerQ = supabase.from('players').select('id, phone, tenant_id').eq('phone', phone);
+  if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+    playerQ = playerQ.eq('tenant_id', targetTenant);
+  }
+  const { data: player } = await playerQ.maybeSingle();
+  if (!player && adminUser && !adminUser.isSuperAdmin) {
+    return res.status(404).json({ error: `El jugador no se encuentra registrado en tu sala (${targetTenant}).` });
+  }
+
+  const actualTenant = player?.tenant_id || targetTenant;
+  await updateWalletBalance(phone, numAmount, `Recarga por el administrador por $${numAmount}`, 'recharge', actualTenant);
+  res.json({ success: true, newBalance: await getWalletBalance(phone, actualTenant) });
 });
 
 app.get('/api/admin/players/wallets', async (req, res) => {
   try {
-    const { data: players, error } = await supabase.from('players').select('name, phone');
+    const adminUser = (req as any).adminUser;
+    let query = supabase.from('players').select('name, phone, tenant_id');
+    if (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id) {
+      query = query.eq('tenant_id', adminUser.tenant_id);
+    }
+    const { data: players, error } = await query;
     if (error) throw error;
 
-    const wallets = await Promise.all(players.map(async (p: any) => ({
+    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id) ? adminUser.tenant_id : 'default';
+    const wallets = await Promise.all((players || []).map(async (p: any) => ({
       ...p,
-      balance: await getWalletBalance(p.phone)
+      balance: await getWalletBalance(p.phone, p.tenant_id || targetTenant)
     })));
     res.json(wallets);
   } catch (err: any) {
@@ -2456,6 +2640,34 @@ app.get('/api/sellers/:code/stats', async (req, res) => {
     if (sErr) return res.status(500).json({ error: sErr.message });
     if (!seller) return res.status(404).json({ error: 'Seller not found' });
 
+    // CONTROL DE AUTORIZACIÓN: Solo el propio vendedor autenticado o un administrador pueden ver sus estadísticas
+    const token = extractBearerToken(req);
+    let isAuthorized = false;
+
+    if (token) {
+      // 1. Verificar si es admin
+      const adminSession = verifyAdminToken(token);
+      if (adminSession) {
+        if (adminSession.isSuperAdmin || !seller.tenant_id || seller.tenant_id.toLowerCase() === adminSession.tenant_id.toLowerCase()) {
+          isAuthorized = true;
+        }
+      }
+
+      // 2. Verificar si es el vendedor autenticado vía Supabase Auth
+      if (!isAuthorized && supabase) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser(token);
+          if (user && user.id === seller.id) {
+            isAuthorized = true;
+          }
+        } catch {}
+      }
+    }
+
+    if (!isAuthorized) {
+      return res.status(403).json({ error: 'Acceso denegado: No tienes autorización para consultar las estadísticas de este vendedor.' });
+    }
+
     // Fetch players with this seller code
     const { data: players, error } = await supabase.from('players').select('*').eq('seller_code', code);
     if (error) return res.status(500).json({ error: error.message });
@@ -2677,18 +2889,31 @@ app.post('/api/players/login', async (req, res) => {
       // Auto-migración a PBKDF2 si estaba en texto plano
       if (!player.password.startsWith('pbkdf2$')) {
         const secureHash = hashPassword(password);
-        supabase.from('players').update({ password: secureHash }).eq('id', player.id).catch(() => {});
+        try {
+          await supabase.from('players').update({ password: secureHash }).eq('id', player.id);
+        } catch {}
       }
     } else {
       // Si el jugador no tenía contraseña asignada, establecer la ingresada
       const secureHash = hashPassword(password);
-      supabase.from('players').update({ password: secureHash }).eq('id', player.id).catch(() => {});
+      try {
+        await supabase.from('players').update({ password: secureHash }).eq('id', player.id);
+      } catch {}
     }
+
+    // Generar token firmado de sesión de jugador
+    const playerToken = createPlayerToken({
+      uid: player.id,
+      phone: player.phone,
+      role: 'player',
+      tenant_id: targetTenantId
+    });
 
     // Sanitización
     delete player.password;
     player.tenant_id = targetTenantId;
     player.room_slug = tenantInfo.slug || targetTenantId;
+    player.token = playerToken;
 
     res.json(player);
   } catch (err: any) {
@@ -2706,6 +2931,18 @@ app.post('/api/players/change-password', async (req, res) => {
     if (!phone) return res.status(400).json({ error: 'Teléfono requerido' });
     if (!newPassword || newPassword.length < 4) {
       return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 4 caracteres' });
+    }
+
+    // Require authentication: players must present their own token to change their password
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ error: 'Autenticación requerida para cambiar la contraseña.' });
+    }
+    if (authUser.role === 'player') {
+      const authPhone = normalizePhone(authUser.phone || '');
+      if (authPhone && phone && authPhone !== phone) {
+        return res.status(403).json({ error: 'Acceso denegado: Solo puedes cambiar tu propia contraseña.' });
+      }
     }
 
     const { data: player, error: fetchError } = await supabase
@@ -3591,21 +3828,25 @@ function formatGameNotificationDetails(game: any, settings: any = {}, startTimeI
 }
 
 // Create Game
-app.post('/api/games', async (req, res) => {
+app.post('/api/games', requireAdmin, async (req, res) => {
   console.log('--- CREATING NEW GAME ---');
   try {
+    const adminUser = (req as any).adminUser;
+    const targetTenant = adminUser.isSuperAdmin
+      ? (req.body.tenant_id || (req as any).tenantId || req.query.tenantId || 'default').toLowerCase()
+      : (adminUser.tenant_id || 'default').toLowerCase();
+
     const {
       name, start_time, prize, card_value, patterns, rematchPatterns, type, prize_type,
       active_lottery, active_draw, lottery_name, lottery_date, lottery_time, lottery_digits,
       lottery_prize_type, lottery_prize_value
     } = req.body;
-    const targetTenant = (req.body.tenant_id || (req as any).tenantId || req.query.tenantId || '').toLowerCase();
     console.log('Creation data:', { name, start_time, type, prize_type, active_lottery, active_draw, targetTenant });
 
     const newGame: any = {
       name, start_time, prize, card_value, status: 'scheduled', drawn_balls: []
     };
-    if (targetTenant && targetTenant !== 'global' && targetTenant !== 'default') {
+    if (targetTenant && targetTenant !== 'global') {
       newGame.tenant_id = targetTenant;
     }
 
@@ -3693,11 +3934,22 @@ app.post('/api/games', async (req, res) => {
   }
 });
 
-// Delete Game
-app.patch('/api/games/:id', async (req, res) => {
+// Update Game
+app.patch('/api/games/:id', requireAdmin, async (req, res) => {
   console.log('--- UPDATING GAME ---', req.params.id);
   try {
     const { id } = req.params;
+    const { data: existingGame } = await supabase.from('game').select('*').eq('id', id).maybeSingle();
+    if (!existingGame) return res.status(404).json({ error: 'Juego no encontrado' });
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const gTenant = (existingGame.tenant_id || 'default').toLowerCase();
+      if (gTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ error: 'Acceso denegado: Este juego pertenece a otra sala.' });
+      }
+    }
+
     const { name, start_time, prize, card_value } = req.body;
 
     // Only update fields allowed to be updated without breaking existing sold cards
@@ -3747,11 +3999,20 @@ app.patch('/api/games/:id', async (req, res) => {
 });
 
 // Delete Game - Protege permanentemente el historial de ganadores y participaciones
-app.delete('/api/games/:id', async (req, res) => {
+app.delete('/api/games/:id', requireAdmin, async (req, res) => {
   const gameId = Number(req.params.id);
   try {
     // 1. Obtener los datos del juego antes de borrarlo
     const { data: gameToDelete } = await supabase.from('game').select('*').eq('id', gameId).maybeSingle();
+    if (!gameToDelete) return res.status(404).json({ error: 'Juego no encontrado' });
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const gTenant = (gameToDelete.tenant_id || 'default').toLowerCase();
+      if (gTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ error: 'Acceso denegado: Este juego pertenece a otra sala.' });
+      }
+    }
     const gameSettings = await getGameSettings(gameId);
     const wasFree = isGameFree(gameToDelete, gameSettings);
 
@@ -3870,28 +4131,59 @@ async function doActivateGame(gameId: number) {
   } catch (e) { }
 }
 
-app.post('/api/games/:id/activate', async (req, res) => {
+app.post('/api/games/:id/activate', requireAdmin, async (req, res) => {
   try {
     const gameId = Number(req.params.id);
-    // End all currently active games
-    const { data: previousGames } = await supabase.from('game')
+    const { data: targetGame, error: targetErr } = await supabase.from('game').select('*').eq('id', gameId).maybeSingle();
+    if (targetErr || !targetGame) return res.status(404).json({ error: 'Juego no encontrado' });
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const gTenant = (targetGame.tenant_id || 'default').toLowerCase();
+      if (gTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ error: 'Acceso denegado: Este juego pertenece a otra sala.' });
+      }
+    }
+
+    const tenantFilter = (targetGame.tenant_id || 'default').toLowerCase();
+
+    // End all currently active games ONLY for this tenant
+    let prevGamesQ = supabase.from('game')
       .select('id')
       .in('status', ['waiting', 'playing', 'paused']);
+    if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
+      prevGamesQ = prevGamesQ.eq('tenant_id', tenantFilter);
+    } else {
+      prevGamesQ = prevGamesQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
+    const { data: previousGames } = await prevGamesQ;
 
     if (previousGames && previousGames.length > 0) {
       const previousGameIds = previousGames.map((g: any) => g.id);
       await supabase.from('cards').delete().in('game_id', previousGameIds);
 
-      // reset players because we are starting fresh or ending previous games
-      await supabase.from('players').update({
+      // Reset players ONLY for this tenant
+      let playerResetQ = supabase.from('players').update({
         card_count: 0,
         status: 'pending'
       }).neq('phone', '0000000000');
+      if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
+        playerResetQ = playerResetQ.eq('tenant_id', tenantFilter);
+      } else {
+        playerResetQ = playerResetQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+      }
+      await playerResetQ;
     }
 
-    await supabase.from('game')
+    let endGamesQ = supabase.from('game')
       .update({ status: 'ended' })
       .in('status', ['waiting', 'playing', 'paused']);
+    if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
+      endGamesQ = endGamesQ.eq('tenant_id', tenantFilter);
+    } else {
+      endGamesQ = endGamesQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
+    await endGamesQ;
 
     // Activate selected game
     const { error } = await supabase.from('game')
@@ -4059,7 +4351,7 @@ app.get('/api/patterns', async (req, res) => {
 });
 
 // Create/Update Pattern
-app.post('/api/patterns', async (req, res) => {
+app.post('/api/patterns', requireAdmin, async (req, res) => {
   const { id, name, grid, is_active } = req.body;
   cachedPatterns = null; // Invalidate cache
 
@@ -4107,7 +4399,7 @@ app.post('/api/patterns', async (req, res) => {
 });
 
 // Delete Pattern (Hard delete)
-app.delete('/api/patterns/:id', async (req, res) => {
+app.delete('/api/patterns/:id', requireAdmin, async (req, res) => {
   cachedPatterns = null; // Invalidate cache
   const { error } = await supabase.from('patterns').delete().eq('id', req.params.id);
   if (error) return res.status(500).json({ error: error.message });
@@ -4131,7 +4423,7 @@ app.get('/api/ai-presets', async (req, res) => {
 });
 
 // Create/Update AI Announcement Preset
-app.post('/api/ai-presets', async (req, res) => {
+app.post('/api/ai-presets', requireAdmin, async (req, res) => {
   try {
     const { id, title, name, text, voice, audio_base64 } = req.body;
     const presetName = (name || title || 'Anuncio IA').trim();
@@ -4185,7 +4477,7 @@ app.post('/api/ai-presets', async (req, res) => {
 });
 
 // Delete AI Announcement Preset
-app.delete('/api/ai-presets/:id', async (req, res) => {
+app.delete('/api/ai-presets/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     if (id.startsWith('preset_')) {
@@ -4268,6 +4560,19 @@ app.post('/api/lottery-numbers', async (req, res) => {
 
     if (!player_id || !game_id || !lottery_code) {
       return res.status(400).json({ error: 'player_id, game_id, and lottery_code are required' });
+    }
+
+    // Require authentication and verify player identity to prevent cross-player fraud
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ error: 'Autenticación requerida para registrar números de lotería.' });
+    }
+    if (authUser.role === 'player') {
+      // Look up the player in DB to cross-reference the authenticated uid
+      const { data: dbPlayer } = await supabase.from('players').select('id').eq('id', Number(player_id)).maybeSingle();
+      if (!dbPlayer || String(dbPlayer.id) !== String(authUser.uid)) {
+        return res.status(403).json({ error: 'Acceso denegado: Solo puedes registrar números de lotería para tu propio perfil.' });
+      }
     }
 
     let finalCardNumber = card_number ? String(card_number) : null;
@@ -4580,7 +4885,7 @@ app.get('/api/lottery-numbers/winner/:gameId', async (req, res) => {
 });
 
 // POST to confirm a lottery drawing winner for a game
-app.post('/api/lottery-numbers/winner', async (req, res) => {
+app.post('/api/lottery-numbers/winner', requireAdmin, async (req, res) => {
   try {
     const { game_id, winning_code } = req.body;
 
@@ -4702,7 +5007,7 @@ app.post('/api/lottery-numbers/winner', async (req, res) => {
 });
 
 // POST to reset a lottery drawing winner (undo/clear confirmation)
-app.post('/api/lottery-numbers/reset-winner', async (req, res) => {
+app.post('/api/lottery-numbers/reset-winner', requireAdmin, async (req, res) => {
   try {
     const { game_id } = req.body;
 
@@ -4725,7 +5030,7 @@ app.post('/api/lottery-numbers/reset-winner', async (req, res) => {
 });
 
 // Clear all lottery numbers list (mass action)
-app.delete('/api/lottery-numbers/clear', async (req, res) => {
+app.delete('/api/lottery-numbers/clear', requireAdmin, async (req, res) => {
   try {
     const { error } = await supabase.from('lottery_numbers_in_play')
       .delete()
@@ -4746,7 +5051,7 @@ app.delete('/api/lottery-numbers/clear', async (req, res) => {
 });
 
 // Delete a single lottery number entry
-app.delete('/api/lottery-numbers/:id', async (req, res) => {
+app.delete('/api/lottery-numbers/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { error } = await supabase.from('lottery_numbers_in_play')
@@ -5302,7 +5607,7 @@ app.post('/api/admin/cleanup-storage', async (req, res) => {
 });
 
 // Update Game Status
-app.post('/api/game/status', async (req, res) => {
+app.post('/api/game/status', requireAdmin, async (req, res) => {
   const { gameId, status, prize, card_value, final_note, is_free, ai_knowledge_base, ai_model, ai_animator_enabled, ai_chat_enabled, whatsapp_template } = req.body;
 
   let game;
@@ -5509,7 +5814,7 @@ app.post('/api/admin/upload-header', upload.single('header_image'), async (req: 
 });
 
 // Update Stream Status
-app.post('/api/game/stream', async (req, res) => {
+app.post('/api/game/stream', requireAdmin, async (req, res) => {
   const { stream_id, stream_active } = req.body;
 
   // Save to global settings so it is persistent across games
@@ -5545,7 +5850,7 @@ app.post('/api/game/stream', async (req, res) => {
 });
 
 // Update Chat Status
-app.post('/api/game/chat', async (req, res) => {
+app.post('/api/game/chat', requireAdmin, async (req, res) => {
   const { chat_enabled } = req.body;
   getChannel().publish('chat_status_updated', { enabled: chat_enabled });
   res.json({ success: true });
@@ -6129,7 +6434,7 @@ async function drawNextBall(game: any, isManual: boolean = false) {
 }
 
 // Draw Ball
-app.post('/api/game/draw', async (req, res) => {
+app.post('/api/game/draw', requireAdmin, async (req, res) => {
   console.log('[API] DRAW: Start');
   try {
     let game = await getActiveGame();
@@ -6160,7 +6465,7 @@ app.post('/api/game/draw', async (req, res) => {
 });
 
 // Reset Game
-app.post('/api/game/reset', async (req, res) => {
+app.post('/api/game/reset', requireAdmin, async (req, res) => {
   let game = await getActiveGame();
 
   if (!game) return res.status(404).json({ error: 'No active game' });
@@ -6309,6 +6614,22 @@ app.post('/api/cards/:id/assign', async (req, res) => {
 
     if (fetchError || !card) return res.status(404).json({ error: 'Tarjeta no encontrada' });
     if (!String(card.card_number || '').startsWith('RESERVADO')) return res.status(400).json({ error: 'Esta tarjeta ya está asignada' });
+
+    // Validar autorización de asignación: el usuario debe ser el titular del cartón o un administrador
+    const authUser = await getAuthenticatedUser(req);
+    if (authUser) {
+      if (authUser.role === 'player') {
+        const cardPhone = normalizePhone(card.player_phone || '');
+        const authPhone = normalizePhone(authUser.phone || '');
+        if (cardPhone && authPhone && cardPhone !== authPhone) {
+          return res.status(403).json({ error: 'Acceso denegado: No puedes asignar un cartón perteneciente a otro jugador.' });
+        }
+      } else if (authUser.role === 'admin' && !authUser.isSuperAdmin) {
+        if (card.tenant_id && card.tenant_id.toLowerCase() !== (authUser.tenant_id || '').toLowerCase()) {
+          return res.status(403).json({ error: 'Acceso denegado: Este cartón pertenece a otra sala.' });
+        }
+      }
+    }
 
     // 2. Check if the game is still valid for assignment (waiting, scheduled, playing, or paused)
     const { data: game } = await supabase.from('game').select('status').eq('id', card.game_id).single();
@@ -7625,7 +7946,29 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
           return res.status(400).json({ error: 'No es necesario usar la billetera para juegos gratuitos' });
         }
 
-        const balance = await getWalletBalance(phone);
+        const effectiveWalletTenant = (rawTenantId || (req as any).tenantId || game?.tenant_id || 'default').toLowerCase();
+
+        // SEGURIDAD FINANCIERA: Verificar que quien gasta el saldo sea el titular autorizado
+        let existingPlayerForWallet = null;
+        try {
+          const { data } = await supabase.from('players').select('id, password, tenant_id').eq('phone', phone).maybeSingle();
+          existingPlayerForWallet = data;
+        } catch {}
+
+        if (existingPlayerForWallet && existingPlayerForWallet.password) {
+          const authUser = await getAuthenticatedUser(req);
+          const isTokenVerified = authUser?.role === 'player' && normalizePhone(authUser.phone || '') === phone;
+          const isPasswordVerified = password && verifyPassword(password, existingPlayerForWallet.password);
+
+          if (!isTokenVerified && !isPasswordVerified) {
+            return res.status(401).json({
+              error: 'Para realizar compras con saldo de tu billetera, debes ingresar tu contraseña correcta.',
+              passwordRequired: true
+            });
+          }
+        }
+
+        const balance = await getWalletBalance(phone, effectiveWalletTenant);
         const cardVal = parseAmountWithDecimals(game.card_value || '0') || 0;
         const totalCost = cardVal * finalCardCount;
 
@@ -7641,8 +7984,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
           });
         }
 
-        // Deduct balance
-        await updateWalletBalance(phone, -totalCost, `Compra de ${finalCardCount} cartones por $${totalCost}`, 'purchase');
+        // Deduct balance with tenant scoping
+        await updateWalletBalance(phone, -totalCost, `Compra de ${finalCardCount} cartones por $${totalCost}`, 'purchase', effectiveWalletTenant);
         receipt_url = 'WALLET_PAYMENT';
       } else if (req.file) {
         const rawCardVal = game.card_value || settings.card_value || '2000';
@@ -7794,7 +8137,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
 
       // Verificar contraseña si el jugador ya tiene una establecida
       if (existingPlayer.password && existingPlayer.password.trim() !== '') {
-        if (!password || existingPlayer.password !== password) {
+        const isMatch = verifyPassword(password, existingPlayer.password);
+        if (!password || !isMatch) {
           return res.status(401).json({
             error: 'Contraseña incorrecta. Por favor verifícala.',
             passwordRequired: true
@@ -7906,7 +8250,13 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       if (updatedPlayer && updatedPlayer.password) {
         delete updatedPlayer.password;
       }
-      return res.json({ success: true, player: updatedPlayer });
+      const playerToken = createPlayerToken({
+        uid: updatedPlayer.id,
+        phone: updatedPlayer.phone,
+        role: 'player',
+        tenant_id: effectiveTenant || 'default'
+      });
+      return res.json({ success: true, player: updatedPlayer, token: playerToken });
     }
 
     console.log('Insertando nuevo jugador...');
@@ -7978,7 +8328,13 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     if (newPlayer && newPlayer.password) {
       delete newPlayer.password;
     }
-    res.json({ success: true, player: newPlayer });
+    const playerToken = createPlayerToken({
+      uid: newPlayer?.id || phone,
+      phone: phone,
+      role: 'player',
+      tenant_id: effectiveTenantNew || 'default'
+    });
+    res.json({ success: true, player: newPlayer, token: playerToken });
   } catch (err: any) {
 
     res.status(500).json({ error: `Error inesperado: ${err.message || 'Error desconocido'}` });
@@ -8204,11 +8560,19 @@ app.post('/api/admin/players/:id/toggle-block', async (req, res) => {
   try {
     const { data: player, error: fetchError } = await supabase
       .from('players')
-      .select('is_blocked')
+      .select('id, is_blocked, tenant_id')
       .eq('id', req.params.id)
-      .single();
+      .maybeSingle();
 
-    if (fetchError) throw fetchError;
+    if (fetchError || !player) return res.status(404).json({ error: 'Jugador no encontrado' });
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const pTenant = (player.tenant_id || 'default').toLowerCase();
+      if (pTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ error: 'Acceso denegado: Este jugador pertenece a otra sala.' });
+      }
+    }
 
     const { error: updateError } = await supabase
       .from('players')
@@ -8227,6 +8591,22 @@ app.post('/api/admin/players/:id/toggle-block', async (req, res) => {
 // Update Player Details (Admin)
 app.put('/api/admin/players/:id', async (req, res) => {
   try {
+    const { data: existingPlayer } = await supabase
+      .from('players')
+      .select('id, tenant_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    if (!existingPlayer) return res.status(404).json({ error: 'Jugador no encontrado' });
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const pTenant = (existingPlayer.tenant_id || 'default').toLowerCase();
+      if (pTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ error: 'Acceso denegado: Este jugador pertenece a otra sala.' });
+      }
+    }
+
     const { name, phone: rawPhone, email, state, city } = req.body;
     const phone = normalizePhone(rawPhone);
     const { error } = await supabase
@@ -8250,11 +8630,19 @@ app.delete('/api/admin/players/:id', async (req, res) => {
     // 1. Get player phone first to delete related records
     const { data: player, error: fetchError } = await supabase
       .from('players')
-      .select('phone')
+      .select('phone, tenant_id')
       .eq('id', id)
       .maybeSingle();
 
-    if (fetchError) throw fetchError;
+    if (fetchError || !player) return res.status(404).json({ error: 'Jugador no encontrado' });
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const pTenant = (player.tenant_id || 'default').toLowerCase();
+      if (pTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ error: 'Acceso denegado: Este jugador pertenece a otra sala.' });
+      }
+    }
 
     if (player) {
       const phone = player.phone;
@@ -8391,13 +8779,23 @@ app.get('/api/players', async (req, res) => {
 });
 
 // Approve Player
-app.post('/api/players/:id/approve', async (req, res) => {
+app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
   try {
     const playerId = req.params.id;
     const { data: player, error: fetchErr } = await supabase.from('players').select('*').eq('id', playerId).maybeSingle();
 
     if (fetchErr || !player) {
       return res.status(404).json({ error: 'Jugador no encontrado' });
+    }
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const playerTenant = (player.tenant_id || 'default').toLowerCase();
+      if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ 
+          error: `Acceso denegado: El jugador pertenece a la sala "${player.tenant_id}". No tienes autorización para aprobarlo.` 
+        });
+      }
     }
 
     // 1. Update player status to approved (using safest columns first)
@@ -8516,10 +8914,12 @@ app.post('/api/players/:id/approve', async (req, res) => {
 
 app.post('/api/admin/players/approve-all', async (req, res) => {
   try {
-    const { data: pendingPlayers, error: fetchErr } = await supabase
-      .from('players')
-      .select('id')
-      .eq('status', 'pending');
+    const adminUser = (req as any).adminUser;
+    let query = supabase.from('players').select('id, tenant_id').eq('status', 'pending');
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      query = query.eq('tenant_id', adminUser.tenant_id);
+    }
+    const { data: pendingPlayers, error: fetchErr } = await query;
 
     if (fetchErr) throw fetchErr;
 
@@ -8614,7 +9014,7 @@ app.post('/api/admin/players/approve-all', async (req, res) => {
 });
 
 // Reject Player Purchase (Anti-Fraud) & Delete Cards
-app.post('/api/players/:id/reject', async (req, res) => {
+app.post('/api/players/:id/reject', requireAdmin, async (req, res) => {
   try {
     const playerId = req.params.id;
     const { data: player, error: fetchErr } = await supabase.from('players').select('*').eq('id', playerId).maybeSingle();
@@ -8665,10 +9065,15 @@ app.post('/api/players/:id/reject', async (req, res) => {
 app.get('/api/admin/recharge-requests', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   try {
-    // We can fetch players to look up receipt logs for recharge-type records
-    const { data: players, error } = await supabase.from('players')
-      .select('id, name, phone, receipt_url, created_at')
-      .order('created_at', { ascending: false });
+    const adminUser = (req as any).adminUser;
+    let query = supabase.from('players')
+      .select('id, name, phone, receipt_url, created_at, tenant_id');
+
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      query = query.eq('tenant_id', adminUser.tenant_id);
+    }
+
+    const { data: players, error } = await query.order('created_at', { ascending: false });
 
     if (error) throw error;
 
@@ -8686,6 +9091,7 @@ app.get('/api/admin/recharge-requests', async (req, res) => {
                   playerId: player.id,
                   playerName: player.name,
                   phone: player.phone,
+                  tenantId: player.tenant_id,
                   amount: receipt.amount || 0,
                   receiptUrl: receipt.url,
                   note: receipt.note || '',
@@ -8729,6 +9135,16 @@ app.post('/api/admin/recharge-requests/:id/approve', async (req, res) => {
       return res.status(404).json({ error: 'Jugador no encontrado' });
     }
 
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const playerTenant = (player.tenant_id || 'default').toLowerCase();
+      if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ 
+          error: `Acceso denegado: Esta solicitud pertenece a la sala "${player.tenant_id}". No puedes gestionarla.` 
+        });
+      }
+    }
+
     if (!player.receipt_url) {
       return res.status(400).json({ error: 'Comprobante no encontrado' });
     }
@@ -8751,10 +9167,15 @@ app.post('/api/admin/recharge-requests/:id/approve', async (req, res) => {
       return res.status(400).json({ error: 'Esta recarga ya ha sido aprobada' });
     }
 
-    const amount = receipt.amount || 0;
+    const amount = Number(receipt.amount) || 0;
+    if (amount <= 0) {
+      return res.status(400).json({ error: 'Monto de recarga inválido' });
+    }
 
-    // 1. Credit wallet balance
-    await updateWalletBalance(player.phone, amount, `Recarga de billetera aprobada por administrador`, 'recharge');
+    const targetTenant = (player.tenant_id || adminUser.tenant_id || 'default').toLowerCase();
+
+    // 1. Credit wallet balance with tenant isolation
+    await updateWalletBalance(player.phone, amount, `Recarga de billetera aprobada por administrador`, 'recharge', targetTenant);
 
     // 2. Mark as approved in receipt logs
     receipt.is_silent_error = false;
@@ -8792,6 +9213,16 @@ app.post('/api/admin/recharge-requests/:id/reject', async (req, res) => {
     const { data: player, error } = await supabase.from('players').select('*').eq('id', playerId).single();
     if (error || !player) {
       return res.status(404).json({ error: 'Jugador no encontrado' });
+    }
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const playerTenant = (player.tenant_id || 'default').toLowerCase();
+      if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
+        return res.status(403).json({ 
+          error: `Acceso denegado: Esta solicitud pertenece a la sala "${player.tenant_id}". No puedes gestionarla.` 
+        });
+      }
     }
 
     if (!player.receipt_url) {
@@ -9547,6 +9978,18 @@ app.post('/api/notifications/welcome', async (req, res) => {
     const phone = normalizePhone(rawPhone);
     const playerName = name || 'Jugador';
 
+    // Require authentication: admin can send to any player, player can only notify themselves
+    const authUser = await getAuthenticatedUser(req);
+    if (!authUser) {
+      return res.status(401).json({ error: 'Autenticación requerida para enviar notificaciones de bienvenida.' });
+    }
+    if (authUser.role === 'player') {
+      const authPhone = normalizePhone(authUser.phone || '');
+      if (authPhone && phone && authPhone !== phone) {
+        return res.status(403).json({ error: 'Acceso denegado: Solo puedes enviar notificaciones a tu propio número.' });
+      }
+    }
+
     const title = '👋 ¡BIENVENIDO A BINGO LITE!';
     const message = [
       `🎉 ¡Hola ${playerName}, qué alegría tenerte aquí!`,
@@ -9570,7 +10013,7 @@ app.post('/api/notifications/welcome', async (req, res) => {
   }
 });
 
-app.post('/api/notifications/send', async (req, res) => {
+app.post('/api/notifications/send', requireAdmin, async (req, res) => {
   const { recipient, phone, title, message } = req.body;
   const result = await sendPushNotification({
     recipient,
@@ -9587,7 +10030,7 @@ app.post('/api/notifications/send', async (req, res) => {
   }
 });
 
-app.post('/api/ai/stream', async (req, res) => {
+app.post('/api/ai/stream', requireAdmin, async (req, res) => {
   try {
     const { contents, config, model } = req.body;
     const apiKey = process.env.GEMINI_API_KEY;
@@ -9628,7 +10071,7 @@ app.post('/api/ai/stream', async (req, res) => {
     res.end();
   }
 });
-app.post('/api/ai/generate', async (req, res) => {
+app.post('/api/ai/generate', requireAdmin, async (req, res) => {
   try {
     const { contents, config, model } = req.body;
     const apiKey = process.env.GEMINI_API_KEY;
