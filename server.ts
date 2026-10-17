@@ -263,7 +263,7 @@ async function getOrFetchAllGameCards(gameId: number): Promise<CachedCard[]> {
     const to = from + PAGE_SIZE - 1;
     const { data, error } = await supabase
       .from('cards')
-      .select('id, card_number, player_id, game_id, b, i, n, g, o, players(name, city, phone)')
+      .select('id, card_number, player_id, game_id, b, i, n, g, o, players(id, name, city, phone)')
       .eq('game_id', gameId)
       .range(from, to);
 
@@ -287,11 +287,18 @@ async function getOrFetchAllGameCards(gameId: number): Promise<CachedCard[]> {
   console.log(`[HighScaleEngine] Total de ${rawCards.length} cartones cargados. Pre-indexando en RAM...`);
 
   const processed: CachedCard[] = rawCards.map(c => {
-    const player = Array.isArray(c.players) ? c.players[0] : (c.players || { name: 'Jugador', city: '', phone: '' });
+    const rawPlayer = Array.isArray(c.players) ? c.players[0] : (c.players || {});
+    const pId = c.player_id || rawPlayer.id;
+    const player = {
+      id: pId,
+      name: rawPlayer.name || 'Jugador',
+      city: rawPlayer.city || '',
+      phone: rawPlayer.phone || ''
+    };
     return {
       id: c.id,
       card_number: c.card_number,
-      player_id: c.player_id,
+      player_id: pId,
       game_id: c.game_id,
       player,
       grid: parseCardGridNumbers(c)
@@ -5163,19 +5170,42 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
     return false;
   }
 
-  // Group winners by player ID to handle prize splitting by person
-  const uniquePlayersMap = new Map<number, any>();
-  winners.forEach(w => {
-    if (w.player && w.player.id) {
-      uniquePlayersMap.set(w.player.id, w.player);
+  // Group winners by player ID to handle prize splitting by person (defensive extraction)
+  const uniquePlayersMap = new Map<string, any>();
+  for (const w of winners) {
+    const pId = w.player?.id || w.card?.player_id || (w as any).player_id;
+    if (pId) {
+      const pData = w.player || {};
+      uniquePlayersMap.set(String(pId), {
+        id: pId,
+        name: pData.name || (w as any).player_name || 'Jugador',
+        city: pData.city || '',
+        phone: pData.phone || (w as any).player_phone || ''
+      });
     }
-  });
+  }
+
+  // Safety fallback: if uniquePlayersMap is still empty, look up player from card.player_id in Supabase
+  if (uniquePlayersMap.size === 0 && winners[0]?.card?.player_id) {
+    const fallbackPlayerId = winners[0].card.player_id;
+    try {
+      const { data: dbPlayer } = await supabase.from('players').select('id, name, city, phone').eq('id', fallbackPlayerId).maybeSingle();
+      if (dbPlayer) {
+        uniquePlayersMap.set(String(dbPlayer.id), dbPlayer);
+      } else {
+        uniquePlayersMap.set(String(fallbackPlayerId), { id: fallbackPlayerId, name: 'Jugador', city: '', phone: '' });
+      }
+    } catch (e) {
+      uniquePlayersMap.set(String(fallbackPlayerId), { id: fallbackPlayerId, name: 'Jugador', city: '', phone: '' });
+    }
+  }
 
   const uniquePlayersCount = uniquePlayersMap.size;
   const uniquePlayers = Array.from(uniquePlayersMap.values());
 
   if (uniquePlayers.length === 0) {
-    console.log(`Could not resolve any players for pattern ${gp.id}`);
+    console.error(`[processBingoWin] Could not resolve any players for pattern ${gp.id}`);
+    winLocks.delete(gp.id);
     return false;
   }
 
@@ -5185,6 +5215,7 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
   try {
     const pData: any = Array.isArray(gp.patterns) ? gp.patterns[0] : gp.patterns;
     const primaryWinner = uniquePlayers[0];
+    const primaryCardNumber = winners[0]?.card?.card_number || null;
 
     // 1. IMMEDIATELY pause server autoplay and set timestamps (0ms delay!)
     serverAutoplay.isPausedForWinner = true;
@@ -5225,10 +5256,14 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
       const g = parseLetterArray(w.card.g);
       const o = parseLetterArray(w.card.o);
 
+      const pId = w.player?.id || w.card?.player_id || primaryWinner.id;
+      const pName = w.player?.name || primaryWinner.name || 'Jugador';
+      const pCity = w.player?.city || primaryWinner.city || '';
+
       return {
-        player_id: w.player.id,
-        player_name: w.player.name,
-        player_city: w.player.city || '',
+        player_id: pId,
+        player_name: pName,
+        player_city: pCity,
         card_number: w.card.card_number,
         grid: [
           [b[0], i[0], n[0], g[0], o[0]],
@@ -5241,7 +5276,35 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
       };
     });
 
-    // 2. Publish Bingo Event IMMEDIATELY to all players and admin (0ms delay!)
+    // 2. Persist winner in DB immediately and update in-memory pattern so all subsequent checks know it was won
+    try {
+      const { data: updatedPattern, error: winUpdateError } = await supabase.from('game_patterns')
+        .update({
+          winner_player_id: primaryWinner.id,
+          winner_card_number: primaryCardNumber,
+          won_at: new Date().toISOString()
+        })
+        .eq('id', gp.id)
+        .is('winner_player_id', null)
+        .select();
+
+      if (winUpdateError) {
+        console.error(`[processBingoWin] Error actualizando game_patterns ${gp.id}:`, winUpdateError);
+      } else {
+        console.log(`[processBingoWin] Patrón ${gp.id} marcado como ganado por jugador ${primaryWinner.id}`);
+      }
+
+      // Memory sync on the active gp object
+      gp.winner_player_id = primaryWinner.id;
+      gp.won_at = new Date().toISOString();
+    } catch (dbErr) {
+      console.error('[processBingoWin] DB update exception:', dbErr);
+    }
+
+    // Invalidate game cache so fullState reflects the new winner immediately
+    invalidateGameCaches(game.id);
+
+    // 3. Publish Bingo Event IMMEDIATELY to all players and admin (0ms delay!)
     getChannel().publish('bingo_called', {
       game_pattern_id: gp.id,
       winners: winnersData,
@@ -5251,6 +5314,9 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
       player_count: uniquePlayersCount,
       pattern_grid: pData?.grid
     }).catch(err => console.error('Error publishing bingo_called:', err));
+
+    // Also broadcast full game update with winner reflected
+    await broadcastGameUpdate(game.id);
 
     const winnerNames = uniquePlayers.map(p => p.name).join(', ');
     const prizeAnnouncement = uniquePlayersCount > 1
@@ -5262,24 +5328,9 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
       broadcastVoiceAnnouncement(`¡Atención a todos los participantes! ¡Tenemos Bingo ganador! Felicitaciones a ${winnerNames} por ganar la figura ${pData?.name || 'del bingo'} y llevarse ${prizeAnnouncement}!`, 'Kore');
     }, 7500);
 
-    // 3. Perform database updates, wallet crediting, and persistence asynchronously in background
+    // 4. Wallet crediting and notifications asynchronously in background
     (async () => {
       try {
-        const { data: updatedPattern, error: winUpdateError } = await supabase.from('game_patterns')
-          .update({
-            winner_player_id: primaryWinner.id,
-            won_at: new Date().toISOString()
-          })
-          .eq('id', gp.id)
-          .is('winner_player_id', null)
-          .select();
-
-        if (winUpdateError || !updatedPattern || updatedPattern.length === 0) {
-          console.log(`Pattern ${gp.id} already has a winner in DB or update failed.`);
-        }
-
-        await broadcastGameUpdate(game.id);
-
         const settings = await getGameSettings(game.id);
         const isFreeGame = isGameFree(game, settings);
         const isWalletPrize = (settings.prize_type || 'wallet') === 'wallet';
@@ -5641,12 +5692,12 @@ async function drawNextBall(game: any, isManual: boolean = false) {
               }
 
               if (winnersForGP.length > 0) {
-                // Freeze server autoplay immediately upon winner detection
-                serverAutoplay.isPausedForWinner = true;
-                serverAutoplay.winnerPauseUntil = Date.now() + 22000;
-                serverAutoplay.lastAnnouncementTime = Date.now();
                 try {
-                  await processBingoWin(game, gp, winnersForGP);
+                  const won = await processBingoWin(game, gp, winnersForGP);
+                  if (won) {
+                    console.log(`[HighScaleEngine] Patrón ${gp.id} procesado con éxito. Pausando sorteo para celebración.`);
+                    break; // Stop evaluating further patterns on this ball: celebrate this figure first!
+                  }
                 } catch (winErr) {
                   console.error('Error processing bingo win:', winErr);
                 }

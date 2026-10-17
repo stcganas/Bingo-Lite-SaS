@@ -1060,6 +1060,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
 
       // Auto-unlock after full celebration duration (22 seconds for Canto Bingo audio + AI announcement)
       setTimeout(() => {
+        setWinner(null);
         setWinnerSpeechActive(false);
         isAnnouncingWinnerRef.current = false;
         setIsAnnouncingWinner(false);
