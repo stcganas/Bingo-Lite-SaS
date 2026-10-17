@@ -22,6 +22,8 @@ const ResetPassword = React.lazy(() => import('./pages/ResetPassword'));
 const RegistrationSuccess = React.lazy(() => import('./pages/RegistrationSuccess'));
 const DynamicsInfo = React.lazy(() => import('./pages/DynamicsInfo'));
 const SellerDashboard = React.lazy(() => import('./pages/SellerDashboard'));
+const SuperAdminDashboard = React.lazy(() => import('./pages/SuperAdminDashboard'));
+
 import { AuthProvider, useAuth } from './AuthContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
@@ -539,6 +541,21 @@ function SellerProtectedRoute({ children }: { children: React.ReactNode }) {
   return children;
 }
 
+// Super Admin: solo usuarios con isSuperAdmin=true pueden acceder
+function SuperAdminProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading, error } = useAuth();
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: '#090918', color: '#818cf8' }}>Verificando permisos...</div>;
+  if (error) return <div className="min-h-screen flex items-center justify-center text-red-600 font-bold">{error}</div>;
+
+  if (!user || user.role !== 'admin' || !user.isSuperAdmin) {
+    return <Navigate to="/admin/login" replace />;
+  }
+
+  return children;
+}
+
+
 function ScrollToTop() {
   const { pathname } = useLocation();
   useEffect(() => {
@@ -631,6 +648,11 @@ export default function App() {
               
               {/* Landing Page Principal SaaS (Para organizadores) */}
               <Route path="/" element={<SaaSMarketingLanding />} />
+              <Route path="/superadmin" element={
+                <SuperAdminProtectedRoute>
+                  <SuperAdminDashboard />
+                </SuperAdminProtectedRoute>
+              } />
               <Route path="/dynamics" element={<DynamicsInfo />} />
               <Route path="/free-games" element={<FreeGames />} />
                             <Route path="/seller" element={

@@ -768,19 +768,17 @@ async function getTenantInfo(tenantId: string) {
   return fallbackTenant;
 }
 
-// Canales de tiempo real aislados por Tenant con retrocompatibilidad global
+// Canales de tiempo real estrictamente aislados por Tenant / Sala
 function getChannel(tenantId?: string) {
-  const primaryChannel = tenantId && tenantId !== 'default' && tenantId !== 'bingo-lite'
-    ? `bingo-tenant-${tenantId}`
+  const norm = (tenantId || '').trim().toLowerCase();
+  const primaryChannel = norm && norm !== 'default' && norm !== 'bingo-lite' && norm !== 'global'
+    ? `bingo-tenant-${norm}`
     : 'bingo-channel';
 
   return ably ? {
     publish: async (name: string, data: any) => {
       try {
         await ably.channels.get(primaryChannel).publish(name, data);
-        if (primaryChannel !== 'bingo-channel') {
-          await ably.channels.get('bingo-channel').publish(name, data);
-        }
       } catch (e) {
         console.warn(`[Ably] Error publicando en ${primaryChannel}:`, e);
       }
@@ -818,14 +816,14 @@ app.get('/api/tenant/info', async (req, res) => {
 // Endpoint para que los organizadores creen su sala de bingo con su propio administrador independiente
 app.post('/api/tenants', async (req, res) => {
   try {
-    const { 
-      name, 
-      slug: rawSlug, 
-      access_code: rawCode, 
-      primary_color, 
-      logo_url, 
-      banner_url, 
-      organizer_name, 
+    const {
+      name,
+      slug: rawSlug,
+      access_code: rawCode,
+      primary_color,
+      logo_url,
+      banner_url,
+      organizer_name,
       contact_phone,
       admin_email,
       admin_password
@@ -888,15 +886,15 @@ app.post('/api/tenants', async (req, res) => {
     try {
       const { data } = await supabase.from('tenants').select('id, slug, admin_email').eq('slug', slug).maybeSingle();
       if (data) existingTenant = data;
-    } catch (e) {}
+    } catch (e) { }
 
     if (!existingTenant && tenantsCache.has(slug)) {
       existingTenant = tenantsCache.get(slug)?.tenant;
     }
 
     if (existingTenant) {
-      return res.status(409).json({ 
-        error: `La sala con identificador "${slug}" ya existe en el sistema. Por favor, elige un nombre diferente.` 
+      return res.status(409).json({
+        error: `La sala con identificador "${slug}" ya existe en el sistema. Por favor, elige un nombre diferente.`
       });
     }
 
@@ -976,7 +974,7 @@ app.post('/api/admin/tenant-login', async (req, res) => {
 
     // 1. Identificar si es un Super Administrador Global del sistema
     const superAdminEmails = [
-      'comamosexpress@gmail.com', 
+      'comamosexpress@gmail.com',
       'stcganas@gmail.com',
       ...(process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()) : [])
     ];
@@ -1035,27 +1033,27 @@ app.post('/api/admin/tenant-login', async (req, res) => {
         try {
           const { data } = await supabase.from('tenants').select('*').eq('admin_email', email).maybeSingle();
           if (data) targetTenant = data;
-        } catch (e) {}
+        } catch (e) { }
       }
     }
 
     if (!targetTenant || !targetTenant.admin_email) {
-      return res.status(401).json({ 
-        error: 'No se encontró ninguna sala de bingo asignada a este correo de administrador.' 
+      return res.status(401).json({
+        error: 'No se encontró ninguna sala de bingo asignada a este correo de administrador.'
       });
     }
 
     // Comprobación estricta de aislamiento de administración por sala:
     if (targetRoomSlug && targetRoomSlug !== 'default' && targetTenant.slug !== targetRoomSlug) {
-      return res.status(403).json({ 
-        error: `Acceso denegado: Tus credenciales de administrador pertenecen a la sala "${targetTenant.name || targetTenant.slug}". No tienes autorización para administrar la sala "${targetRoomSlug}".` 
+      return res.status(403).json({
+        error: `Acceso denegado: Tus credenciales de administrador pertenecen a la sala "${targetTenant.name || targetTenant.slug}". No tienes autorización para administrar la sala "${targetRoomSlug}".`
       });
     }
 
     // Verificar que el correo coincida con el registrado para esa sala
     if (targetTenant.admin_email.toLowerCase() !== email) {
-      return res.status(401).json({ 
-        error: 'El correo no corresponde al administrador registrado en esta sala.' 
+      return res.status(401).json({
+        error: 'El correo no corresponde al administrador registrado en esta sala.'
       });
     }
 
@@ -1204,8 +1202,8 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
       if (!adminSession.isSuperAdmin) {
         const adminTenant = (adminSession.tenant_id || '').toLowerCase();
         if (targetTenantId && targetTenantId.toLowerCase() !== adminTenant && targetTenantId !== 'default') {
-          return res.status(403).json({ 
-            error: `Acceso denegado: Tus permisos de administrador pertenecen exclusivamente a la sala "${adminSession.tenant_id}". No puedes gestionar "${targetTenantId}".` 
+          return res.status(403).json({
+            error: `Acceso denegado: Tus permisos de administrador pertenecen exclusivamente a la sala "${adminSession.tenant_id}". No puedes gestionar "${targetTenantId}".`
           });
         }
         // Sobrescribir tenantId con el tenant verificado del admin para garantizar aislamiento
@@ -1256,8 +1254,8 @@ async function requireSuperAdmin(req: express.Request, res: express.Response, ne
   return requireAdmin(req, res, () => {
     const adminUser = (req as any).adminUser;
     if (!adminUser || !adminUser.isSuperAdmin) {
-      return res.status(403).json({ 
-        error: 'Acceso denegado: Esta operación sensible requiere permisos exclusivos de Super Administrador Global.' 
+      return res.status(403).json({
+        error: 'Acceso denegado: Esta operación sensible requiere permisos exclusivos de Super Administrador Global.'
       });
     }
     next();
@@ -1305,7 +1303,7 @@ async function getAuthenticatedUser(req: express.Request): Promise<{ role: 'admi
           return { role: 'admin', isSuperAdmin: true, tenant_id: 'global', uid: user.id };
         }
       }
-    } catch {}
+    } catch { }
   }
 
   return null;
@@ -1319,7 +1317,9 @@ app.get('/api/notifications/:id', async (req, res) => {
   const requestId = Math.random().toString(36).substring(7);
   try {
     const { id } = req.params;
-    console.log(`[Notifications][${requestId}] Request for ID: ${id}`);
+    // Scope notifications strictly to the current tenant room
+    const tenantId = (req as any).tenantId || getTenantIdFromRequest(req) || 'default';
+    console.log(`[Notifications][${requestId}] Request for ID: ${id} (tenant: ${tenantId})`);
 
     if (!supabase) {
       console.warn(`[Notifications][${requestId}] Supabase not configured`);
@@ -1334,19 +1334,27 @@ app.get('/api/notifications/:id', async (req, res) => {
     const decodedId = decodeURIComponent(id);
     console.log(`[Notifications][${requestId}] Decoded ID: ${decodedId}`);
 
-    const { data, error } = await supabase
+    // Filter by user_id AND tenant_id for strict room isolation
+    let query = supabase
       .from('notifications')
       .select('*')
       .eq('user_id', decodedId)
       .order('created_at', { ascending: false })
       .limit(50);
 
+    // Apply tenant filter — allow null/missing tenant_id rows as a fallback for legacy data
+    if (tenantId && tenantId !== 'default') {
+      query = query.or(`tenant_id.eq.${tenantId},tenant_id.is.null`);
+    }
+
+    const { data, error } = await query;
+
     if (error) {
       console.warn(`[Notifications][${requestId}] Supabase error (skipping):`, error.message || error);
       return res.json([]);
     }
 
-    console.log(`[Notifications][${requestId}] Found ${data?.length || 0} notifications`);
+    console.log(`[Notifications][${requestId}] Found ${data?.length || 0} notifications (tenant: ${tenantId})`);
     res.json(data || []);
   } catch (error: any) {
     // ignored
@@ -1678,8 +1686,9 @@ async function broadcastGameUpdate(gameId: number, manualState?: any) {
       } catch (e) { }
     }
 
-    await getChannel().publish('game_update', gameState);
-    console.log(`Broadcasted game_update for game ${gameId} (Patterns count: ${gameState.patterns?.length || 0})`);
+    const targetTenant = (gameState.tenant_id || '').toLowerCase();
+    await getChannel(targetTenant).publish('game_update', gameState);
+    console.log(`Broadcasted game_update for game ${gameId} to room "${targetTenant || 'default'}" (Patterns count: ${gameState.patterns?.length || 0})`);
   } catch (err) {
     console.error(`Error broadcasting game update for ${gameId}:`, err);
   }
@@ -2035,7 +2044,8 @@ app.patch('/api/admin/winners/:ids/status', async (req, res) => {
         recipient: 'single',
         phone: player.phone,
         title,
-        message
+        message,
+        tenantId: (player as any).tenant_id || (req as any).tenantId
       });
     }
 
@@ -2315,7 +2325,8 @@ async function payReferralCommission(player: any, game: any, cardCount: number) 
         recipient: 'single',
         phone: referrer.phone,
         title,
-        message: msg
+        message: msg,
+        tenantId: (player as any).tenant_id || (referrer as any).tenant_id
       }).catch(() => { });
 
       try {
@@ -2332,22 +2343,42 @@ async function payReferralCommission(player: any, game: any, cardCount: number) 
   }
 }
 
-app.post('/api/admin/trigger-dj-sound', async (req, res) => {
+interface DJBgState {
+  url: string | null;
+  command: 'play' | 'pause' | 'stop' | 'volume_update';
+  name: string;
+  volume: number;
+  timestamp: number;
+}
+const currentDjBgStateByTenant = new Map<string, DJBgState>();
+
+function getDjBgState(tenantId?: string): DJBgState {
+  const norm = (tenantId || 'bingo-lite').toLowerCase();
+  return currentDjBgStateByTenant.get(norm) || {
+    url: null,
+    command: 'stop',
+    name: '',
+    volume: 0.6,
+    timestamp: 0
+  };
+}
+
+app.post('/api/admin/trigger-dj-sound', requireAdmin, async (req, res) => {
   try {
     const { slotId, url, name } = req.body;
     if (!url) return res.status(400).json({ error: 'URL de audio requerida' });
+    const targetTenant = getTenantIdFromRequest(req);
 
-    await getChannel().publish('play_dj_sound', {
+    await getChannel(targetTenant).publish('play_dj_sound', {
       slotId,
       url,
       name: name || 'Efecto DJ',
       timestamp: Date.now()
     });
 
-    console.log(`[DJ] Broadcasted track: ${name} URL: ${url}`);
+    console.log(`[DJ] Broadcasted track: ${name} URL: ${url} to room "${targetTenant || 'default'}"`);
     res.json({ success: true });
   } catch (err: any) {
-
     res.status(500).json({ error: 'Error al reproducir el sonido en vivo' });
   }
 });
@@ -2369,7 +2400,6 @@ app.get('/api/audio-proxy', async (req, res) => {
 
     if (!response.ok) {
       // ignored
-      // ignored
     }
 
     const contentType = response.headers.get('content-type') || 'audio/mpeg';
@@ -2381,49 +2411,43 @@ app.get('/api/audio-proxy', async (req, res) => {
     const buffer = Buffer.from(arrayBuffer);
     res.send(buffer);
   } catch (err: any) {
-
     res.status(500).send('Error al proxyar el archivo de audio');
   }
 });
 
-let currentDjBgState: { url: string | null; command: 'play' | 'pause' | 'stop'; name: string; volume: number; timestamp: number } = {
-  url: null,
-  command: 'stop',
-  name: '',
-  volume: 0.6,
-  timestamp: 0
-};
-
 app.get('/api/dj-bg-state', (req, res) => {
-  res.json(currentDjBgState);
+  const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+  res.json(getDjBgState(targetTenant));
 });
 
-app.post('/api/admin/trigger-dj-bg', async (req, res) => {
+app.post('/api/admin/trigger-dj-bg', requireAdmin, async (req, res) => {
   try {
     const { url, command, name, volume } = req.body;
     if (command === 'play' && !url) {
       return res.status(400).json({ error: 'URL de audio de fondo requerida' });
     }
+    const targetTenant = getTenantIdFromRequest(req);
+    const prevState = getDjBgState(targetTenant);
 
-    currentDjBgState = {
-      url: url || currentDjBgState.url,
-      command: command === 'volume_update' ? currentDjBgState.command : command, // Preserve 'play' or 'stop' state
-      name: name || currentDjBgState.name || 'Pista de fondo DJ',
-      volume: volume !== undefined ? volume : currentDjBgState.volume,
+    const newState: DJBgState = {
+      url: url || prevState.url,
+      command: command === 'volume_update' ? prevState.command : command,
+      name: name || prevState.name || 'Pista de fondo DJ',
+      volume: volume !== undefined ? volume : prevState.volume,
       timestamp: Date.now()
     };
+    currentDjBgStateByTenant.set(targetTenant, newState);
 
     // We can just broadcast the volume_update directly to clients but retain the 'play' state in memory so new clients still play
     const broadcastState = command === 'volume_update'
-      ? { ...currentDjBgState, command: 'volume_update' }
-      : currentDjBgState;
+      ? { ...newState, command: 'volume_update' }
+      : newState;
 
-    await getChannel().publish('play_dj_bg', broadcastState);
+    await getChannel(targetTenant).publish('play_dj_bg', broadcastState);
 
-    console.log(`[DJ BG] Broadcasted background track command: ${command}, track: ${currentDjBgState.name}`);
-    res.json({ success: true, state: currentDjBgState });
+    console.log(`[DJ BG] Broadcasted background track command: ${command}, track: ${newState.name} to room "${targetTenant || 'default'}"`);
+    res.json({ success: true, state: newState });
   } catch (err: any) {
-
     res.status(500).json({ error: 'Error al controlar la música de fondo' });
   }
 });
@@ -2574,13 +2598,13 @@ app.delete('/api/admin/sellers/:id', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/trigger-fx-volume', async (req, res) => {
+app.post('/api/admin/trigger-fx-volume', requireAdmin, async (req, res) => {
   try {
     const { volume } = req.body;
-    await getChannel().publish('fx_volume_update', { volume });
+    const targetTenant = getTenantIdFromRequest(req);
+    await getChannel(targetTenant).publish('fx_volume_update', { volume });
     res.json({ success: true });
   } catch (err: any) {
-
     res.status(500).json({ error: 'Error' });
   }
 });
@@ -2700,7 +2724,8 @@ app.post('/api/sellers/send-push', async (req, res) => {
         recipient: 'all',
         title: finalTitle,
         message: finalMessage,
-        url: appUrl
+        url: appUrl,
+        tenantId: (req as any).tenantId
       });
       const { data: players } = await supabase.from('players').select('id');
       notifyCount = players?.length || 1;
@@ -2729,7 +2754,8 @@ app.post('/api/sellers/send-push', async (req, res) => {
             phone: player.phone,
             title: finalTitle,
             message: finalMessage,
-            url: appUrl
+            url: appUrl,
+            tenantId: (req as any).tenantId
           });
         }
       }
@@ -2775,7 +2801,7 @@ app.get('/api/sellers/:code/stats', async (req, res) => {
           if (user && user.id === seller.id) {
             isAuthorized = true;
           }
-        } catch {}
+        } catch { }
       }
     }
 
@@ -2922,7 +2948,7 @@ app.post('/api/players/login', async (req, res) => {
             tenantInfo = foundTenant;
             targetTenantId = foundTenant.slug || foundTenant.id;
           }
-        } catch (e) {}
+        } catch (e) { }
       }
 
       // Si aún no se encuentra, verificar si es el código de la sala oficial
@@ -3006,14 +3032,14 @@ app.post('/api/players/login', async (req, res) => {
         const secureHash = hashPassword(password);
         try {
           await supabase.from('players').update({ password: secureHash }).eq('id', player.id);
-        } catch {}
+        } catch { }
       }
     } else {
       // Si el jugador no tenía contraseña asignada, establecer la ingresada
       const secureHash = hashPassword(password);
       try {
         await supabase.from('players').update({ password: secureHash }).eq('id', player.id);
-      } catch {}
+      } catch { }
     }
 
     // Generar token firmado de sesión de jugador
@@ -4038,7 +4064,8 @@ app.post('/api/games', requireAdmin, async (req, res) => {
         recipient: 'all',
         title: notifTitle,
         message: notifMessage,
-        url: getAppUrl(req)
+        url: getAppUrl(req),
+        tenantId: (req as any).tenantId
       });
     } catch (notifErr) {
       console.warn('Error sending formatted game creation push:', notifErr);
@@ -4102,7 +4129,8 @@ app.patch('/api/games/:id', requireAdmin, async (req, res) => {
           recipient: 'all',
           title: `🎮 ¡Sorteo Actualizado: ${updatedGame.name || 'Bingo'}!`,
           message: notifMessage,
-          url: getAppUrl(req)
+          url: getAppUrl(req),
+          tenantId: (req as any).tenantId
         }).catch(e => console.warn('[Notification] Game edit push note error:', e));
       } catch (e) {
         console.warn('[Notification] Game edit push format error:', e);
@@ -4245,7 +4273,8 @@ async function doActivateGame(gameId: number) {
       recipient: 'all',
       title: '🎱 ¡El Bingo ha Comenzado!',
       message: `El sorteo para "${fullState?.name || 'la partida'}" ya está en vivo. ¡Ingresa para seguir tus cartones!`,
-      url: getAppUrl()
+      url: getAppUrl(),
+      tenantId: (fullState as any)?.tenant_id
     }).catch(() => { });
   } catch (e) { }
 }
@@ -5118,6 +5147,7 @@ app.post('/api/lottery-numbers/winner', requireAdmin, async (req, res) => {
       recipient: 'all',
       title,
       message,
+      tenantId: (req as any).tenantId
     }).catch(() => { });
 
     notificationSent = true;
@@ -5999,9 +6029,61 @@ app.post('/api/game/stream', requireAdmin, async (req, res) => {
 // Update Chat Status
 app.post('/api/game/chat', requireAdmin, async (req, res) => {
   const { chat_enabled } = req.body;
-  getChannel().publish('chat_status_updated', { enabled: chat_enabled });
+  const targetTenant = getTenantIdFromRequest(req);
+  getChannel(targetTenant).publish('chat_status_updated', { enabled: chat_enabled });
   res.json({ success: true });
 });
+
+// Multi-Tenant Autonomous Bingo Engine State: Cada sala tiene su propio motor y temporizadores 100% aislados
+interface RoomAutoplayState {
+  tenantId: string;
+  gameId: number | null;
+  isRunning: boolean;
+  intervalMs: number;
+  isPausedForWinner: boolean;
+  winnerPauseUntil: number;
+  lastDrawTime: number;
+  isDrawing: boolean;
+  lastAnnouncementTime: number;
+}
+const roomAutoplays = new Map<string, RoomAutoplayState>();
+
+function getRoomAutoplay(tenantId?: string): RoomAutoplayState {
+  const norm = (tenantId || 'bingo-lite').trim().toLowerCase();
+  let state = roomAutoplays.get(norm);
+  if (!state) {
+    state = {
+      tenantId: norm,
+      gameId: null,
+      isRunning: false,
+      intervalMs: 8000,
+      isPausedForWinner: false,
+      winnerPauseUntil: 0,
+      lastDrawTime: 0,
+      isDrawing: false,
+      lastAnnouncementTime: 0
+    };
+    roomAutoplays.set(norm, state);
+  }
+  return state;
+}
+
+// Proxied serverAutoplay for seamless backward compatibility across any legacy calls
+const serverAutoplay = new Proxy({}, {
+  get: (_target, prop: string) => {
+    const defaultState = getRoomAutoplay('bingo-lite');
+    return (defaultState as any)[prop];
+  },
+  set: (_target, prop: string, value: any) => {
+    const defaultState = getRoomAutoplay('bingo-lite');
+    (defaultState as any)[prop] = value;
+    return true;
+  }
+}) as any;
+
+// Aislamiento concurrente de extracción de balotas por Juego / Sala (sin bloquear otras salas)
+const isDrawingBallByGame = new Set<number>();
+const lastBallDrawTimeByGame = new Map<number, number>();
 
 const winLocks = new Set<number>();
 const sentPushLocks = new Set<string>();
@@ -6063,13 +6145,14 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
     const primaryWinner = uniquePlayers[0];
     const primaryCardNumber = winners[0]?.card?.card_number || null;
 
-    // 1. IMMEDIATELY pause server autoplay and set timestamps (0ms delay!)
-    serverAutoplay.isPausedForWinner = true;
+    // 1. IMMEDIATELY pause server autoplay strictly for this room and set timestamps (0ms delay!)
+    const roomAutoplay = getRoomAutoplay(game.tenant_id);
+    roomAutoplay.isPausedForWinner = true;
     const pauseDurationMs = 22000;
-    serverAutoplay.winnerPauseUntil = Date.now() + pauseDurationMs;
-    serverAutoplay.lastAnnouncementTime = Date.now();
-    const currentInterval = Math.max(8000, serverAutoplay.intervalMs || 8000);
-    serverAutoplay.lastDrawTime = Date.now() + pauseDurationMs - currentInterval;
+    roomAutoplay.winnerPauseUntil = Date.now() + pauseDurationMs;
+    roomAutoplay.lastAnnouncementTime = Date.now();
+    const currentInterval = Math.max(8000, roomAutoplay.intervalMs || 8000);
+    roomAutoplay.lastDrawTime = Date.now() + pauseDurationMs - currentInterval;
 
     const originalPrizeStr = String(gp.prize || '');
     const originalNumericPrize = parseInt(originalPrizeStr.replace(/[^0-9]/g, '')) || 0;
@@ -6150,8 +6233,8 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
     // Invalidate game cache so fullState reflects the new winner immediately
     invalidateGameCaches(game.id);
 
-    // 3. Publish Bingo Event IMMEDIATELY to all players and admin (0ms delay!)
-    getChannel().publish('bingo_called', {
+    // 3. Publish Bingo Event IMMEDIATELY ONLY to players of this specific room (0ms delay!)
+    getChannel(game.tenant_id).publish('bingo_called', {
       game_pattern_id: gp.id,
       winners: winnersData,
       pattern_name: pData?.name || 'Patrón',
@@ -6169,9 +6252,9 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
       ? `un premio compartido de ${originalPrizeStr} (${prizePerPlayerStr} c/u)`
       : (numericPrizePerPlayer > 0 ? `un premio de ${originalPrizeStr}` : `el premio: ${gp.prize}`);
 
-    // Trigger celebratory voice announcement delayed by 7.5 seconds so Canto Bingo audio finishes first
+    // Trigger celebratory voice announcement delayed by 7.5 seconds strictly in this room
     setTimeout(() => {
-      broadcastVoiceAnnouncement(`¡Atención a todos los participantes! ¡Tenemos Bingo ganador! Felicitaciones a ${winnerNames} por ganar la figura ${pData?.name || 'del bingo'} y llevarse ${prizeAnnouncement}!`, 'Kore');
+      broadcastVoiceAnnouncement(`¡Atención a todos los participantes! ¡Tenemos Bingo ganador! Felicitaciones a ${winnerNames} por ganar la figura ${pData?.name || 'del bingo'} y llevarse ${prizeAnnouncement}!`, 'Kore', game.tenant_id);
     }, 7500);
 
     // 4. Wallet crediting and notifications asynchronously in background
@@ -6181,12 +6264,12 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
         const isFreeGame = isGameFree(game, settings);
         const isWalletPrize = (settings.prize_type || 'wallet') === 'wallet';
 
-        // Wallet Credit for Free Games & Wallet Prizes
+        // Wallet Credit for Free Games & Wallet Prizes (strictly isolated by room tenant_id)
         if ((isWalletPrize || isFreeGame) && originalNumericPrize > 0) {
           for (const player of uniquePlayers) {
             if (player.phone) {
-              await updateWalletBalance(player.phone, numericPrizePerPlayer, `Premio compartido (${uniquePlayersCount}): ${pData?.name || 'Patrón'}`, 'prize');
-              console.log(`Credited ${numericPrizePerPlayer} to wallet of player ${player.phone} for shared prize`);
+              await updateWalletBalance(player.phone, numericPrizePerPlayer, `Premio compartido (${uniquePlayersCount}): ${pData?.name || 'Patrón'}`, 'prize', game.tenant_id);
+              console.log(`Credited ${numericPrizePerPlayer} to wallet of player ${player.phone} in room ${game.tenant_id || 'default'}`);
             }
           }
 
@@ -6236,6 +6319,8 @@ async function endGameCleanup(gameId: number, finalNote: string) {
 
   // 1. Mark game as finished
   await supabase.from('game').update({ status: 'finished' }).eq('id', gameId);
+  const { data: gameInfo } = await supabase.from('game').select('*').eq('id', gameId).maybeSingle();
+  const tenantId = (gameInfo as any)?.tenant_id;
 
   // 2. Get winners history before deleting cards (optional, but keep patterns)
   const { data: gpWinners, error: gpSelectError } = await supabase.from('game_patterns')
@@ -6290,7 +6375,7 @@ async function endGameCleanup(gameId: number, finalNote: string) {
   }
 
   // 3. Notify everyone and signal refresh
-  await getChannel().publish('game_finished', {
+  await getChannel(tenantId).publish('game_finished', {
     game_id: gameId,
     winners: formattedWinners,
     final_note: finalNote
@@ -6306,15 +6391,15 @@ async function endGameCleanup(gameId: number, finalNote: string) {
     sendPushNotification({
       recipient: 'all',
       title: '🏆 El juego ha finalizado',
-      message: finalNote || 'El bingo ha terminado. ¡Gracias por participar y felicitaciones a los ganadores!'
+      message: finalNote || 'El bingo ha terminado. ¡Gracias por participar y felicitaciones a los ganadores!',
+      tenantId: tenantId
     }).catch(() => { });
   }
 
-  await getChannel().publish('games_updated', {});
+  await getChannel(tenantId).publish('games_updated', {});
 
   // 3b. Sincronizar permanentemente historial de ganadores o participaciones antes de limpiar cartones
   try {
-    const { data: gameInfo } = await supabase.from('game').select('*').eq('id', gameId).maybeSingle();
     const gSettings = await getGameSettings(gameId);
     const wasFree = isGameFree(gameInfo, gSettings);
 
@@ -6372,35 +6457,35 @@ async function endGameCleanup(gameId: number, finalNote: string) {
   console.log(`--- CLEANUP COMPLETED FOR GAME ${gameId} ---`);
 }
 
-// Global concurrency lock and interval enforcement to guarantee balls are drawn strictly one by one
-// and respect the minimum 8-second interval required for locution and gameplay.
-let isGloballyDrawingBall = false;
-let lastGlobalBallDrawTime = 0;
+// Global concurrency lock and interval enforcement strictly scoped by game and room
 const MIN_DRAW_INTERVAL_MS = 8000;
 
-// Function to draw the next ball automatically
+// Function to draw the next ball automatically (aislado por juego y sala)
 async function drawNextBall(game: any, isManual: boolean = false) {
+  const gameId = Number(game.id);
+  const roomTenant = (game.tenant_id || '').toLowerCase();
+  const roomAutoplay = getRoomAutoplay(roomTenant);
   const now = Date.now();
-  const timeSinceLastDraw = now - lastGlobalBallDrawTime;
+  const lastDrawForGame = lastBallDrawTimeByGame.get(gameId) || 0;
+  const timeSinceLastDraw = now - lastDrawForGame;
 
-  if (isGloballyDrawingBall) {
-    console.log('[drawNextBall] Skipping concurrent draw execution');
+  if (isDrawingBallByGame.has(gameId)) {
+    console.log(`[drawNextBall] Skipping concurrent draw execution for game ${gameId}`);
     return { error: 'Draw already in progress' };
   }
 
-  // SHIELD: Strictly enforce 8-second interval unless admin explicitly sets higher
+  // SHIELD: Strictly enforce 8-second interval per game unless admin explicitly sets higher
   const minInterval = 8000;
   if (timeSinceLastDraw < minInterval) {
     const waitRemaining = Math.ceil((minInterval - timeSinceLastDraw) / 1000);
-    console.log(`[drawNextBall] Rate limit triggered: please wait ${waitRemaining}s`);
+    console.log(`[drawNextBall] Rate limit triggered for game ${gameId}: please wait ${waitRemaining}s`);
     return { error: `Intervalo de seguridad activo. Por favor espera ${waitRemaining} segundos para la siguiente balota.` };
   }
 
-  isGloballyDrawingBall = true;
-  // IMMEDIATE TIMESTAMP UPDATE to occupy the time slot and prevent rapid successive calls
-  lastGlobalBallDrawTime = now;
-  if (serverAutoplay.gameId === game.id) {
-    serverAutoplay.lastDrawTime = now;
+  isDrawingBallByGame.add(gameId);
+  lastBallDrawTimeByGame.set(gameId, now);
+  if (roomAutoplay.gameId === gameId) {
+    roomAutoplay.lastDrawTime = now;
   }
 
   try {
@@ -6449,8 +6534,8 @@ async function drawNextBall(game: any, isManual: boolean = false) {
 
     // Check if autoplay was stopped while we were preparing the draw
     // (only relevant if called from the autonomous engine)
-    if (serverAutoplay.gameId === game.id && !serverAutoplay.isRunning && !isManual) {
-      console.log(`[Autoplay] Draw aborted for ball ${newBall} as autoplay was stopped.`);
+    if (roomAutoplay.gameId === game.id && !roomAutoplay.isRunning && !isManual) {
+      console.log(`[Autoplay] Draw aborted for ball ${newBall} as autoplay was stopped in room ${roomTenant}.`);
       return { error: 'Autoplay stopped' };
     }
 
@@ -6463,9 +6548,8 @@ async function drawNextBall(game: any, isManual: boolean = false) {
       return { error: updateError.message };
     }
 
-    // 1. BROADCAST IMMEDIATELY to users so locution starts exactly on time
-    // We send the ball number AND the full state with all patterns updated with that ball
-    await getChannel().publish('ball_drawn', String(newBall));
+    // 1. BROADCAST IMMEDIATELY ONLY to players of this specific room so locution starts exactly on time
+    await getChannel(freshGame.tenant_id).publish('ball_drawn', String(newBall));
 
     // SHIELD: Build full state with patterns so figures in play never disappear
     const fullState = await getGameFullState(game.id);
@@ -6478,14 +6562,14 @@ async function drawNextBall(game: any, isManual: boolean = false) {
       freshGame.status = 'playing';
       await broadcastGameUpdate(game.id, freshGame);
     }
-    console.log(`Ball drawn and broadcasted: ${newBall} for game ${game.id}`);
+    console.log(`Ball drawn and broadcasted: ${newBall} for game ${game.id} (room: ${freshGame.tenant_id || 'default'})`);
 
     // 2. Sync autoplay timer immediately after broadcast
     // (This ensures the next 8s interval starts counting FROM this moment)
     const finalNow = Date.now();
-    lastGlobalBallDrawTime = finalNow;
-    if (serverAutoplay.gameId === game.id) {
-      serverAutoplay.lastDrawTime = finalNow;
+    lastBallDrawTimeByGame.set(game.id, finalNow);
+    if (roomAutoplay.gameId === game.id) {
+      roomAutoplay.lastDrawTime = finalNow;
     }
 
     // 3. Perform winner checking asynchronously so drawNextBall returns IMMEDIATELY
@@ -6576,23 +6660,25 @@ async function drawNextBall(game: any, isManual: boolean = false) {
 
     return { ball: newBall };
   } finally {
-    isGloballyDrawingBall = false;
+    isDrawingBallByGame.delete(gameId);
   }
 }
 
-// Draw Ball
+// Draw Ball (Aislado por Sala / Tenant)
 app.post('/api/game/draw', requireAdmin, async (req, res) => {
   console.log('[API] DRAW: Start');
   try {
-    let game = await getActiveGame();
+    const targetTenant = getTenantIdFromRequest(req);
+    let game = await getActiveGame(targetTenant);
 
     if (!game) {
-      console.warn('[Draw] No active game');
-      return res.status(404).json({ error: 'No hay juego activo para sortear' });
+      console.warn(`[Draw] No active game for room ${targetTenant}`);
+      return res.status(404).json({ error: 'No hay juego activo para sortear en esta sala' });
     }
 
-    if (serverAutoplay.isPausedForWinner && Date.now() < serverAutoplay.winnerPauseUntil) {
-      const remaining = Math.ceil((serverAutoplay.winnerPauseUntil - Date.now()) / 1000);
+    const roomAutoplay = getRoomAutoplay(targetTenant);
+    if (roomAutoplay.isPausedForWinner && Date.now() < roomAutoplay.winnerPauseUntil) {
+      const remaining = Math.ceil((roomAutoplay.winnerPauseUntil - Date.now()) / 1000);
       return res.status(400).json({ error: `Celebración de ganador en curso. Por favor espera ${remaining} segundos para continuar.` });
     }
 
@@ -6602,7 +6688,7 @@ app.post('/api/game/draw', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: drawResult.error });
     }
 
-    console.log(`[Draw] SUCCESS: Ball ${drawResult.ball}`);
+    console.log(`[Draw] SUCCESS: Ball ${drawResult.ball} in room "${targetTenant || 'default'}"`);
     invalidateGameCaches();
     res.json({ ball: drawResult.ball });
   } catch (err: any) {
@@ -6611,24 +6697,27 @@ app.post('/api/game/draw', requireAdmin, async (req, res) => {
   }
 });
 
-// Reset Game
+// Reset Game (Aislado por Sala / Tenant)
 app.post('/api/game/reset', requireAdmin, async (req, res) => {
-  let game = await getActiveGame();
+  const targetTenant = getTenantIdFromRequest(req);
+  let game = await getActiveGame(targetTenant);
 
   if (!game) return res.status(404).json({ error: 'No active game' });
 
   await supabase.from('game').update({ drawn_balls: [], status: 'waiting' }).eq('id', game.id);
   await supabase.from('game_patterns').update({ winner_player_id: null, won_at: null }).eq('game_id', game.id);
   winLocks.clear(); // Clear win locks on reset
-  currentDjBgState = {
+
+  const stoppedDjState: DJBgState = {
     url: null,
     command: 'stop',
     name: '',
     volume: 0.6,
     timestamp: Date.now()
   };
+  currentDjBgStateByTenant.set(targetTenant, stoppedDjState);
   try {
-    await getChannel().publish('play_dj_bg', currentDjBgState);
+    await getChannel(targetTenant).publish('play_dj_bg', stoppedDjState);
   } catch (e) { }
 
   invalidateGameCaches();
@@ -8100,7 +8189,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         try {
           const { data } = await supabase.from('players').select('id, password, tenant_id').eq('phone', phone).maybeSingle();
           existingPlayerForWallet = data;
-        } catch {}
+        } catch { }
 
         if (existingPlayerForWallet && existingPlayerForWallet.password) {
           const authUser = await getAuthenticatedUser(req);
@@ -8616,7 +8705,8 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
         recipient: 'single',
         phone,
         title: '✅ ¡Recarga Exitosa!',
-        message: `Tu billetera digital ha sido recargada con éxito por $${numericAmount}. Tu saldo está disponible y tu billetera ha sido activada.`
+        message: `Tu billetera digital ha sido recargada con éxito por $${numericAmount}. Tu saldo está disponible y tu billetera ha sido activada.`,
+        tenantId: (req as any).tenantId
       });
 
       res.json({
@@ -8639,7 +8729,8 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
         recipient: 'single',
         phone,
         title: '⏳ Solicitud de Recarga Recibida',
-        message: 'Tu solicitud de recarga está siendo revisada de forma manual por un administrador. Te notificaremos en un momento.'
+        message: 'Tu solicitud de recarga está siendo revisada de forma manual por un administrador. Te notificaremos en un momento.',
+        tenantId: (req as any).tenantId
       });
 
       res.json({
@@ -8957,8 +9048,8 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const playerTenant = (player.tenant_id || 'default').toLowerCase();
       if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
-        return res.status(403).json({ 
-          error: `Acceso denegado: El jugador pertenece a la sala "${player.tenant_id}". No tienes autorización para aprobarlo.` 
+        return res.status(403).json({
+          error: `Acceso denegado: El jugador pertenece a la sala "${player.tenant_id}". No tienes autorización para aprobarlo.`
         });
       }
     }
@@ -9063,7 +9154,8 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
         phone: player.phone,
         title: '✅ ¡Pago y Cartones Aprobados!',
         message: `Hola ${player.name || 'Jugador'}, tu pago ha sido verificado y ${countStr} ya están disponibles en tu panel para jugar.`,
-        url: getAppUrl(req)
+        url: getAppUrl(req),
+        tenantId: player.tenant_id || (req as any).tenantId
       }).catch(() => { });
     }
 
@@ -9161,7 +9253,8 @@ app.post('/api/admin/players/approve-all', requireAdmin, async (req, res) => {
             phone: player.phone,
             title: '✅ ¡Pago y Cartones Aprobados!',
             message: `Hola ${player.name || 'Jugador'}, tus cartones han sido verificados y ya están listos en tu panel para jugar.`,
-            url: getAppUrl(req)
+            url: getAppUrl(req),
+            tenantId: player.tenant_id || (req as any).tenantId
           }).catch(() => { });
         }
         approvedCount++;
@@ -9213,7 +9306,8 @@ app.post('/api/players/:id/reject', requireAdmin, async (req, res) => {
         recipient: 'single',
         phone: player.phone,
         title,
-        message
+        message,
+        tenantId: player.tenant_id || (req as any).tenantId
       });
     }
 
@@ -9312,8 +9406,8 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const playerTenant = (player.tenant_id || 'default').toLowerCase();
       if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
-        return res.status(403).json({ 
-          error: `Acceso denegado: Esta solicitud pertenece a la sala "${player.tenant_id}". No puedes gestionarla.` 
+        return res.status(403).json({
+          error: `Acceso denegado: Esta solicitud pertenece a la sala "${player.tenant_id}". No puedes gestionarla.`
         });
       }
     }
@@ -9365,7 +9459,8 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
       recipient: 'single',
       phone: player.phone,
       title: '✅ Recarga Aprobada',
-      message: `¡Tu solicitud de recarga por $${amount} ha sido verificada y aprobada de forma manual por el organizador!`
+      message: `¡Tu solicitud de recarga por $${amount} ha sido verificada y aprobada de forma manual por el organizador!`,
+      tenantId: player.tenant_id || (req as any).tenantId
     });
 
     res.json({ success: true });
@@ -9392,8 +9487,8 @@ app.post('/api/admin/recharge-requests/:id/reject', requireAdmin, async (req, re
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const playerTenant = (player.tenant_id || 'default').toLowerCase();
       if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
-        return res.status(403).json({ 
-          error: `Acceso denegado: Esta solicitud pertenece a la sala "${player.tenant_id}". No puedes gestionarla.` 
+        return res.status(403).json({
+          error: `Acceso denegado: Esta solicitud pertenece a la sala "${player.tenant_id}". No puedes gestionarla.`
         });
       }
     }
@@ -9437,7 +9532,8 @@ app.post('/api/admin/recharge-requests/:id/reject', requireAdmin, async (req, re
       recipient: 'single',
       phone: player.phone,
       title: '❌ Recarga Rechazada',
-      message: `Tu comprobante de recarga por $${amount} no pudo ser aprobado debido a inconsistencias o falta de claridad. Por favor inténtalo de nuevo.`
+      message: `Tu comprobante de recarga por $${amount} no pudo ser aprobado debido a inconsistencias o falta de claridad. Por favor inténtalo de nuevo.`,
+      tenantId: player.tenant_id || (req as any).tenantId
     });
 
     res.json({ success: true });
@@ -9847,8 +9943,9 @@ function getAppUrl(req?: any): string {
 
 
 // Helper to send notifications and save to DB
-async function sendPushNotification({ recipient, phone, title, message, url }: { recipient: 'all' | 'single', phone?: string, title: string, message: string, url?: string }) {
-  console.log(`[Notification] Initiating send: recipient=${recipient}, phone=${phone}, title=${title}`);
+async function sendPushNotification({ recipient, phone, title, message, url, tenantId }: { recipient: 'all' | 'single', phone?: string, title: string, message: string, url?: string, tenantId?: string }) {
+  const scopedTenant = (tenantId || 'default').toLowerCase();
+  console.log(`[Notification] Initiating send: recipient=${recipient}, phone=${phone}, title=${title}, tenant=${scopedTenant}`);
   try {
     const globalSettings = await getGameSettings('global') || {};
     if (globalSettings.maintenance_mode && recipient === 'all') {
@@ -9864,22 +9961,31 @@ async function sendPushNotification({ recipient, phone, title, message, url }: {
 
     if (recipient === 'all') {
       if (supabase) {
-        const { data: players } = await supabase.from('players').select('id, phone');
+        // STRICT TENANT ISOLATION: only fetch players from the same room
+        let playersQuery = supabase.from('players').select('id, phone, tenant_id');
+        if (scopedTenant && scopedTenant !== 'default' && scopedTenant !== 'global') {
+          playersQuery = playersQuery.eq('tenant_id', scopedTenant);
+        }
+        const { data: players } = await playersQuery;
         if (players) {
           players.forEach(p => {
             playersToNotifyInApp.push(`player-${p.id}`);
             if (p.phone) playersToNotifyInApp.push(p.phone);
           });
         }
+        console.log(`[Notification] Broadcast scoped to tenant "${scopedTenant}": ${players?.length || 0} players`);
 
-        // Also notify all admins if possible (optional but good for the bell)
+        // Notify tenant admins only (not super-admins from other tenants)
         try {
-          const { data: admins } = await supabase.auth.admin.listUsers() as any;
-          if (admins?.users) {
-            admins.users.forEach(u => playersToNotifyInApp.push(u.id));
+          const { data: tenantAdmins } = await supabase
+            .from('admin_sessions')
+            .select('uid')
+            .eq('tenant_id', scopedTenant);
+          if (tenantAdmins) {
+            tenantAdmins.forEach(a => { if (a.uid) playersToNotifyInApp.push(String(a.uid)); });
           }
         } catch (e) {
-          console.warn('[Notification] Could not list admins for in-app notification:', e);
+          console.warn('[Notification] Could not list tenant admins for in-app notification:', e);
         }
       }
     } else if (phone) {
@@ -9897,15 +10003,16 @@ async function sendPushNotification({ recipient, phone, title, message, url }: {
       }
     }
 
-    // Save to DB for the in-app Bell
+    // Save to DB for the in-app Bell — ALWAYS include tenant_id for room isolation
     if (playersToNotifyInApp.length > 0 && supabase) {
       const uniqueInApp = Array.from(new Set(playersToNotifyInApp));
-      console.log(`[Notification] Saving to DB for ${uniqueInApp.length} user keys`);
+      console.log(`[Notification] Saving to DB for ${uniqueInApp.length} user keys (tenant: ${scopedTenant})`);
       const notificationsToInsert = uniqueInApp.map(id => ({
         user_id: id,
         title,
         message,
-        read: false
+        read: false,
+        tenant_id: scopedTenant   // Strict room ownership
       }));
 
       const BATCH_SIZE = 500;
@@ -10172,12 +10279,14 @@ app.post('/api/notifications/welcome', async (req, res) => {
       `🍀 ¡Te deseamos muchísima suerte en el juego!`
     ].join('\n');
 
+    const tenantId = (req as any).tenantId || getTenantIdFromRequest(req) || 'default';
     const result = await sendPushNotification({
       recipient: 'single',
       phone: phone || undefined,
       title,
       message,
-      url: getAppUrl(req)
+      url: getAppUrl(req),
+      tenantId
     });
 
     res.json(result);
@@ -10188,12 +10297,15 @@ app.post('/api/notifications/welcome', async (req, res) => {
 
 app.post('/api/notifications/send', requireAdmin, async (req, res) => {
   const { recipient, phone, title, message } = req.body;
+  // Always scope to the admin's tenant room — never leak to other rooms
+  const tenantId = (req as any).tenantId || getTenantIdFromRequest(req) || 'default';
   const result = await sendPushNotification({
     recipient,
     phone,
     title,
     message,
-    url: req.headers.origin
+    url: req.headers.origin as string | undefined,
+    tenantId
   });
 
   if (result.success) {
@@ -10573,7 +10685,8 @@ app.post('/api/admin/broadcast-announcement', async (req, res) => {
       recentAnnouncements.delete(keys[0]);
     }
 
-    await getChannel().publish('announcement_tts', {
+    const targetTenant = getTenantIdFromRequest(req);
+    await getChannel(targetTenant).publish('announcement_tts', {
       id: announcementId,
       text,
       voice: voice || 'Kore',
@@ -10799,16 +10912,18 @@ setTimeout(() => {
     .catch((err) => console.warn('[TTS Prewarm] Notice:', err?.message || err));
 }, 1000);
 
-async function broadcastVoiceAnnouncement(text: string, voice: string = 'Kore') {
+async function broadcastVoiceAnnouncement(text: string, voice: string = 'Kore', tenantId?: string) {
   try {
     const cleanKey = (text || '').trim().toLowerCase();
+    const targetTenant = (tenantId || '').trim().toLowerCase();
+    const dedupeKey = `${targetTenant || 'global'}:${cleanKey}`;
     const now = Date.now();
-    const lastSent = recentBroadcastTexts.get(cleanKey);
+    const lastSent = recentBroadcastTexts.get(dedupeKey);
     if (lastSent && (now - lastSent < 20000)) {
-      console.log(`[Voice Announcement] Skipping repeated server broadcast within 20s: "${cleanKey.substring(0, 40)}..."`);
+      console.log(`[Voice Announcement] Skipping repeated server broadcast within 20s for room "${targetTenant || 'global'}": "${cleanKey.substring(0, 40)}..."`);
       return { success: true, skipped: true };
     }
-    recentBroadcastTexts.set(cleanKey, now);
+    recentBroadcastTexts.set(dedupeKey, now);
     if (recentBroadcastTexts.size > 80) {
       for (const [k, v] of recentBroadcastTexts.entries()) {
         if (now - v > 30000) recentBroadcastTexts.delete(k);
@@ -10837,7 +10952,7 @@ async function broadcastVoiceAnnouncement(text: string, voice: string = 'Kore') 
       recentAnnouncements.delete(keys[0]);
     }
 
-    await getChannel().publish('announcement_tts', {
+    await getChannel(targetTenant).publish('announcement_tts', {
       id: announcementId,
       text,
       voice: voice || 'Kore',
@@ -10845,7 +10960,7 @@ async function broadcastVoiceAnnouncement(text: string, voice: string = 'Kore') 
       timestamp: Date.now()
     });
 
-    console.log(`[Voice Announcement] Broadcasted: "${text}" (instant: ${!!prewarmedVoiceAudioCache.has(cleanKey)})`);
+    console.log(`[Voice Announcement] Broadcasted to room "${targetTenant || 'default'}": "${text}" (instant: ${!!prewarmedVoiceAudioCache.has(cleanKey)})`);
     return { success: true, id: announcementId };
   } catch (err: any) {
     console.error('[Voice Announcement] Error broadcasting voice announcement:', err);
@@ -10898,7 +11013,7 @@ async function acquireAnnouncementLock(gameId: number, lockKey: 'announced_5min'
 
 const GAME_INTRO_TEXT = "¡Bienvenidos, jugadores! ¡Ya vamos a comenzar nuestro bingo! Estén muy atentos a sus cartones, marquen cada número que vaya saliendo y completen sus figuras, las figuras se completaran al azar. Y recuerden… cuando completen una figura, ¡presionen BINGO para reclamar su premio! . ¡Mucha suerte para todos! ¡Que comience el juego… y que gane el mejor!";
 
-async function broadcastGameStartAnnouncement(gameId: number) {
+async function broadcastGameStartAnnouncement(gameId: number, tenantId?: string) {
   const numId = Number(gameId);
 
   // Distributed database lock to prevent concurrent container double-play
@@ -10917,58 +11032,55 @@ async function broadcastGameStartAnnouncement(gameId: number) {
   state.announced_auto_start = true;
   gameAnnouncements.set(numId, state);
 
-  await broadcastVoiceAnnouncement(GAME_INTRO_TEXT, 'Kore');
-  serverAutoplay.lastAnnouncementTime = Date.now();
-  console.log(`[BingoEngine] Start announcement sent once for game ${numId}`);
+  let targetTenant = tenantId;
+  if (!targetTenant) {
+    const game = await getGameFullState(numId);
+    if (game && game.tenant_id) targetTenant = game.tenant_id;
+  }
+
+  await broadcastVoiceAnnouncement(GAME_INTRO_TEXT, 'Kore', targetTenant);
+  const roomAutoplay = getRoomAutoplay(targetTenant);
+  roomAutoplay.lastAnnouncementTime = Date.now();
+  console.log(`[BingoEngine] Start announcement sent once for game ${numId} to room "${targetTenant || 'default'}"`);
   return true;
 }
 
-// Server-authoritative autoplay state
-interface ServerAutoplayState {
-  gameId: number | null;
-  isRunning: boolean;
-  intervalMs: number;
-  isPausedForWinner: boolean;
-  winnerPauseUntil: number;
-  lastDrawTime: number;
-  isDrawing: boolean;
-  lastAnnouncementTime: number; // To prevent balls while announcing
-}
-const serverAutoplay: ServerAutoplayState = {
-  gameId: null,
-  isRunning: false,
-  intervalMs: 8000,
-  isPausedForWinner: false,
-  winnerPauseUntil: 0,
-  lastDrawTime: 0,
-  isDrawing: false,
-  lastAnnouncementTime: 0
-};
-
-// API routes for Admin Autoplay control
-app.post('/api/admin/game/autoplay/start', async (req, res) => {
+// API routes for Admin Autoplay control (Aisladas estrictamente por Sala / Tenant)
+app.post('/api/admin/game/autoplay/start', requireAdmin, async (req, res) => {
   try {
     const { interval, gameId } = req.body;
+    const targetTenant = getTenantIdFromRequest(req);
+    const roomAutoplay = getRoomAutoplay(targetTenant);
+
     let game: any = null;
     if (gameId) {
       game = await getGameFullState(Number(gameId));
     }
     if (!game) {
-      game = await getActiveGame();
+      game = await getActiveGame(targetTenant);
     }
     if (!game) {
-      const { data: schedGame } = await supabase.from('game')
+      let schedQuery = supabase.from('game')
         .select('*')
         .in('status', ['waiting', 'scheduled', 'playing', 'paused'])
         .order('id', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
+
+      if (targetTenant && targetTenant !== 'global') {
+        if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+          schedQuery = schedQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+        } else {
+          schedQuery = schedQuery.eq('tenant_id', targetTenant.toLowerCase());
+        }
+      }
+
+      const { data: schedGame } = await schedQuery.maybeSingle();
       if (schedGame) {
         game = await getGameFullState(schedGame.id);
       }
     }
     if (!game) {
-      return res.status(404).json({ error: 'No hay juego activo para iniciar autoplay' });
+      return res.status(404).json({ error: 'No hay juego activo en esta sala para iniciar autoplay' });
     }
 
     const prevStatus = game.status;
@@ -10994,16 +11106,16 @@ app.post('/api/admin/game/autoplay/start', async (req, res) => {
 
         if (isResumingGame) {
           const lastResumeKey = `resume_announcement_${game.id}`;
-          const lastResumeSent = recentBroadcastTexts.get(lastResumeKey) || 0;
+          const lastResumeSent = recentBroadcastTexts.get(`${targetTenant}:${lastResumeKey}`) || 0;
           if (nowTime - lastResumeSent > 15000) {
-            recentBroadcastTexts.set(lastResumeKey, nowTime);
-            broadcastVoiceAnnouncement(RESUME_ANNOUNCEMENT_TEXT, 'Kore');
-            serverAutoplay.lastAnnouncementTime = nowTime;
+            recentBroadcastTexts.set(`${targetTenant}:${lastResumeKey}`, nowTime);
+            broadcastVoiceAnnouncement(RESUME_ANNOUNCEMENT_TEXT, 'Kore', targetTenant);
+            roomAutoplay.lastAnnouncementTime = nowTime;
           } else {
             console.log(`[Autoplay] Resume announcement skipped (already announced within 15s for game ${game.id})`);
           }
         } else {
-          await broadcastGameStartAnnouncement(Number(game.id));
+          await broadcastGameStartAnnouncement(Number(game.id), targetTenant);
         }
       } else {
         // Just sync our local variable but don't re-trigger announcements
@@ -11011,68 +11123,66 @@ app.post('/api/admin/game/autoplay/start', async (req, res) => {
       }
     }
 
-    // If autoplay is already actively running for this game, do not reset timers or interrupt ongoing balls
-    if (serverAutoplay.isRunning && serverAutoplay.gameId === game.id) {
-      console.log(`[Autoplay] Already actively running for game ${game.id}`);
-      return res.json({ success: true, isRunning: true, interval: serverAutoplay.intervalMs / 1000 });
+    // If autoplay is already actively running for this game in this room, do not reset timers or interrupt ongoing balls
+    if (roomAutoplay.isRunning && roomAutoplay.gameId === game.id) {
+      console.log(`[Autoplay] Already actively running for game ${game.id} in room ${targetTenant}`);
+      return res.json({ success: true, isRunning: true, interval: roomAutoplay.intervalMs / 1000 });
     }
 
-    serverAutoplay.gameId = game.id;
-    serverAutoplay.isRunning = true;
+    roomAutoplay.gameId = game.id;
+    roomAutoplay.isRunning = true;
     const finalInterval = (interval && Number(interval) >= 8) ? Number(interval) * 1000 : 8000;
-    serverAutoplay.intervalMs = finalInterval;
-    serverAutoplay.isPausedForWinner = false;
-    serverAutoplay.winnerPauseUntil = 0;
+    roomAutoplay.intervalMs = finalInterval;
+    roomAutoplay.isPausedForWinner = false;
+    roomAutoplay.winnerPauseUntil = 0;
 
     const drawnBallsCount = Array.isArray(game.drawn_balls) ? game.drawn_balls.length : 0;
     const isResuming = prevStatus === 'paused' || drawnBallsCount > 0;
 
     if (isResuming) {
-      // Ensure resume announcement is broadcasted immediately if not sent recently
       const lastResumeKey = `resume_announcement_${game.id}`;
-      const lastResumeSent = recentBroadcastTexts.get(lastResumeKey) || 0;
+      const lastResumeSent = recentBroadcastTexts.get(`${targetTenant}:${lastResumeKey}`) || 0;
       if (Date.now() - lastResumeSent > 15000) {
-        recentBroadcastTexts.set(lastResumeKey, Date.now());
-        broadcastVoiceAnnouncement(RESUME_ANNOUNCEMENT_TEXT, 'Kore');
-        serverAutoplay.lastAnnouncementTime = Date.now();
+        recentBroadcastTexts.set(`${targetTenant}:${lastResumeKey}`, Date.now());
+        broadcastVoiceAnnouncement(RESUME_ANNOUNCEMENT_TEXT, 'Kore', targetTenant);
+        roomAutoplay.lastAnnouncementTime = Date.now();
       }
 
-      // User requirement: When reactivating automatic manually after pause, start the game in exactly 5 seconds
-      serverAutoplay.lastDrawTime = Date.now() + 5000 - finalInterval;
-      console.log(`[Autoplay] Resumed for game ${game.id}. Next ball scheduled in exactly 5 seconds.`);
+      roomAutoplay.lastDrawTime = Date.now() + 5000 - finalInterval;
+      console.log(`[Autoplay] Resumed for game ${game.id} in room ${targetTenant}. Next ball scheduled in exactly 5 seconds.`);
     } else {
-      // First ball of brand-new game: Intro (approx 27s) + 10s buffer = 37s total
-      // Subtract one interval to sync with the drawing logic
-      serverAutoplay.lastDrawTime = Date.now() + 37000 - finalInterval;
-      console.log(`[Autoplay] Brand new start for game ${game.id}. Next ball scheduled in 37s (after intro).`);
+      roomAutoplay.lastDrawTime = Date.now() + 37000 - finalInterval;
+      console.log(`[Autoplay] Brand new start for game ${game.id} in room ${targetTenant}. Next ball scheduled in 37s (after intro).`);
     }
 
-    await getChannel().publish('server_autoplay_updated', {
+    await getChannel(targetTenant).publish('server_autoplay_updated', {
       isRunning: true,
       gameId: game.id,
       interval: finalInterval / 1000
     });
 
-    console.log(`[Autoplay] Started on server for game ${game.id} with interval ${serverAutoplay.intervalMs}ms`);
-    res.json({ success: true, isRunning: true, interval: serverAutoplay.intervalMs / 1000 });
+    console.log(`[Autoplay] Started on server for game ${game.id} (room: ${targetTenant}) with interval ${roomAutoplay.intervalMs}ms`);
+    res.json({ success: true, isRunning: true, interval: roomAutoplay.intervalMs / 1000 });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/admin/game/autoplay/stop', async (req, res) => {
+app.post('/api/admin/game/autoplay/stop', requireAdmin, async (req, res) => {
   try {
-    serverAutoplay.isRunning = false;
-    serverAutoplay.isPausedForWinner = false;
+    const targetTenant = getTenantIdFromRequest(req);
+    const roomAutoplay = getRoomAutoplay(targetTenant);
 
-    let targetGameId = serverAutoplay.gameId;
+    roomAutoplay.isRunning = false;
+    roomAutoplay.isPausedForWinner = false;
+
+    let targetGameId = roomAutoplay.gameId;
     if (!targetGameId) {
-      const activeGame = await getActiveGame();
+      const activeGame = await getActiveGame(targetTenant);
       if (activeGame) targetGameId = activeGame.id;
     }
 
     if (targetGameId) {
-      // Formally pause the game in database so autoplay engines and background loops stop permanently
       await supabase.from('game').update({ status: 'paused' }).eq('id', targetGameId);
       await broadcastGameUpdate(targetGameId);
     }
@@ -11080,13 +11190,13 @@ app.post('/api/admin/game/autoplay/stop', async (req, res) => {
     invalidateAutoplayCache();
     invalidateGameCaches();
 
-    await getChannel().publish('server_autoplay_updated', {
+    await getChannel(targetTenant).publish('server_autoplay_updated', {
       isRunning: false,
       gameId: targetGameId,
-      interval: serverAutoplay.intervalMs / 1000
+      interval: roomAutoplay.intervalMs / 1000
     });
 
-    console.log(`[Autoplay] Stopped on server and game ${targetGameId} set to paused.`);
+    console.log(`[Autoplay] Stopped on server for room ${targetTenant} and game ${targetGameId} set to paused.`);
     res.json({ success: true, isRunning: false, gameId: targetGameId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -11094,61 +11204,74 @@ app.post('/api/admin/game/autoplay/stop', async (req, res) => {
 });
 
 app.get('/api/admin/game/autoplay/status', (req, res) => {
+  const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+  const roomAutoplay = getRoomAutoplay(targetTenant);
   res.json({
-    isRunning: serverAutoplay.isRunning,
-    gameId: serverAutoplay.gameId,
-    interval: serverAutoplay.intervalMs / 1000,
-    isPausedForWinner: serverAutoplay.isPausedForWinner
+    isRunning: roomAutoplay.isRunning,
+    gameId: roomAutoplay.gameId,
+    interval: roomAutoplay.intervalMs / 1000,
+    isPausedForWinner: roomAutoplay.isPausedForWinner
   });
 });
 
-app.post('/api/admin/game/autoplay/update-interval', async (req, res) => {
+app.post('/api/admin/game/autoplay/update-interval', requireAdmin, async (req, res) => {
   try {
     const { interval } = req.body;
+    const targetTenant = getTenantIdFromRequest(req);
+    const roomAutoplay = getRoomAutoplay(targetTenant);
+
     const numInterval = Number(interval);
     const validInterval = (numInterval && numInterval >= 8) ? numInterval : 8;
 
-    serverAutoplay.intervalMs = validInterval * 1000;
+    roomAutoplay.intervalMs = validInterval * 1000;
 
-    // Save to settings
-    await saveGameSettings('global', { autoplay_interval: validInterval });
-
-    await getChannel().publish('server_autoplay_updated', {
-      isRunning: serverAutoplay.isRunning,
-      gameId: serverAutoplay.gameId,
+    await getChannel(targetTenant).publish('server_autoplay_updated', {
+      isRunning: roomAutoplay.isRunning,
+      gameId: roomAutoplay.gameId,
       interval: validInterval
     });
 
-    console.log(`[Autoplay] Updated interval on server to ${validInterval}s`);
-    res.json({ success: true, interval: validInterval, isRunning: serverAutoplay.isRunning });
+    console.log(`[Autoplay] Updated interval on server for room ${targetTenant} to ${validInterval}s`);
+    res.json({ success: true, interval: validInterval, isRunning: roomAutoplay.isRunning });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Endpoint to schedule or modify scheduled start time of a game
-app.post('/api/admin/game/schedule', async (req, res) => {
+// Endpoint to schedule or modify scheduled start time of a game (Aislado por Sala / Tenant)
+app.post('/api/admin/game/schedule', requireAdmin, async (req, res) => {
   try {
     const { gameId, startTime, interval } = req.body;
+    const targetTenant = getTenantIdFromRequest(req);
+    const roomAutoplay = getRoomAutoplay(targetTenant);
     let targetGameId = gameId;
 
     if (!targetGameId) {
-      const activeGame = await getActiveGame();
+      const activeGame = await getActiveGame(targetTenant);
       if (activeGame) {
         targetGameId = activeGame.id;
       } else {
-        const { data: schedGame } = await supabase.from('game')
+        let schedQuery = supabase.from('game')
           .select('id')
           .in('status', ['waiting', 'scheduled', 'paused'])
           .order('id', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .limit(1);
+
+        if (targetTenant && targetTenant !== 'global') {
+          if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+            schedQuery = schedQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+          } else {
+            schedQuery = schedQuery.eq('tenant_id', targetTenant.toLowerCase());
+          }
+        }
+
+        const { data: schedGame } = await schedQuery.maybeSingle();
         if (schedGame) targetGameId = schedGame.id;
       }
     }
 
     if (!targetGameId) {
-      return res.status(404).json({ error: 'No se encontró un juego para programar' });
+      return res.status(404).json({ error: 'No se encontró un juego para programar en esta sala' });
     }
 
     const isoDate = new Date(startTime).toISOString();
@@ -11167,8 +11290,8 @@ app.post('/api/admin/game/schedule', async (req, res) => {
     if (error) throw error;
 
     if (interval && Number(interval) >= 1) {
-      serverAutoplay.intervalMs = Number(interval) * 1000;
-      await saveGameSettings('global', { autoplay_interval: Number(interval) });
+      roomAutoplay.intervalMs = Number(interval) * 1000;
+      await saveGameSettings(targetGameId, { autoplay_interval: Number(interval) });
     }
 
     // Reset announcement tracking for this game
@@ -11177,7 +11300,7 @@ app.post('/api/admin/game/schedule', async (req, res) => {
     await broadcastGameUpdate(targetGameId);
     invalidateGameCaches();
 
-    // Trigger automatic broadcast push notification with exact game details
+    // Trigger automatic broadcast push notification strictly to this room's players
     try {
       const fullGame = await getGameFullState(targetGameId);
       const gameSettings = await getGameSettings(targetGameId);
@@ -11191,37 +11314,48 @@ app.post('/api/admin/game/schedule', async (req, res) => {
         recipient: 'all',
         title: notifTitle,
         message: notifMessage,
-        url: getAppUrl(req)
+        url: getAppUrl(req),
+        tenantId: targetTenant
       }).catch(e => console.warn('[Notification] Game schedule push note error:', e));
     } catch (schedNotifErr) {
       console.warn('[Notification] Game schedule format error:', schedNotifErr);
     }
 
-    console.log(`[Schedule] Scheduled game ${targetGameId} for start_time: ${isoDate}`);
+    console.log(`[Schedule] Scheduled game ${targetGameId} for start_time: ${isoDate} in room "${targetTenant || 'default'}"`);
     res.json({ success: true, game: updatedGame });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Endpoint to cancel a scheduled game start time
-app.post('/api/admin/game/schedule/cancel', async (req, res) => {
+// Endpoint to cancel a scheduled game start time (Aislado por Sala / Tenant)
+app.post('/api/admin/game/schedule/cancel', requireAdmin, async (req, res) => {
   try {
     const { gameId } = req.body;
+    const targetTenant = getTenantIdFromRequest(req);
     let targetGameId = gameId;
 
     if (!targetGameId) {
-      const { data: schedGame } = await supabase.from('game')
+      let schedQuery = supabase.from('game')
         .select('id')
         .eq('status', 'scheduled')
         .order('id', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
+
+      if (targetTenant && targetTenant !== 'global') {
+        if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+          schedQuery = schedQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+        } else {
+          schedQuery = schedQuery.eq('tenant_id', targetTenant.toLowerCase());
+        }
+      }
+
+      const { data: schedGame } = await schedQuery.maybeSingle();
       if (schedGame) targetGameId = schedGame.id;
     }
 
     if (!targetGameId) {
-      return res.status(404).json({ error: 'No hay juego programado para cancelar' });
+      return res.status(404).json({ error: 'No hay juego programado para cancelar en esta sala' });
     }
 
     const { data: updatedGame, error } = await supabase
@@ -11292,6 +11426,8 @@ async function startBackgroundGameLoop() {
           const startTime = new Date(game.start_time).getTime();
           const diffMs = startTime - now;
           const gameId = Number(game.id);
+          const roomTenant = (game.tenant_id || '').toLowerCase();
+          const roomAutoplay = getRoomAutoplay(roomTenant);
           let state = gameAnnouncements.get(gameId) || {};
 
           // A. 5-Minute Warning (triggered once between 5m and 1m before)
@@ -11300,10 +11436,10 @@ async function startBackgroundGameLoop() {
             if (locked) {
               state.announced_5min = true;
               gameAnnouncements.set(gameId, state);
-              console.log(`[AutoEngine] Triggering 5-minute pre-announcement for game ${gameId}`);
+              console.log(`[AutoEngine] Triggering 5-minute pre-announcement for game ${gameId} in room "${roomTenant || 'default'}"`);
 
-              broadcastVoiceAnnouncement(`¡Atención jugadores! El Bingo ${game.name || ''} comenzará en 5 minutos. Por favor alisten sus cartones y prepárense para jugar. ¡Buena suerte a todos!`, 'Kore');
-              serverAutoplay.lastAnnouncementTime = Date.now();
+              broadcastVoiceAnnouncement(`¡Atención jugadores! El Bingo ${game.name || ''} comenzará en 5 minutos. Por favor alisten sus cartones y prepárense para jugar. ¡Buena suerte a todos!`, 'Kore', roomTenant);
+              roomAutoplay.lastAnnouncementTime = Date.now();
             }
           }
 
@@ -11313,10 +11449,10 @@ async function startBackgroundGameLoop() {
             if (locked) {
               state.announced_1min = true;
               gameAnnouncements.set(gameId, state);
-              console.log(`[AutoEngine] Triggering 1-minute warning for game ${gameId}`);
+              console.log(`[AutoEngine] Triggering 1-minute warning for game ${gameId} in room "${roomTenant || 'default'}"`);
 
-              broadcastVoiceAnnouncement(`¡Atención! Falta 1 minuto para iniciar el Bingo. Verifiquen sus cartones en pantalla.`, 'Kore');
-              serverAutoplay.lastAnnouncementTime = Date.now();
+              broadcastVoiceAnnouncement(`¡Atención! Falta 1 minuto para iniciar el Bingo. Verifiquen sus cartones en pantalla.`, 'Kore', roomTenant);
+              roomAutoplay.lastAnnouncementTime = Date.now();
             }
           }
 
@@ -11334,24 +11470,23 @@ async function startBackgroundGameLoop() {
               continue;
             }
 
-            console.log(`[AutoEngine] Scheduled start time reached for game ${gameId}. Auto-activating...`);
+            console.log(`[AutoEngine] Scheduled start time reached for game ${gameId} in room "${roomTenant || 'default'}". Auto-activating...`);
             await broadcastGameUpdate(gameId);
             invalidateGameCaches();
 
             // Announce start via consolidated helper (non-blocking)
-            broadcastGameStartAnnouncement(gameId);
+            broadcastGameStartAnnouncement(gameId, roomTenant);
 
-            // Engage Server Autoplay
-            serverAutoplay.gameId = gameId;
-            serverAutoplay.isRunning = true;
-            serverAutoplay.isPausedForWinner = false;
+            // Engage Room Autoplay for this specific room
+            roomAutoplay.gameId = gameId;
+            roomAutoplay.isRunning = true;
+            roomAutoplay.isPausedForWinner = false;
 
-            // Default interval is 8s
-            const interval = serverAutoplay.intervalMs || 8000;
+            const interval = roomAutoplay.intervalMs || 8000;
             // After intro (approx 27s) wait 10 more seconds -> 37s total from now
-            serverAutoplay.lastDrawTime = Date.now() + 37000 - interval;
+            roomAutoplay.lastDrawTime = Date.now() + 37000 - interval;
 
-            await getChannel().publish('server_autoplay_updated', {
+            await getChannel(roomTenant).publish('server_autoplay_updated', {
               isRunning: true,
               gameId: gameId,
               interval: interval / 1000
@@ -11360,47 +11495,41 @@ async function startBackgroundGameLoop() {
         }
       }
 
-      // 2. Server-Side Autonomous Ball Drawing
-      if (serverAutoplay.isRunning && serverAutoplay.gameId && !serverAutoplay.isDrawing) {
-        // Prevent drawing if an announcement was just made (intro, winner, or manual)
-        const timeSinceAnnouncement = now - serverAutoplay.lastAnnouncementTime;
+      // 2. Server-Side Autonomous Ball Drawing: Ejecución aislada e independiente para CADA sala activa
+      for (const roomAutoplay of roomAutoplays.values()) {
+        if (!roomAutoplay.isRunning || !roomAutoplay.gameId || roomAutoplay.isDrawing) continue;
+
+        const roomTenant = roomAutoplay.tenantId;
+
+        // Prevent drawing if an announcement was just made in this room
+        const timeSinceAnnouncement = now - roomAutoplay.lastAnnouncementTime;
         if (timeSinceAnnouncement < 4000) {
-          // Brief pause for introductory voice before ball drawing starts
-          return;
+          continue;
         }
 
-        // Fetch and cache the game state during autoplay for 3 seconds to drastically reduce Supabase query rate
-        let game = cachedAutoplayGame;
-        if (!game || !lastAutoplayGameFetchTime || (now - lastAutoplayGameFetchTime > 3000) || game.id !== serverAutoplay.gameId) {
-          game = await getGameFullState(serverAutoplay.gameId);
-          cachedAutoplayGame = game;
-          lastAutoplayGameFetchTime = now;
-        }
+        const game = await getGameFullState(roomAutoplay.gameId);
+        if (!game) continue;
 
-        // If game not found, skip this iteration (might be temporary network issue)
-        if (!game) return;
-
-        // If game is finished, stop autoplay and notify UI
+        // If game is finished, stop autoplay in this room
         if (game.status === 'finished') {
-          serverAutoplay.isRunning = false;
-          serverAutoplay.gameId = null;
-          await getChannel().publish('server_autoplay_updated', {
+          roomAutoplay.isRunning = false;
+          roomAutoplay.gameId = null;
+          await getChannel(roomTenant).publish('server_autoplay_updated', {
             isRunning: false,
             gameId: null,
             interval: 8
           });
-          return;
+          continue;
         }
 
-        // A. Handle Winner Celebration Pause
-        if (serverAutoplay.isPausedForWinner) {
-          if (now < serverAutoplay.winnerPauseUntil) {
-            // Still in celebration pause (showing modal, playing fanfare)
-            return;
+        // A. Handle Winner Celebration Pause strictly for this room
+        if (roomAutoplay.isPausedForWinner) {
+          if (now < roomAutoplay.winnerPauseUntil) {
+            continue;
           } else {
-            // Celebration pause finished! Resume autonomous ball drawing
-            serverAutoplay.isPausedForWinner = false;
-            console.log(`[AutoEngine] Winner celebration completed. Resuming autonomous ball drawing for game ${game.id}...`);
+            // Celebration pause finished for this room! Resume autonomous ball drawing
+            roomAutoplay.isPausedForWinner = false;
+            console.log(`[AutoEngine] Winner celebration completed in room "${roomTenant}". Resuming autonomous ball drawing for game ${game.id}...`);
 
             const { data: allPatterns } = await supabase.from('game_patterns')
               .select('id, winner_player_id')
@@ -11409,77 +11538,75 @@ async function startBackgroundGameLoop() {
             const remainingPatterns = (allPatterns || []).filter(p => !p.winner_player_id);
 
             if (allPatterns && allPatterns.length > 0 && remainingPatterns.length === 0) {
-              console.log(`[AutoEngine] All patterns won for game ${game.id}. Completing game after celebration.`);
-              broadcastVoiceAnnouncement(`¡Felicitaciones a todos los ganadores! Todos los patrones han sido completados. El juego ha finalizado.`, 'Kore');
-              serverAutoplay.isRunning = false;
-              serverAutoplay.gameId = null;
+              console.log(`[AutoEngine] All patterns won for game ${game.id} in room "${roomTenant}". Completing game after celebration.`);
+              broadcastVoiceAnnouncement(`¡Felicitaciones a todos los ganadores! Todos los patrones han sido completados. El juego ha finalizado.`, 'Kore', roomTenant);
+              roomAutoplay.isRunning = false;
+              roomAutoplay.gameId = null;
               await endGameCleanup(game.id, game.final_note || "¡Todos los patrones han sido completados!");
-              await getChannel().publish('server_autoplay_updated', {
+              await getChannel(roomTenant).publish('server_autoplay_updated', {
                 isRunning: false,
                 gameId: null,
                 interval: 8
               });
-              return;
+              continue;
             }
 
             if (allPatterns && allPatterns.length > 0 && remainingPatterns.length > 0) {
-              console.log(`[AutoEngine] Continuing game ${game.id} with ${remainingPatterns.length} remaining patterns.`);
-              broadcastVoiceAnnouncement(`¡Continuamos en el juego con la siguiente figura ganadora! ¡Mucha suerte a todos los participantes!`, 'Kore');
+              console.log(`[AutoEngine] Continuing game ${game.id} in room "${roomTenant}" with ${remainingPatterns.length} remaining patterns.`);
+              broadcastVoiceAnnouncement(`¡Continuamos en el juego con la siguiente figura ganadora! ¡Mucha suerte a todos los participantes!`, 'Kore', roomTenant);
             } else {
-              console.log(`[AutoEngine] Continuing ball draws for game ${game.id}.`);
-              broadcastVoiceAnnouncement(`¡Continuamos en el juego con el sorteo de balotas! ¡Mucha suerte a todos los participantes!`, 'Kore');
+              console.log(`[AutoEngine] Continuing ball draws for game ${game.id} in room "${roomTenant}".`);
+              broadcastVoiceAnnouncement(`¡Continuamos en el juego con el sorteo de balotas! ¡Mucha suerte a todos los participantes!`, 'Kore', roomTenant);
             }
 
-            serverAutoplay.lastAnnouncementTime = Date.now();
+            roomAutoplay.lastAnnouncementTime = Date.now();
 
             // Force game status back to playing in DB and memory
             await supabase.from('game').update({ status: 'playing' }).eq('id', game.id);
             invalidateAutoplayCache();
             await broadcastGameUpdate(game.id);
 
-            const currentInt = Math.max(8000, serverAutoplay.intervalMs || 8000);
-            // Allow 4 seconds transition for locution before next ball is drawn
-            serverAutoplay.lastDrawTime = Date.now() + 4000 - currentInt;
-            lastGlobalBallDrawTime = Date.now() - currentInt; // Reset rate limiter to ensure next ball is drawn immediately after locution
-            serverAutoplay.isRunning = true;
-            return;
+            const currentInt = Math.max(8000, roomAutoplay.intervalMs || 8000);
+            roomAutoplay.lastDrawTime = Date.now() + 4000 - currentInt;
+            lastBallDrawTimeByGame.set(game.id, Date.now() - currentInt);
+            roomAutoplay.isRunning = true;
+            continue;
           }
         }
 
-        // If game is paused or finished, double check with fresh database query before stopping autoplay
-        if (game.status === 'paused' && !serverAutoplay.isPausedForWinner) {
+        // If game is paused in this room
+        if (game.status === 'paused' && !roomAutoplay.isPausedForWinner) {
           const { data: dbCheck } = await supabase.from('game').select('status').eq('id', game.id).maybeSingle();
           if (dbCheck && dbCheck.status === 'paused') {
-            serverAutoplay.isRunning = false;
-            await getChannel().publish('server_autoplay_updated', {
+            roomAutoplay.isRunning = false;
+            await getChannel(roomTenant).publish('server_autoplay_updated', {
               isRunning: false,
               gameId: game.id,
-              interval: (serverAutoplay.intervalMs || 8000) / 1000
+              interval: (roomAutoplay.intervalMs || 8000) / 1000
             });
-            return;
+            continue;
           } else if (dbCheck && dbCheck.status === 'playing') {
             game.status = 'playing';
-            if (cachedAutoplayGame) cachedAutoplayGame.status = 'playing';
           }
         }
 
-        // B. Check if it is time to draw the next ball (strictly enforcing at least 8 seconds)
-        const currentIntervalMs = Math.max(8000, serverAutoplay.intervalMs || 8000);
-        if (now - serverAutoplay.lastDrawTime >= currentIntervalMs) {
-          serverAutoplay.isDrawing = true;
+        // B. Check if it is time to draw the next ball for this room
+        const currentIntervalMs = Math.max(8000, roomAutoplay.intervalMs || 8000);
+        if (now - roomAutoplay.lastDrawTime >= currentIntervalMs) {
+          roomAutoplay.isDrawing = true;
 
           try {
             const drawResult = await drawNextBall(game);
 
             if (drawResult.error) {
-              console.log(`[AutoEngine] Ball draw result notice: ${drawResult.error}`);
+              console.log(`[AutoEngine] Ball draw result notice in room "${roomTenant}": ${drawResult.error}`);
               if (drawResult.error === 'All balls drawn') {
                 await endGameCleanup(game.id, game.final_note || "");
-                serverAutoplay.isRunning = false;
+                roomAutoplay.isRunning = false;
               }
             }
           } finally {
-            serverAutoplay.isDrawing = false;
+            roomAutoplay.isDrawing = false;
           }
         }
       }
@@ -11781,5 +11908,297 @@ async function startServer() {
     console.log('Uncaught Exception thrown:', err);
   });
 }
+
+// ============================================================================
+// SUPER ADMIN PANEL API — Only accessible to isSuperAdmin accounts
+// ============================================================================
+
+// GET all rooms (tenants) with stats
+app.get('/api/superadmin/rooms', requireSuperAdmin, async (req, res) => {
+  try {
+    const { data: tenants, error } = await supabase
+      .from('tenants')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    // Enrich with player counts per room
+    const enriched = await Promise.all((tenants || []).map(async (t: any) => {
+      try {
+        const [{ count: playerCount }, { count: pendingCount }, { count: gameCount }] = await Promise.all([
+          supabase.from('players').select('*', { count: 'exact', head: true }).eq('tenant_id', t.slug || t.id),
+          supabase.from('players').select('*', { count: 'exact', head: true }).eq('tenant_id', t.slug || t.id).eq('status', 'pending'),
+          supabase.from('game').select('*', { count: 'exact', head: true }).eq('tenant_id', t.slug || t.id)
+        ]);
+        const sanitized = { ...t };
+        delete sanitized.admin_password;
+        return { ...sanitized, player_count: playerCount || 0, pending_count: pendingCount || 0, game_count: gameCount || 0 };
+      } catch (e) {
+        const sanitized = { ...t };
+        delete sanitized.admin_password;
+        return { ...sanitized, player_count: 0, pending_count: 0, game_count: 0 };
+      }
+    }));
+
+    res.json(enriched);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET a single room with full details
+app.get('/api/superadmin/rooms/:slug', requireSuperAdmin, async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const { data: tenant, error } = await supabase
+      .from('tenants')
+      .select('*')
+      .or(`id.eq.${slug},slug.eq.${slug}`)
+      .maybeSingle();
+    if (error || !tenant) return res.status(404).json({ error: 'Sala no encontrada' });
+    const sanitized = { ...tenant };
+    delete sanitized.admin_password;
+    res.json(sanitized);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH update room subscription/plan/status
+app.patch('/api/superadmin/rooms/:slug', requireSuperAdmin, async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const adminUser = (req as any).adminUser;
+    const allowedFields = [
+      'name', 'subscription_plan', 'subscription_status', 'subscription_expires_at',
+      'max_players', 'max_games_per_month', 'is_active', 'notes', 'primary_color',
+      'plan', 'max_cards_per_game', 'contact_email', 'contact_phone', 'logo_url', 'banner_url'
+    ];
+    const updates: any = {};
+    for (const key of allowedFields) {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    updates.updated_at = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('tenants')
+      .update(updates)
+      .or(`id.eq.${slug},slug.eq.${slug}`)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // Log the super admin action
+    try {
+      await supabase.from('super_admin_events').insert({
+        admin_email: adminUser?.email || 'superadmin',
+        event_type: 'room_updated',
+        tenant_id: slug,
+        details: { updates, updatedBy: adminUser?.email }
+      });
+    } catch (e) { }
+
+    // Invalidate tenant cache
+    tenantsCache.delete(slug.toLowerCase());
+
+    const sanitized = { ...data };
+    delete sanitized.admin_password;
+    res.json({ success: true, tenant: sanitized });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST suspend/activate a room
+app.post('/api/superadmin/rooms/:slug/status', requireSuperAdmin, async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const { action } = req.body; // 'suspend' | 'activate'
+    const adminUser = (req as any).adminUser;
+
+    const updates = {
+      is_active: action === 'activate',
+      subscription_status: action === 'activate' ? 'active' : 'suspended',
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('tenants')
+      .update(updates)
+      .or(`id.eq.${slug},slug.eq.${slug}`);
+
+    if (error) throw error;
+
+    tenantsCache.delete(slug.toLowerCase());
+
+    // Notify via Ably to the room
+    try {
+      getChannel(slug).publish('room_status_changed', { status: action, by: 'superadmin' });
+    } catch (e) { }
+
+    // Log
+    try {
+      await supabase.from('super_admin_events').insert({
+        admin_email: adminUser?.email || 'superadmin',
+        event_type: action === 'activate' ? 'room_activated' : 'room_suspended',
+        tenant_id: slug,
+        details: { action, by: adminUser?.email }
+      });
+    } catch (e) { }
+
+    res.json({ success: true, action });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET super admin dashboard stats overview
+app.get('/api/superadmin/stats', requireSuperAdmin, async (req, res) => {
+  try {
+    const [
+      { count: totalRooms },
+      { count: totalPlayers },
+      { count: totalGames },
+      { count: activeGames }
+    ] = await Promise.all([
+      supabase.from('tenants').select('*', { count: 'exact', head: true }),
+      supabase.from('players').select('*', { count: 'exact', head: true }),
+      supabase.from('game').select('*', { count: 'exact', head: true }),
+      supabase.from('game').select('*', { count: 'exact', head: true }).in('status', ['playing', 'pending'])
+    ]);
+
+    res.json({
+      totalRooms: totalRooms || 0,
+      totalPlayers: totalPlayers || 0,
+      totalGames: totalGames || 0,
+      activeGames: activeGames || 0
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET super admin audit events
+app.get('/api/superadmin/events', requireSuperAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const { data, error } = await supabase
+      .from('super_admin_events')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST send broadcast notification to a specific room's players (super admin only)
+app.post('/api/superadmin/rooms/:slug/notify', requireSuperAdmin, async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const { title, message } = req.body;
+    const adminUser = (req as any).adminUser;
+
+    if (!title?.trim() || !message?.trim()) {
+      return res.status(400).json({ error: 'Título y mensaje son obligatorios.' });
+    }
+
+    const result = await sendPushNotification({
+      recipient: 'all',
+      title: title.trim(),
+      message: message.trim(),
+      tenantId: slug
+    });
+
+    // Log
+    try {
+      await supabase.from('super_admin_events').insert({
+        admin_email: adminUser?.email || 'superadmin',
+        event_type: 'notification_sent',
+        tenant_id: slug,
+        details: { title, message, by: adminUser?.email }
+      });
+    } catch (e) { }
+
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST send global broadcast to ALL rooms (super admin only — use with extreme care)
+app.post('/api/superadmin/notify-all', requireSuperAdmin, async (req, res) => {
+  try {
+    const { title, message } = req.body;
+    const adminUser = (req as any).adminUser;
+
+    if (!title?.trim() || !message?.trim()) {
+      return res.status(400).json({ error: 'Título y mensaje son obligatorios.' });
+    }
+
+    // Get all active tenants
+    const { data: tenants } = await supabase.from('tenants').select('slug, id').eq('is_active', true);
+    const results: any[] = [];
+
+    for (const t of (tenants || [])) {
+      const tenantSlug = t.slug || t.id;
+      try {
+        const r = await sendPushNotification({
+          recipient: 'all',
+          title: title.trim(),
+          message: message.trim(),
+          tenantId: tenantSlug
+        });
+        results.push({ slug: tenantSlug, ...r });
+      } catch (e: any) {
+        results.push({ slug: tenantSlug, success: false, error: e.message });
+      }
+    }
+
+    // Log
+    try {
+      await supabase.from('super_admin_events').insert({
+        admin_email: adminUser?.email || 'superadmin',
+        event_type: 'global_notification_sent',
+        tenant_id: 'global',
+        details: { title, message, by: adminUser?.email, roomsReached: results.length }
+      });
+    } catch (e) { }
+
+    res.json({ success: true, results });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET players for a specific room (super admin view)
+app.get('/api/superadmin/rooms/:slug/players', requireSuperAdmin, async (req, res) => {
+  try {
+    const { slug } = req.params;
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const status = req.query.status as string;
+
+    let query = supabase
+      .from('players')
+      .select('id, name, phone, email, status, card_count, tenant_id, created_at')
+      .eq('tenant_id', slug)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (status) query = query.eq('status', status);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================================
 
 startServer();

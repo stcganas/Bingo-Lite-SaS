@@ -37,6 +37,14 @@ export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, ret
           if (parsed.tenant_id && parsed.tenant_id !== 'global') {
             headers.set('X-Tenant-Id', parsed.tenant_id.toLowerCase());
           }
+        } else {
+          const playerSession = localStorage.getItem('bingo_player');
+          if (playerSession) {
+            const parsed = JSON.parse(playerSession);
+            if (parsed.tenant_id && parsed.tenant_id !== 'global') {
+              headers.set('X-Tenant-Id', parsed.tenant_id.toLowerCase());
+            }
+          }
         }
       }
     } catch (e) {}

@@ -5,6 +5,8 @@ import { apiFetch } from '../utils/api';
 import { getBingoChannel } from '../ably';
 import { getProxyUrl } from './DJConsole';
 
+import { useTenant } from '../TenantContext';
+
 interface DJBgState {
   url: string | null;
   command: 'play' | 'pause' | 'stop';
@@ -14,6 +16,7 @@ interface DJBgState {
 }
 
 export default function BackgroundMusicPlayer() {
+  const { tenant } = useTenant();
   const [djState, setDjState] = useState<DJBgState>({
     url: null,
     command: 'stop',
@@ -37,18 +40,25 @@ export default function BackgroundMusicPlayer() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
-    // Initial fetch of current DJ background state
-    apiFetch('/api/dj-bg-state')
+    const currentTenantId = tenant?.id || 'bingo-lite';
+
+    // Initial fetch of current DJ background state for this specific room
+    apiFetch(`/api/dj-bg-state?tenantId=${encodeURIComponent(currentTenantId)}`)
       .then(res => res.json())
       .then(data => {
         if (data && data.url) {
           setDjState(data);
+        } else {
+          setDjState({ url: null, command: 'stop', name: '', volume: 0.6, timestamp: 0 });
+          if (audioRef.current) {
+            audioRef.current.pause();
+          }
         }
       })
       .catch(err => console.warn('DJ audio state fetch notice:', err?.message || err));
 
-    // Subscribe to real-time DJ background events
-    const channel = getBingoChannel();
+    // Subscribe to real-time DJ background events exclusively on this room's channel
+    const channel = getBingoChannel(currentTenantId);
     
     const onPlayDjBg = (message: any) => {
       const newState = message.data;
@@ -81,8 +91,11 @@ export default function BackgroundMusicPlayer() {
     channel.subscribe('play_dj_bg', onPlayDjBg);
     return () => {
       channel.unsubscribe('play_dj_bg', onPlayDjBg);
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
     };
-  }, []);
+  }, [tenant?.id]);
 
   // Sync mute state with localStorage and audio element
   useEffect(() => {
