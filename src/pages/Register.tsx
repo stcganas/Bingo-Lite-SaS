@@ -531,6 +531,7 @@ ${roomDirectUrl}
               onChange={e => setFormData({...formData, city: e.target.value})}
             />
           </div>
+          <div>
             <label className="block text-sm font-bold text-slate-700 mb-1">Código de Referido (Opcional)</label>
             <input 
               type="text" 
