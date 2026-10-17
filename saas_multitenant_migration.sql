@@ -1,0 +1,88 @@
+-- ==============================================================================
+-- MIGRACIÓN SAAS & MULTI-TENANCY: BINGO LITE
+-- Habilita soporte para múltiples organizaciones, empresas y salas de bingo
+-- independientes (White-label / Multi-inquilino) dentro de la misma infraestructura.
+-- ==============================================================================
+
+-- 1. CREACIÓN DE LA TABLA DE TENANTS / ORGANIZACIONES
+CREATE TABLE IF NOT EXISTS public.tenants (
+    id VARCHAR(64) PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug VARCHAR(64) UNIQUE NOT NULL,
+    subdomain TEXT UNIQUE,
+    custom_domain TEXT UNIQUE,
+    logo_url TEXT,
+    banner_url TEXT,
+    primary_color TEXT DEFAULT '#2563eb',
+    plan TEXT DEFAULT 'pro',
+    is_active BOOLEAN DEFAULT true,
+    access_code VARCHAR(32) NOT NULL DEFAULT 'BINGO2026',
+    max_cards_per_game INTEGER DEFAULT 20000,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Asegurar columna access_code si la tabla ya existía
+ALTER TABLE public.tenants ADD COLUMN IF NOT EXISTS access_code VARCHAR(32) DEFAULT 'BINGO2026';
+
+-- 2. REGISTRAR EL TENANT POR DEFECTO Y LA SALA BINGO LITE
+INSERT INTO public.tenants (id, name, slug, subdomain, access_code, max_cards_per_game)
+VALUES 
+    ('default', 'Bingo Lite Principal', 'default', 'bingolite', 'LITE777', 20000),
+    ('bingo-lite', 'Bingo Lite Oficial', 'bingo-lite', 'oficial', 'LITE777', 20000)
+ON CONFLICT (id) DO UPDATE SET 
+    slug = EXCLUDED.slug, 
+    name = EXCLUDED.name,
+    access_code = EXCLUDED.access_code;
+
+-- 3. AÑADIR TENANT_ID A LAS TABLAS PRINCIPALES (RETROCOMPATIBLE CON DATOS ACTUALES)
+DO $$
+BEGIN
+    -- Tabla: game
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'game' AND column_name = 'tenant_id') THEN
+        ALTER TABLE public.game ADD COLUMN tenant_id VARCHAR(64) DEFAULT 'default' REFERENCES public.tenants(id) ON DELETE CASCADE;
+    END IF;
+
+    -- Tabla: players
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'players' AND column_name = 'tenant_id') THEN
+        ALTER TABLE public.players ADD COLUMN tenant_id VARCHAR(64) DEFAULT 'default' REFERENCES public.tenants(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'players' AND column_name = 'email') THEN
+        ALTER TABLE public.players ADD COLUMN email TEXT;
+    END IF;
+
+    -- Tabla: cards
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'cards' AND column_name = 'tenant_id') THEN
+        ALTER TABLE public.cards ADD COLUMN tenant_id VARCHAR(64) DEFAULT 'default' REFERENCES public.tenants(id) ON DELETE CASCADE;
+    END IF;
+
+    -- Tabla: wallets
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'wallets' AND column_name = 'tenant_id') THEN
+        ALTER TABLE public.wallets ADD COLUMN tenant_id VARCHAR(64) DEFAULT 'default' REFERENCES public.tenants(id) ON DELETE CASCADE;
+    END IF;
+
+    -- Tabla: wallet_transactions
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'wallet_transactions' AND column_name = 'tenant_id') THEN
+        ALTER TABLE public.wallet_transactions ADD COLUMN tenant_id VARCHAR(64) DEFAULT 'default' REFERENCES public.tenants(id) ON DELETE CASCADE;
+    END IF;
+
+    -- Tabla: sellers
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sellers' AND column_name = 'tenant_id') THEN
+        ALTER TABLE public.sellers ADD COLUMN tenant_id VARCHAR(64) DEFAULT 'default' REFERENCES public.tenants(id) ON DELETE CASCADE;
+    END IF;
+
+    -- Tabla: settings
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'settings' AND column_name = 'tenant_id') THEN
+        ALTER TABLE public.settings ADD COLUMN tenant_id VARCHAR(64) DEFAULT 'default' REFERENCES public.tenants(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+-- 4. ÍNDICES COMPUESTOS DE ALTO RENDIMIENTO (OPTIMIZADOS PARA 20.000+ CARTONES POR TENANT)
+CREATE INDEX IF NOT EXISTS idx_cards_tenant_game ON public.cards(tenant_id, game_id);
+CREATE INDEX IF NOT EXISTS idx_game_tenant_status ON public.game(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_players_tenant_phone ON public.players(tenant_id, phone);
+CREATE INDEX IF NOT EXISTS idx_wallets_tenant_phone ON public.wallets(tenant_id, phone);
+
+-- 5. HABILITAR RLS PARA TENANTS
+ALTER TABLE public.tenants ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public read tenants" ON public.tenants;
+CREATE POLICY "Public read tenants" ON public.tenants FOR SELECT USING (true);

@@ -1,0 +1,364 @@
+import { playLoginSound, playLogoutSound } from './utils/sound';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { supabase } from './lib/supabase';
+import { User as SupabaseUser } from '@supabase/supabase-js';
+import { apiFetch } from './utils/api';
+import { normalizePhone } from './utils/format';
+import { initializeOneSignal, loginOneSignal, logoutOneSignal, promptPushPermission, setUserRoleTag } from './lib/onesignal';
+
+interface User {
+  uid: string;
+  name: string | null;
+  role: 'admin' | 'player' | 'seller';
+  phone?: string;
+  email?: string;
+  isSuperAdmin?: boolean;
+  city?: string;
+}
+
+interface AuthContextType {
+  user: User | null;
+  loading: boolean;
+  error: string | null;
+  loginAdmin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  registerAdmin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  loginPlayer: (phone: string, password?: string, name?: string) => Promise<void>;
+  logout: () => Promise<void>;
+  resetPassword: (email: string) => Promise<{ success: boolean; error?: string }>;
+  updatePassword: (password: string) => Promise<{ success: boolean; error?: string }>;
+}
+
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  loading: true,
+  error: null,
+  loginAdmin: async () => ({ success: false }),
+  registerAdmin: async () => ({ success: false }),
+  loginPlayer: async () => {},
+  logout: async () => {},
+  resetPassword: async () => ({ success: false }),
+  updatePassword: async () => ({ success: false }),
+});
+
+export const useAuth = () => useContext(AuthContext);
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Dedicated useEffect hook to trigger OneSignal.login(userId) immediately upon successful authentication
+  useEffect(() => {
+    if (!user || !user.uid) return;
+
+    let isSubscribed = true;
+    const syncOneSignalUser = async () => {
+      try {
+        console.log(`[Auth Hook] User authenticated (${user.role}). Executing OneSignal.login for database ID: ${user.uid}...`);
+        await initializeOneSignal();
+        if (!isSubscribed) return;
+        
+        await loginOneSignal(user.uid, user.phone, user.role);
+        console.log(`[Auth Hook] OneSignal.login successfully synchronized for DB user: ${user.uid}`);
+
+        // Trigger welcome web push notification now that device is registered on OneSignal
+        // Throttled per session to prevent double notifications
+        if (user.phone) {
+          const sessionKey = `bingo_welcome_triggered_${user.phone}`;
+          if (!sessionStorage.getItem(sessionKey)) {
+            sessionStorage.setItem(sessionKey, 'true');
+            apiFetch('/api/notifications/welcome', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ phone: user.phone, name: user.name || 'Jugador', userId: user.uid })
+            }).catch(e => console.warn('[Auth Hook] Welcome push trigger warning:', e));
+          }
+        }
+      } catch (err) {
+        console.warn('[Auth Hook] OneSignal login error:', err);
+      }
+    };
+
+    syncOneSignalUser();
+
+    return () => {
+      isSubscribed = false;
+    };
+  }, [user?.uid, user?.phone, user?.role]);
+
+  useEffect(() => {
+    // OneSignal initialization should happen after login for players/admins
+    // Removed initializeOneSignal() from here
+
+    if (!supabase) {
+      setLoading(false);
+      return;
+    }
+
+    let isMounted = true;
+    let initialLoadComplete = false;
+
+    // Use a timer to ensure setLoading(false) is called if it hangs
+    const timer = setTimeout(() => {
+      if (isMounted && !initialLoadComplete) {
+        console.warn('Auth check timed out after 10s. Defaulting to logged out state.');
+        setLoading(false);
+      }
+    }, 10000);
+
+    // Proactively verify session on mount and wipe invalid tokens
+    const verifyInitialSession = async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) {
+          if (error.message?.toLowerCase().includes('refresh token') || error.message?.toLowerCase().includes('invalid')) {
+            console.warn('[Auth] Stale refresh token detected on startup. Clearing local session...');
+            await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Auth] Initial getSession error caught safely:', err);
+        try {
+          await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+        } catch {}
+      }
+    };
+    verifyInitialSession();
+
+    // Listen for changes on auth state (logged in, signed out, etc.)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+      
+      console.log('Auth event:', event);
+
+      // Clear timeout as soon as we get ANY response from auth
+      clearTimeout(timer);
+      initialLoadComplete = true;
+
+      if (session?.user) {
+        // Set basic user info immediately to stop loading
+        const basicUser: User = {
+          uid: session.user.id,
+          name: session.user.user_metadata.full_name || (session.user.user_metadata.role === 'seller' ? 'Revendedor' : 'Admin'),
+          role: session.user.user_metadata.role === 'seller' ? 'seller' : 'admin',
+          email: session.user.email,
+          isSuperAdmin: session.user.email === 'comamosexpress@gmail.com' || session.user.email === 'stcganas@gmail.com'
+        };
+        
+        // Clear any previous dismissed state on active login so banner shows for authenticated users
+        try { sessionStorage.removeItem('push_banner_dismissed'); } catch (e) {}
+
+        setUser(basicUser);
+        
+        // Use a safer async wrapper for OneSignal login
+        const doOneSignalLogin = async () => {
+          try {
+            await initializeOneSignal();
+            await loginOneSignal(basicUser.uid, undefined, basicUser.role);
+            
+            // Only prompt if it's an explicit sign in event
+            if (event === 'SIGNED_IN') {
+              setTimeout(() => promptPushPermission(), 5000);
+            }
+          } catch (e) {
+            console.warn('OneSignal login from AuthProvider error:', e);
+          }
+        };
+        doOneSignalLogin();
+        
+        setLoading(false);
+      } else {
+        let savedPlayer = null;
+        try {
+          savedPlayer = localStorage.getItem('bingo_player');
+        } catch (e) {
+          console.error('Error reading localStorage:', e);
+        }
+        
+        if (isMounted) {
+          if (savedPlayer) {
+            try {
+              const player = JSON.parse(savedPlayer);
+              setUser(prev => prev?.uid === player.uid ? prev : player);
+              
+              // Validate in background if saved player still exists in database
+              const validateSavedPlayer = async () => {
+                try {
+                  const rawPhone = player.phone || '';
+                  const cleanPhone = rawPhone.replace(/\D/g, '');
+                  if (cleanPhone) {
+                    const checkRes = await fetch(`/api/players/${cleanPhone}/cards?_t=${Date.now()}`);
+                    const checkData = await checkRes.json().catch(() => ({}));
+                    if (checkRes.status === 404 || checkData.error === 'Player not found' || checkData.status === 'not_found') {
+                      console.log('[Auth] Jugador guardado ya no existe en la base de datos. Limpiando sesión...');
+                      try { localStorage.removeItem('bingo_player'); } catch (e) {}
+                      if (isMounted) {
+                        setUser(null);
+                        logoutOneSignal();
+                      }
+                    }
+                  }
+                } catch (e) {
+                  // Ignore background network issues
+                }
+              };
+              validateSavedPlayer();
+
+              const doOneSignalLogin = async () => {
+                try {
+                  await initializeOneSignal();
+                  await loginOneSignal(player.uid, player.phone, player.role || 'player');
+                } catch (e) {
+                  console.warn('OneSignal login (saved player) error:', e);
+                }
+              };
+              doOneSignalLogin();
+              
+            } catch (e) {
+              console.error('Error parsing bingo_player from localstorage:', e);
+              try { localStorage.removeItem('bingo_player'); } catch (err) {}
+              setUser(null);
+            }
+          } else {
+            setUser(null);
+            logoutOneSignal();
+          }
+          setLoading(false);
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+      subscription.unsubscribe();
+    };
+  }, []);
+
+
+  const loginAdmin = async (email: string, password: string) => {
+    console.log('loginAdmin start');
+    if (!supabase) return { success: false, error: 'Configuración de Supabase no encontrada' };
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      console.log('loginAdmin result:', error);
+      if (error) return { success: false, error: error.message };
+      
+      const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
+      if (soundSettings.login) playLoginSound();
+      
+      return { success: true };
+    } catch (err: any) {
+      console.error('loginAdmin error:', err);
+      return { success: false, error: err.message || 'Error inesperado' };
+    }
+  };
+
+  const registerAdmin = async (email: string, password: string) => {
+    if (!supabase) return { success: false, error: 'Configuración de Supabase no encontrada' };
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: window.location.origin + '/admin/login'
+      }
+    });
+
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  };
+
+  const loginPlayer = async (rawPhone: string, password?: string, name?: string) => {
+    const phone = normalizePhone(rawPhone);
+    try {
+      const res = await apiFetch('/api/players/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password })
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Error al iniciar sesión');
+      }
+      
+      const playerUser: User = { 
+        uid: data.id ? `player-${data.id}` : `player-${data.phone}`, 
+        name: data.name || name || 'Invitado', 
+        role: 'player', 
+        phone: data.phone,
+        email: data.email,
+        city: data.city
+      };
+      
+      try { sessionStorage.removeItem('push_banner_dismissed'); } catch (e) {}
+      setUser(playerUser);
+      localStorage.setItem('bingo_player', JSON.stringify(playerUser));
+      
+      const doOneSignalLogin = async () => {
+        try {
+          await loginOneSignal(playerUser.uid, playerUser.phone, playerUser.role);
+          setTimeout(() => promptPushPermission(), 5000);
+        } catch (e) {
+          console.warn('OneSignal loginPlayer error:', e);
+        }
+      };
+      doOneSignalLogin();
+      
+      const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
+      if (soundSettings.login) playLoginSound();
+    } catch (err: any) {
+      throw err;
+    }
+  };
+
+  const logout = async () => {
+    try {
+      if (supabase) {
+        await supabase.auth.signOut().catch(err => {
+          console.warn('Supabase signOut error:', err);
+        });
+      }
+    } catch (e) {
+      console.error('Logout error:', e);
+    } finally {
+      localStorage.removeItem('bingo_player');
+      setUser(null);
+      
+      try {
+        const saved = localStorage.getItem('bingo-sound-settings');
+        const soundSettings = saved ? JSON.parse(saved) : {};
+        if (soundSettings.logout) playLogoutSound();
+      } catch (e) {
+        console.warn('Error playing logout sound:', e);
+      }
+    }
+  };
+
+  const resetPassword = async (email: string) => {
+    if (!supabase) return { success: false, error: 'Configuración de Supabase no encontrada' };
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + '/admin/reset-password',
+    });
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  };
+
+  const updatePassword = async (password: string) => {
+    if (!supabase) return { success: false, error: 'Configuración de Supabase no encontrada' };
+    const { error } = await supabase.auth.updateUser({ password });
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, loading, error, loginAdmin, registerAdmin, loginPlayer, logout, resetPassword, updatePassword }}>
+      {children}
+    </AuthContext.Provider>
+  );
+};

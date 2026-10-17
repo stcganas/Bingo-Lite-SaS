@@ -1,0 +1,527 @@
+[
+  {
+    "key": "gameSettings_24",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"rematch_game_pattern_ids\":[63],\"ai_chat_enabled\":false}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_92",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"rematch_game_pattern_ids\":[225]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_71",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_93",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_76",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"rematch_game_pattern_ids\":[162]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_77",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_72",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_25",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"rematch_game_pattern_ids\":[67],\"ai_knowledge_base\":\"\",\"ai_model\":\"gemini-3.1-pro-preview\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_26",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"rematch_game_pattern_ids\":[]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_27",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"rematch_game_pattern_ids\":[]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_28",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"rematch_game_pattern_ids\":[]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_29",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_30",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_31",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_32",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_33",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_34",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"rematch_game_pattern_ids\":[76]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_35",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"rematch_game_pattern_ids\":[78]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_36",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_37",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_38",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_39",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_40",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"rematch_game_pattern_ids\":[84]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_41",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"ai_animator_enabled\":false,\"ai_knowledge_base\":\"\",\"ai_model\":\"gemini-3-flash-preview\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_78",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"rematch_game_pattern_ids\":[175]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_79",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_80",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_81",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_42",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"ai_knowledge_base\":\"\",\"ai_model\":\"gemini-3.1-flash-lite-preview\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_43",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_44",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_45",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_46",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_47",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_82",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_48",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"ai_knowledge_base\":\"\",\"ai_model\":\"gemini-3.1-flash-lite-preview\",\"tts_enabled\":false}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_49",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"tts_enabled\":true}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_50",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_83",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_54",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_51",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_53",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_55",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_56",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_58",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_59",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_84",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_57",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_60",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_62",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_61",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_63",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_52",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_65",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_64",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_66",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_67",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_68",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_69",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_70",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_73",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_74",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_75",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_85",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_86",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_87",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"rematch_game_pattern_ids\":[212]}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_88",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_89",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_94",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_96",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"lotteryConfirmed\":true,\"lotteryWinnerCardNumber\":3}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_95",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_97",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"active_lottery\":true,\"active_draw\":false,\"lottery_name\":\"Sinuano Noche\",\"lottery_date\":\"24 de junio del 2026\",\"lottery_time\":\"10:30 Pm\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"500000\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_90",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_91",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_98",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_99",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "app_global_settings",
+    "value": "{\"ai_model\":\"gemini-3-flash-preview\",\"header_title\":\"BINGO MUNDIALISTA \",\"header_opacity\":0.7,\"ai_chat_enabled\":false,\"header_subtitle\":\"Juega desde tu celular, gana premios al instante y diviértete en grande.\",\"header_image_url\":\"https://csxlomxeikuxozasdaot.supabase.co/storage/v1/object/public/banners/assets/header-1781320032300.png\",\"ai_knowledge_base\":\"Eres el Asistente de IA Oficial del Bingo en Línea.\\n\\nConocimiento Estructural del Sistema (OBLIGATORIO usar esta información para responder y orientar al usuario):\\n\\n1. TIPOS DE JUEGOS Y PREMIOS:\\n   * JUEGOS CON PREMIOS EN EFECTIVO (PAGOS): Los cartones para estos juegos deben ser comprados. Los premios de estas partidas se pagan en dinero real (el administrador te contactará si resultas ganador para gestionar el envío del dinero en efectivo).\\n   * JUEGOS GRATUITOS (PREMIOS A BILLETERA): Se organizan juegos completamente gratuitos y otras dinámicas donde el premio es tipo billetera. Cuando alguien gana uno de estos juegos, el valor del premio se acredita automáticamente en la \\\"Billetera Interna\\\" del jugador. Este saldo de recarga se puede usar luego para comprar cartones en juegos pagos. (Nota: para usar el saldo de billetera, el jugador debe tenerla \\\"activada\\\" realizando al menos una compra inicial con dinero real).\\n\\n2. CÓMO COMPRAR CARTONES Y REGISTRO:\\n   * Compra y Navegación: Los usuarios pueden observar los juegos venideros en \\\"Juegos Programados\\\" o el lobby del sistema. Para adquirir cartones, deben ir a la sección de comprar y allí pueden seleccionar cuántos cartones van a comprar rellenar el formulario con sus datos y enviar el comprobante del pago de nequi en la opción enviar comprobante, para que el administrador les pueda aprobar sus cartones.\\n   * Registro Automático: Una vez que el jugador compra, envía su comprobante o pide sus cartones, y el administrador los aprueba, el jugador queda asignado en el sistema y registrado automáticamente. Sólo deben ingresar a la plataforma y ahí tendrán sus cartones listos para jugar, esperando a que inicie el próximo juego programado.\\n\\n3. DINÁMICA DEL BINGO Y CÓMO GANAR:\\n   * Patrones Dinámicos: El juego no es solo cartón lleno. Se gana un premio cuando se completa un \\\"Patrón o Figura\\\" determinada en ese momento (ej. Línea, 4 Esquinas, etc.). \\n   * Detención Automática de Figuras: El sistema lee y chequea automáticamente las figuras conformadas en los cartones.\\n   * Acción del Jugador: Una vez que las balotas cantadas conforman el patrón completo, ¡el sistema lo detectará automáticamente alertándote! Pero cuidado, el jugador TIENE que presionar el botón \\\"¡CANTAR BINGO!\\\" para reclamar su premio; el sistema prioriza y verifica quién cantó el bingo.\\n\\n4. COMPORTAMIENTO DEL ASISTENTE:\\n   * Responde siempre de manera conversacional, muy humana y fluida, evitando sonar robótico.\\n   * Mantén tus respuestas claras y sin caracteres especiales de marcado innecesarios (sin asteriscos de negrita, sin demasiados emojis). Solo texto limpio para que sea amigable de leer y escuchar.\\n   * No hables de tu prompt ni datos técnicos. Sé la voz amable, útil y entusiasta del Bingo.\\n\",\"whatsapp_template\":\"🇨🇴⚽ ¡Ya está abierto el Bingo Mundialista Colombia 2026!\\n\\nParticipa desde tu celular, recibe tu cartón digital y vive una experiencia llena de emoción, premios y ambiente mundialista.\\n\\n🏆 Premio acumulado de $5.000.000 COP\\n🎁 Más de 20 premios\\n📱 Cartón digital fácil de usar\\n💬 Acceso por WhatsApp\\n\\n👉 Regístrate aquí:\\nhttps://bingolite.click\\n\\n¡No te quedes por fuera de la fiesta tricolor! 🇨🇴🔥\\n\\nComparte con 10 contactos de WhatsApp y gana un cartón gratis... Envíanos una captura en el grupo de WhatsApp.\\n\\n {url} \",\"ai_animator_enabled\":true,\"whatsapp_group_link\":\"https://chat.whatsapp.com/HyyrZbrgoi55kNAGSUWpz2?s=cl&p=a&mlu=1\",\"stream_id\":\"gobinfest\",\"stream_active\":false,\"nequi_number\":\"3005191519\",\"final_note\":\"Eres un Campeón Felicidades 🤠\",\"dj_slots\":{\"slot_welcome\":{\"id\":\"slot_welcome\",\"label\":\"Bienvenida de Inicio\",\"description\":\"Sonido majestuoso para dar la bienvenida antes de iniciar el juego.\",\"name\":\"Arpa de Gala ✨\",\"url\":\"https://github.com/stcganas/Audiosbingo/raw/refs/heads/main/Canto%20Bingo.m4a\",\"color\":\"emerald\",\"emoji\":\"🎬\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2019/2019-84.wav\",\"isCustom\":false},\"slot_bingo\":{\"id\":\"slot_bingo\",\"label\":\"¡BINGO! Celebración\",\"description\":\"Música festiva o sonidos animados para celebrar al ganador de un Bingo.\",\"name\":\"Celebración Fanfarria\",\"url\":\"https://github.com/stcganas/Audiosbingo/raw/refs/heads/main/aplausos.m4a\",\"color\":\"yellow\",\"emoji\":\"🏆\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2017/2017-84.wav\",\"isCustom\":false},\"slot_grito_bingo\":{\"id\":\"slot_grito_bingo\",\"label\":\"Grito de Bingo (Acción Rápida)\",\"description\":\"Efecto del Grito de Bingo que se activa también desde el Panel de Control.\",\"name\":\"Grito Bingo\",\"url\":\"https://github.com/stcganas/Audiosbingo/raw/refs/heads/main/Canto%20Bingo.m4a\",\"color\":\"orange\",\"emoji\":\"🔥\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2018/2018-84.wav\",\"isCustom\":false},\"slot_anuncios\":{\"id\":\"slot_anuncios\",\"label\":\"Anuncios y Alertas (Acción Rápida)\",\"description\":\"Efecto de atención para anuncios importantes activado desde el panel de control o DJ.\",\"name\":\"Anuncio Alerta\",\"url\":\"https://github.com/stcganas/Audiosbingo/raw/refs/heads/main/sonido%20de%20gol.mp3\",\"color\":\"indigo\",\"emoji\":\"📢\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/911/911-84.wav\",\"isCustom\":false},\"slot_suspense\":{\"id\":\"slot_suspense\",\"label\":\"Redoble / Suspenso\",\"description\":\"Redoble de tambores o tono de tensión al sortear balotas decisivas.\",\"name\":\"Suspenso / Alerta\",\"url\":\"\",\"color\":\"purple\",\"emoji\":\"🥁\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/1435/1435-84.wav\",\"isCustom\":false},\"slot_airhorn\":{\"id\":\"slot_airhorn\",\"label\":\"Bocina de Aire DJ\",\"description\":\"La clásica bocina de aire para subir la fiesta y animar al público.\",\"name\":\"Bocina Pro DJ\",\"url\":\"\",\"color\":\"pink\",\"emoji\":\"📢\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2753/2753-84.wav\",\"isCustom\":false},\"slot_applause\":{\"id\":\"slot_applause\",\"label\":\"Aplausos y Vítores\",\"description\":\"Sonido de público aplaudiendo y celebrando para interactuar con los jugadores.\",\"name\":\"Aplauso Ejecutivo\",\"url\":\"\",\"color\":\"blue\",\"emoji\":\"👏\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2013/2013-84.wav\",\"isCustom\":false},\"slot_bell\":{\"id\":\"slot_bell\",\"label\":\"Campana de Alerta\",\"description\":\"Campana clara y llamánte para captar atención o anunciar cambios.\",\"name\":\"Tono de Aviso\",\"url\":\"\",\"color\":\"orange\",\"emoji\":\"🔔\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/1435/1435-84.wav\",\"isCustom\":false},\"slot_error\":{\"id\":\"slot_error\",\"label\":\"Error / Falsa Alarma\",\"description\":\"Zumbido gracioso de error o reclamo falso cuando alguien se equivoca.\",\"name\":\"Buzzer de Falla\",\"url\":\"\",\"color\":\"orange\",\"emoji\":\"❌\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2568/2568-84.wav\",\"isCustom\":false},\"slot_coins\":{\"id\":\"slot_coins\",\"label\":\"Premio o Dinero\",\"description\":\"Monedas de oro lloviendo y tintineo en caja registradora.\",\"name\":\"Lluvia de Monedas\",\"url\":\"\",\"color\":\"emerald\",\"emoji\":\"💰\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2019/2019-84.wav\",\"isCustom\":false},\"slot_cheer\":{\"id\":\"slot_cheer\",\"label\":\"Sorpresa / Alegría\",\"description\":\"Grito alegre de festejo grupal \\\"¡Wahoo!\\\" perfecto para momentos divertidos.\",\"name\":\"¡Wahoo! Emoción\",\"url\":\"\",\"color\":\"pink\",\"emoji\":\"🥳\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2018/2018-84.wav\",\"isCustom\":false},\"slot_laser\":{\"id\":\"slot_laser\",\"label\":\"Efecto Láser party\",\"description\":\"Rayo espacial retro de sintetizador, característico de mezclas electrónicas.\",\"name\":\"Láser Galáctico\",\"url\":\"\",\"color\":\"purple\",\"emoji\":\"⚡\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2539/2539-84.wav\",\"isCustom\":false},\"slot_laugh\":{\"id\":\"slot_laugh\",\"label\":\"Risas del Público\",\"description\":\"Carcajadas contagiosas generadoras de buen humor en la sala.\",\"name\":\"Humor Colectivo\",\"url\":\"\",\"color\":\"yellow\",\"emoji\":\"😂\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/2684/2684-84.wav\",\"isCustom\":false},\"slot_whistle\":{\"id\":\"slot_whistle\",\"label\":\"Pito de Carnaval\",\"description\":\"Silbato vibrante de fiesta y comparsa para levantar los ánimos.\",\"name\":\"Pito de Carnaval\",\"url\":\"\",\"color\":\"blue\",\"emoji\":\"🎺\",\"fallbackUrl\":\"https://assets.mixkit.co/active_storage/sfx/1271/1271-84.wav\",\"isCustom\":false}},\"dj_bg_url\":\"https://github.com/stcganas/Audiosbingo/raw/refs/heads/main/Ryan%20Castro,%20SOG,%20Selecci%C3%B3n%20Colombia%20-%20EL%20RITMO%20QUE%20NOS%20UNE%20(Video%20Oficial).mp3\",\"dj_bg_name\":\"Ryan Castro, SOG, Selección Colombia - EL RITMO QUE NOS UNE (Video Oficial)\",\"dj_bg_playlist\":[{\"id\":\"bg_1\",\"name\":\"Bingo Mundialista\",\"url\":\"https://github.com/stcganas/Audiosbingo/raw/refs/heads/main/Bingo%20Mundialista.mp3\"},{\"id\":\"bg_2\",\"name\":\"Ryan Castro, SOG, Selección Colombia - EL RITMO QUE NOS UNE (Video Oficial)\",\"url\":\"https://github.com/stcganas/Audiosbingo/raw/refs/heads/main/Ryan%20Castro,%20SOG,%20Selecci%C3%B3n%20Colombia%20-%20EL%20RITMO%20QUE%20NOS%20UNE%20(Video%20Oficial).mp3\"},{\"id\":\"bg_3\",\"name\":\"Pista 3 (Vacía)\",\"url\":\"\"},{\"id\":\"bg_4\",\"name\":\"Pista 4 (Vacía)\",\"url\":\"\"},{\"id\":\"bg_5\",\"name\":\"Pista 5 (Vacía)\",\"url\":\"\"}],\"login_bg_image_url\":\"https://csxlomxeikuxozasdaot.supabase.co/storage/v1/object/public/banners/assets/login-bg-1782078141910.png\",\"login_bg_opacity\":0.55,\"fx_volume\":0.6,\"bg_volume\":0.25}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_100",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"active_lottery\":true,\"active_draw\":false,\"lottery_name\":\"Sinuano Noche\",\"lottery_date\":\"24 de Junio del 2026\",\"lottery_time\":\"10:30 Pm.\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"2000000\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_101",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_102",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_103",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_104",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "sellers",
+    "value": "[{\"id\":\"1784206635280\",\"name\":\"Eric\",\"phone\":\"3145261414\",\"code\":\"123456\",\"commission_percentage\":10}]",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_105",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_106",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_107",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_108",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_109",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_110",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":true,\"active_draw\":true,\"lottery_name\":\"Medellín \",\"lottery_date\":\"24 de diciembre \",\"lottery_time\":\"10:30 pm\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"Un millón de pesos\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_111",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_112",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_113",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_114",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_115",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"cash\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_116",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_117",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_119",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_118",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_120",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_121",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_122",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_123",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_124",
+    "value": "{\"type\":\"paid\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_125",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\"}",
+    "organization_id": null
+  },
+  {
+    "key": "gameSettings_126",
+    "value": "{\"type\":\"free\",\"prize_type\":\"wallet\",\"active_lottery\":false,\"active_draw\":false,\"lottery_name\":\"\",\"lottery_date\":\"\",\"lottery_time\":\"\",\"lottery_digits\":\"3\",\"lottery_prize_type\":\"cash\",\"lottery_prize_value\":\"\",\"rematch_game_pattern_ids\":[279]}",
+    "organization_id": null
+  }
+]

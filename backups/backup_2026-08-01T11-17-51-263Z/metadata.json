@@ -1,0 +1,86 @@
+{
+  "timestamp": "2026-08-01T11:17:54.980Z",
+  "tables_backed_up": {
+    "settings": {
+      "status": "OK",
+      "count": 105,
+      "file": "settings.json"
+    },
+    "patterns": {
+      "status": "OK",
+      "count": 12,
+      "file": "patterns.json"
+    },
+    "game": {
+      "status": "OK",
+      "count": 4,
+      "file": "game.json"
+    },
+    "players": {
+      "status": "OK",
+      "count": 9,
+      "file": "players.json"
+    },
+    "game_patterns": {
+      "status": "OK",
+      "count": 5,
+      "file": "game_patterns.json"
+    },
+    "cards": {
+      "status": "OK",
+      "count": 0,
+      "file": "cards.json"
+    },
+    "wallets": {
+      "status": "OK",
+      "count": 1,
+      "file": "wallets.json"
+    },
+    "wallet_activations": {
+      "status": "OK",
+      "count": 30,
+      "file": "wallet_activations.json"
+    },
+    "wallet_transactions": {
+      "status": "OK",
+      "count": 39,
+      "file": "wallet_transactions.json"
+    },
+    "notifications": {
+      "status": "OK",
+      "count": 1757,
+      "file": "notifications.json"
+    },
+    "ai_presets": {
+      "status": "OK",
+      "count": 4,
+      "file": "ai_presets.json"
+    },
+    "gift_invitations": {
+      "status": "OK",
+      "count": 6,
+      "file": "gift_invitations.json"
+    },
+    "lottery_numbers_in_play": {
+      "status": "OK",
+      "count": 0,
+      "file": "lottery_numbers_in_play.json"
+    },
+    "sellers": {
+      "status": "OK",
+      "count": 1,
+      "file": "sellers.json"
+    },
+    "bingo_claims": {
+      "status": "ERROR",
+      "count": 0,
+      "error": "Could not find the table 'public.bingo_claims' in the schema cache"
+    },
+    "receipts": {
+      "status": "ERROR",
+      "count": 0,
+      "error": "Could not find the table 'public.receipts' in the schema cache"
+    }
+  },
+  "total_files": 14
+}

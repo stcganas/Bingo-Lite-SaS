@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <!-- Principal Page (Home) -->
+  <url>
+    <loc>https://ais-pre-kdl7lgxnn6oa5bplgrl2p4-122130928241.us-east1.run.app/</loc>
+    <lastmod>2026-08-01</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <!-- Login Page -->
+  <url>
+    <loc>https://ais-pre-kdl7lgxnn6oa5bplgrl2p4-122130928241.us-east1.run.app/login</loc>
+    <lastmod>2026-08-01</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <!-- Player Dashboard -->
+  <url>
+    <loc>https://ais-pre-kdl7lgxnn6oa5bplgrl2p4-122130928241.us-east1.run.app/dashboard</loc>
+    <lastmod>2026-08-01</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>0.9</priority>
+  </url>
+</urlset>

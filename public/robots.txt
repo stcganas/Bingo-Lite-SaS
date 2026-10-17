@@ -1,0 +1,10 @@
+# www.robotstxt.org/
+# For Bingo Lite SEO optimization
+
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin/
+
+# Sitemap location to guide indexers
+Sitemap: https://ais-pre-kdl7lgxnn6oa5bplgrl2p4-122130928241.us-east1.run.app/sitemap.xml

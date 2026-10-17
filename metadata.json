@@ -1,0 +1,11 @@
+{
+  "name": "Bingo Lite",
+  "description": "Aplicación de Bingo 75 con panel de administración seguro y registro simplificado para jugadores.",
+  "requestFramePermissions": [
+    "microphone",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

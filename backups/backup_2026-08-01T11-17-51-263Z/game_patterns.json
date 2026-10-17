@@ -1,0 +1,57 @@
+[
+  {
+    "id": 267,
+    "game_id": 115,
+    "pattern_id": 19,
+    "prize": "100",
+    "winner_player_id": null,
+    "won_at": null,
+    "organization_id": null,
+    "payment_status": "pending",
+    "rejection_reason": null
+  },
+  {
+    "id": 268,
+    "game_id": 116,
+    "pattern_id": 17,
+    "prize": "100",
+    "winner_player_id": null,
+    "won_at": null,
+    "organization_id": null,
+    "payment_status": "pending",
+    "rejection_reason": null
+  },
+  {
+    "id": 277,
+    "game_id": 125,
+    "pattern_id": 19,
+    "prize": "100",
+    "winner_player_id": null,
+    "won_at": null,
+    "organization_id": null,
+    "payment_status": "pending",
+    "rejection_reason": null
+  },
+  {
+    "id": 278,
+    "game_id": 126,
+    "pattern_id": 23,
+    "prize": "100",
+    "winner_player_id": null,
+    "won_at": null,
+    "organization_id": null,
+    "payment_status": "pending",
+    "rejection_reason": null
+  },
+  {
+    "id": 279,
+    "game_id": 126,
+    "pattern_id": 17,
+    "prize": "100",
+    "winner_player_id": null,
+    "won_at": null,
+    "organization_id": null,
+    "payment_status": "pending",
+    "rejection_reason": null
+  }
+]

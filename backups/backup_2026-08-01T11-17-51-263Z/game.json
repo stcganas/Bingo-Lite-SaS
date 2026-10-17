@@ -1,0 +1,54 @@
+[
+  {
+    "id": 115,
+    "name": "Bingo Ganador ",
+    "start_time": "2026-07-24T06:48:00+00:00",
+    "prize": "500000",
+    "card_value": "1000",
+    "winning_pattern": null,
+    "status": "scheduled",
+    "drawn_balls": [],
+    "stream_id": null,
+    "stream_active": false,
+    "organization_id": null
+  },
+  {
+    "id": 116,
+    "name": "Juego 1",
+    "start_time": "2026-07-21T09:01:00+00:00",
+    "prize": "100",
+    "card_value": "0",
+    "winning_pattern": null,
+    "status": "scheduled",
+    "drawn_balls": [],
+    "stream_id": null,
+    "stream_active": false,
+    "organization_id": null
+  },
+  {
+    "id": 126,
+    "name": "Jsks",
+    "start_time": "2026-07-21T07:24:00+00:00",
+    "prize": "1000",
+    "card_value": "0",
+    "winning_pattern": null,
+    "status": "scheduled",
+    "drawn_balls": [],
+    "stream_id": null,
+    "stream_active": false,
+    "organization_id": null
+  },
+  {
+    "id": 125,
+    "name": "Jsks",
+    "start_time": "2026-07-21T07:21:00+00:00",
+    "prize": "100",
+    "card_value": "0",
+    "winning_pattern": null,
+    "status": "ended",
+    "drawn_balls": [],
+    "stream_id": null,
+    "stream_active": false,
+    "organization_id": null
+  }
+]

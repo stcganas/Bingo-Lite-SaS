@@ -1,0 +1,43 @@
+--- server.ts
++++ server.ts
+@@ -1096,6 +1096,44 @@
+ });
+ 
++app.get('/api/admin/sellers', async (req, res) => {
++  try {
++    const { data, error } = await supabase.from('settings').select('value').eq('key', 'sellers').maybeSingle();
++    if (error) {
++      console.error('Error fetching sellers:', error.message);
++      return res.status(500).json({ error: error.message });
++    }
++    const sellers = data?.value ? JSON.parse(data.value) : [];
++    res.json({ success: true, sellers });
++  } catch (error: any) {
++    res.status(500).json({ error: error.message });
++  }
++});
++
++app.post('/api/admin/sellers', async (req, res) => {
++  try {
++    const { sellers } = req.body;
++    if (!sellers) {
++      return res.status(400).json({ error: 'sellers is required' });
++    }
++    const payload = {
++      key: 'sellers',
++      value: JSON.stringify(sellers)
++    };
++    const { error: upsertError } = await supabase.from('settings').upsert(payload, { onConflict: 'key' });
++    if (upsertError) {
++      console.error('Error saving sellers:', upsertError.message);
++      return res.status(500).json({ error: upsertError.message });
++    }
++    res.json({ success: true });
++  } catch (error: any) {
++    res.status(500).json({ error: error.message });
++  }
++});
++
+ app.post('/api/admin/trigger-fx-volume', async (req, res) => {
+   const { volume } = req.body;
+   try {

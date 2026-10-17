@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="es" class="notranslate" translate="no">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="google" content="notranslate" />
+    <meta name="googlebot" content="notranslate" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Bingo Lite" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>Bingo Lite | Jugar Bingo Familiar, Bingo Colombia y Bingo Ganador Online</title>
+    <!-- SEO Meta Tags -->
+    <meta name="description" content="Juega al mejor Bingo Online en Bingo Lite. Disfruta del auténtico Bingo Familiar, Bingo Colombia, Bingo Ganador y salas en vivo con sorteos virtuales. ¡Fácil de usar, divertido y 100% indexado para todos!" />
+    <meta name="keywords" content="bingo, bingo lite, bingo ganador, bingo colombia, bingo familiar, jugar bingo online, bingo virtual, bingo en vivo, balotas bingo, bingo con amigos, bingo tradicional, bingo de la suerte, bingo gratis" />
+    <meta name="author" content="Bingo Lite" />
+    <meta name="robots" content="index, follow" />
+    <meta name="googlebot" content="index, follow, max-snippet:-1, max-image-preview:large" />
+
+    <!-- Open Graph / Facebook / WhatsApp Preview -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Bingo Lite | Bingo Familiar, Bingo Colombia y Bingo Ganador" />
+    <meta property="og:description" content="El mejor Bingo virtual y en vivo. Conéctate con familiares y amigos, gestiona tus cartones y gana premios con la lotería oficial." />
+    <meta property="og:image" content="/pwa-512x512.png" />
+    <meta property="og:site_name" content="Bingo Lite" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Bingo Lite | Bingo Familiar, Bingo Colombia y Bingo Ganador" />
+    <meta name="twitter:description" content="Sorteos de bingo virtuales rápidos y seguros. ¡La mejor opción de Bingo en Colombia!" />
+    <meta name="twitter:image" content="/pwa-512x512.png" />
+    <script>
+      // Global Monkey-patch on Node.prototype to prevent Google Translate, Safari/Chrome mobile translators and browser extensions from crashing React DOM reconciler
+      (function() {
+        if (typeof Node === 'function' && Node.prototype) {
+          var origRemoveChild = Node.prototype.removeChild;
+          Node.prototype.removeChild = function(child) {
+            if (!child) return child;
+            if (child.parentNode !== this) {
+              if (child.parentNode && typeof child.parentNode.removeChild === 'function') {
+                try { return child.parentNode.removeChild(child); } catch(e) {}
+              }
+              return child;
+            }
+            try {
+              return origRemoveChild.apply(this, arguments);
+            } catch(err) {
+              if (child.parentNode && typeof child.parentNode.removeChild === 'function') {
+                try { return child.parentNode.removeChild(child); } catch(e) {}
+              }
+              return child;
+            }
+          };
+
+          var origInsertBefore = Node.prototype.insertBefore;
+          Node.prototype.insertBefore = function(newNode, referenceNode) {
+            if (!newNode) return newNode;
+            if (referenceNode && referenceNode.parentNode !== this) {
+              if (referenceNode.parentNode && typeof referenceNode.parentNode.insertBefore === 'function') {
+                try { return referenceNode.parentNode.insertBefore(newNode, referenceNode); } catch(e) {}
+              }
+              try { return this.appendChild(newNode); } catch(e) { return newNode; }
+            }
+            try {
+              return origInsertBefore.apply(this, arguments);
+            } catch(err) {
+              try { return this.appendChild(newNode); } catch(e) { return newNode; }
+            }
+          };
+
+          var origReplaceChild = Node.prototype.replaceChild;
+          Node.prototype.replaceChild = function(newChild, oldChild) {
+            if (!newChild || !oldChild) return oldChild;
+            if (oldChild.parentNode !== this) {
+              if (oldChild.parentNode && typeof oldChild.parentNode.replaceChild === 'function') {
+                try { return oldChild.parentNode.replaceChild(newChild, oldChild); } catch(e) {}
+              }
+              try { return this.appendChild(newChild); } catch(e) { return newChild; }
+            }
+            try {
+              return origReplaceChild.apply(this, arguments);
+            } catch(err) {
+              try { return this.appendChild(newChild); } catch(e) { return newChild; }
+            }
+          };
+        }
+      })();
+
+      const originalOnError = window.onerror;
+      window.onerror = function (message, source, lineno, colno, error) {
+        const msgStr = String(message || '');
+        if (msgStr.includes('Script error.') || msgStr.includes('removeChild') || msgStr.includes('insertBefore') || msgStr.includes('NotFoundError')) {
+          return true;
+        }
+        if (originalOnError) {
+          return originalOnError(message, source, lineno, colno, error);
+        }
+        return false;
+      };
+      window.addEventListener('error', function(e) {
+        const msgStr = String(e.message || '');
+        if (msgStr.includes('Script error.') || msgStr.includes('removeChild') || msgStr.includes('insertBefore') || msgStr.includes('NotFoundError')) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }, true);
+      
+      // Service Worker Debugger for OneSignal & PWA Prompt Early Capture
+      window.deferredPWAInstallPrompt = null;
+      window.addEventListener('beforeinstallprompt', function(e) {
+        e.preventDefault();
+        window.deferredPWAInstallPrompt = e;
+        window.dispatchEvent(new CustomEvent('pwa-prompt-ready', { detail: e }));
+      });
+
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(registrations => {
+          console.log('Active Service Workers:', registrations.length);
+          registrations.forEach(sw => {
+            console.log('SW Script URL:', sw.active?.scriptURL, 'Scope:', sw.scope);
+          });
+        });
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
