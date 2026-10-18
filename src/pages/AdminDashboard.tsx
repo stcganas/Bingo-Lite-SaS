@@ -1154,18 +1154,20 @@ export default function AdminDashboard() {
       });
       
       if (res.ok) {
-        toast.success('Usuario actualizado');
+        toast.success('Usuario actualizado correctamente');
         setEditingUser(null);
         fetchAllPlayers();
       } else {
-        toast.error('Error al actualizar usuario');
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || 'Error al actualizar usuario');
       }
-    } catch (err) {
-      toast.error('Error de conexión');
+    } catch (err: any) {
+      toast.error(err.message || 'Error de conexión');
     } finally {
       setIsUpdatingUser(false);
     }
   };
+
 
   const deleteUser = async (id: string | number) => {
     setIsDeletingUser(String(id));
@@ -5754,9 +5756,9 @@ export default function AdminDashboard() {
                   <div className={clsx("p-5 rounded-2xl border-2 space-y-4 transition", maintenanceMode ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-100")}>
                     <div className="flex items-center justify-between">
                       <div>
-                        <p className="font-black text-slate-800 text-sm">Estado de Mantenimiento</p>
+                        <p className="font-black text-slate-800 text-sm">Estado de Mantenimiento de esta Sala</p>
                         <p className="text-xs text-slate-500">
-                          {maintenanceMode ? "⚠️ La app está en mantenimiento. Solo admin y el jugador 3145261451 pueden ingresar." : "✅ La app está funcionando con normalidad para todos los usuarios."}
+                          {maintenanceMode ? "⚠️ Esta sala está en mantenimiento. Solo tú (admin) y el jugador de pruebas pueden ingresar." : "✅ Esta sala está funcionando con normalidad para todos los jugadores."}
                         </p>
                       </div>
                       <label className="relative inline-flex items-center cursor-pointer">

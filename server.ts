@@ -46,8 +46,10 @@ async function getGameSettings(gameId: number | string, tenantId?: string) {
       gameSettingsCache.set(key, { value: val, timestamp: now });
       return val;
     }
-    // Fallback: If room-specific settings row is empty, fallback to app_global_settings for defaults
-    if (key !== 'app_global_settings') {
+    // CRÍTICO: Solo permitir fallback global para gameId numérico (configuración de partida específica),
+    // NUNCA para scopes de sala (room_settings_X). Esto previene que salas nuevas hereden
+    // maintenance_mode u otros datos de la sala principal (bingo-lite / app_global_settings).
+    if (typeof gameId === 'number' || !isNaN(Number(gameId))) {
       const globalCached = gameSettingsCache.get('app_global_settings');
       if (globalCached && (now - globalCached.timestamp < SETTINGS_CACHE_TTL)) {
         return globalCached.value;
@@ -8990,8 +8992,11 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
     }
 
     if (!isSilentlyInvalid) {
-      // Auto-approve recharge: Automatically update wallet balance
-      await updateWalletBalance(phone, numericAmount, `Recarga automática aprobada por $${numericAmount} (Ref: ${referenceNumber})`, 'recharge');
+      // Obtener tenantId del jugador o del request para aislar la recarga
+      const rechargeTenantId = (player?.tenant_id || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
+      // Auto-approve recharge: Automatically update wallet balance with tenant isolation
+      await updateWalletBalance(phone, numericAmount, `Recarga automática aprobada por $${numericAmount} (Ref: ${referenceNumber})`, 'recharge', rechargeTenantId);
+
 
       // Auto-send approved notification
       await sendPushNotification({
@@ -9153,20 +9158,43 @@ app.put('/api/admin/players/:id', requireAdmin, async (req, res) => {
       }
     }
 
-    const { name, phone: rawPhone, email, state, city } = req.body;
+    const { name, phone: rawPhone, email, state, city, card_count, status } = req.body;
     const phone = normalizePhone(rawPhone);
-    const { error } = await supabase
+
+    // Construir objeto de actualización solo con campos definidos
+    const updatePayload: any = {};
+    if (name !== undefined) updatePayload.name = name;
+    if (phone) updatePayload.phone = phone;
+    if (email !== undefined) updatePayload.email = email;
+    if (state !== undefined) updatePayload.state = state;
+    if (city !== undefined) updatePayload.city = city;
+    if (card_count !== undefined) updatePayload.card_count = parseInt(card_count) || 1;
+    if (status !== undefined && ['pending', 'approved', 'rejected'].includes(status)) {
+      updatePayload.status = status;
+    }
+
+    let { error } = await supabase
       .from('players')
-      .update({ name, phone, email, state, city })
+      .update(updatePayload)
       .eq('id', req.params.id);
+
+    // Si el error es de columna no existente (42703), reintentar sin state/city
+    if (error && error.code === '42703') {
+      delete updatePayload.state;
+      delete updatePayload.city;
+      const retry = await supabase.from('players').update(updatePayload).eq('id', req.params.id);
+      error = retry.error;
+    }
 
     if (error) throw error;
     invalidatePlayersCaches(existingPlayer.tenant_id);
     res.json({ success: true });
   } catch (err: any) {
+    console.error('[Update Player] Error:', err);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // Delete Player (Admin)
 app.delete('/api/admin/players/:id', requireAdmin, async (req, res) => {

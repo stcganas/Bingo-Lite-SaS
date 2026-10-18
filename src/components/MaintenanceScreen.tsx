@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Wrench, ShieldAlert, RefreshCw, Lock, UserCheck, Shield } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import toast from 'react-hot-toast';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 
 interface MaintenanceScreenProps {
   message?: string;
@@ -12,9 +12,15 @@ interface MaintenanceScreenProps {
 export const MaintenanceScreen: React.FC<MaintenanceScreenProps> = ({ message, onRetry }) => {
   const { loginPlayer } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [showPlayerLogin, setShowPlayerLogin] = useState(false);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Detectar el slug de la sala actual para redirigir al admin correcto
+  const roomMatch = location.pathname.match(/\/sala\/([a-zA-Z0-9_-]+)/i);
+  const currentRoomSlug = roomMatch ? roomMatch[1].toLowerCase() : null;
+  const adminLoginPath = currentRoomSlug ? `/sala/${currentRoomSlug}/admin/login` : '/admin/login';
 
   const handleAuthorizedPlayerLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,13 +45,13 @@ export const MaintenanceScreen: React.FC<MaintenanceScreenProps> = ({ message, o
 
         <div className="space-y-3">
           <div className="inline-flex items-center gap-2 bg-amber-500/20 border border-amber-500/30 px-4 py-1.5 rounded-full text-amber-300 text-xs font-black uppercase tracking-wider">
-            <ShieldAlert size={14} /> Sistema en Actualización
+            <ShieldAlert size={14} /> Sala en Actualización
           </div>
           <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-white">
-            Plataforma en Mantenimiento
+            Sala en Mantenimiento
           </h1>
           <p className="text-slate-300 text-sm sm:text-base leading-relaxed font-medium">
-            {message || 'Estamos realizando mejoras y actualizaciones importantes en el motor de bingo para ofrecerte una experiencia inigualable. Vuelve a ingresar en breve.'}
+            {message || 'Esta sala de bingo se encuentra en mantenimiento y actualizaciones. Vuelve pronto.'}
           </p>
         </div>
 
@@ -53,7 +59,8 @@ export const MaintenanceScreen: React.FC<MaintenanceScreenProps> = ({ message, o
         <div className="space-y-3 pt-2">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
-              onClick={() => navigate('/admin/login')}
+              onClick={() => navigate(adminLoginPath)}
+
               className="py-3 px-4 bg-slate-800/80 hover:bg-slate-700 border border-slate-600/50 hover:border-amber-400/50 text-slate-200 hover:text-white font-bold rounded-2xl shadow-md transition flex items-center justify-center gap-2 text-xs cursor-pointer"
             >
               <Shield size={16} className="text-amber-400" /> Acceso Administrador

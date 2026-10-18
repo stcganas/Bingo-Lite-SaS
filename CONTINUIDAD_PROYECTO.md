@@ -148,3 +148,42 @@
 - Ningún dato (jugadores, billeteras, juegos, cartones) debe cruzarse entre salas.
 - No exponer credenciales ni claves maestras (`service_role`, tokens privados) en el frontend.
 
+---
+
+## 7. Correcciones Aplicadas en Sesión de Testing (2026-10-18)
+
+### 🐛 Errores Corregidos:
+
+1. **Error RLS al subir comprobantes (`new row violates row-level security policy`)**
+   - **Causa raíz:** El bucket `receipts` de Supabase Storage tenía RLS habilitado sin política de acceso para `service_role`. El backend (Node.js con `SUPABASE_SERVICE_ROLE_KEY`) estaba siendo bloqueado por RLS al intentar hacer `upload()`.
+   - **Corrección en SQL:** `fix_rls_storage_and_updates.sql` — Agrega política `FOR ALL TO service_role` en `storage.objects` para el bucket `receipts`, y asegura que el bucket sea público para lectura de URLs.
+   - **Corrección adicional:** Políticas de acceso completo (`FOR ALL TO service_role`) para las 21 tablas del sistema (players, wallets, settings, game, cards, etc.) que no tenían políticas de escritura para el backend.
+
+2. **Recargas manuales desaparecen después de hacerse**
+   - **Causa raíz:** En `/api/wallet/recharge-request` (línea ~8994 de `server.ts`), `updateWalletBalance()` se llamaba SIN pasar el `tenantId`. Esto guardaba la transacción en el tenant `default`, pero el admin al listar recargas de su sala específica no las veía.
+   - **Corrección en `server.ts`:** Se extrae `rechargeTenantId` del jugador (`player.tenant_id`) o del request, y se pasa a `updateWalletBalance(..., rechargeTenantId)`.
+
+3. **Edición y actualización de usuarios no funciona**
+   - **Causa raíz 1 (RLS):** El UPDATE en la tabla `players` desde el backend era bloqueado por RLS (sin política de escritura para `service_role`). Resuelto con el nuevo script SQL.
+   - **Causa raíz 2 (columnas):** El endpoint `PUT /api/admin/players/:id` incluía `state` y `city` que pueden no existir en la tabla. Ahora el payload se construye dinámicamente con solo los campos definidos, y hay un fallback si falla por error 42703 (columna inexistente).
+   - **Corrección en frontend:** `handleUpdateUser` ahora muestra el mensaje de error exacto del servidor.
+
+4. **Modo mantenimiento se aplicaba globalmente a todas las salas**
+   - **Causa raíz:** `getGameSettings` tenía un fallback peligroso: cuando una sala nueva no tenía su propio `room_settings_X`, heredaba TODOS los valores de `app_global_settings` (incluyendo `maintenance_mode: true`). Esto causaba que salas sin configuración propia heredaran el mantenimiento de la sala `bingo-lite`.
+   - **Corrección en `server.ts`:** El fallback global (`app_global_settings`) ahora SOLO se aplica para `gameId` numérico (partidas específicas), NUNCA para scopes de sala (`room_settings_X`). Cada sala devuelve `{}` si no tiene su propia configuración.
+
+5. **Salas nuevas heredaban datos de la sala oficial `bingo-lite`**
+   - **Causa raíz:** Mismo problema que #4 — el fallback global de `getGameSettings` hacía que salas nuevas heredaran todos los settings de `bingo-lite`, incluyendo el progreso de torneos.
+   - **Corrección:** Resuelto con la misma corrección del punto #4.
+
+6. **MaintenanceScreen mostraba link de admin incorrecto**
+   - **Corrección:** `MaintenanceScreen.tsx` ahora detecta el slug de la sala actual desde `location.pathname` y redirige al login del admin correcto (`/sala/:slug/admin/login`).
+
+### 📁 Archivos Modificados en esta Sesión:
+- `server.ts`: Corrección de `getGameSettings` (fallback global), `updateWalletBalance` en recarga (sin tenantId), `PUT /api/admin/players/:id` (payload dinámico + manejo de 42703).
+- `src/components/MaintenanceScreen.tsx`: Link de admin corregido para redirigir al admin de la sala actual.
+- `src/pages/AdminDashboard.tsx`: Texto de mantenimiento actualizado ("sala" en lugar de "app"), mejora en `handleUpdateUser` para mostrar error real del servidor.
+- `fix_rls_storage_and_updates.sql`: **NUEVO** — Script SQL de corrección de políticas RLS para storage y todas las tablas del sistema. Ejecutar en Supabase SQL Editor.
+
+### ⚠️ Acción Pendiente (Manual):
+- **Ejecutar `fix_rls_storage_and_updates.sql` en Supabase SQL Editor** para activar las políticas de escritura del backend. Sin este paso, el error de RLS en subida de comprobantes y edición de usuarios persiste.
