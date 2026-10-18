@@ -440,7 +440,17 @@ ALTER TABLE public.super_admin_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.free_game_prizes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.player_paid_game_participations ENABLE ROW LEVEL SECURITY;
 
--- Limpieza de políticas previas para evitar conflictos
+-- ------------------------------------------------------------------------------
+-- POLÍTICAS RLS BLINDADAS (ZERO-TRUST Y AISLAMIENTO MULTI-TENANT)
+-- ------------------------------------------------------------------------------
+-- NOTA CRÍTICA DE SEGURIDAD:
+-- En Supabase, el rol 'service_role' (usado por el backend con SUPABASE_SERVICE_ROLE_KEY)
+-- cuenta con BYPASSRLS por defecto en PostgreSQL. No requiere políticas abiertas.
+-- Las políticas aquí definidas restringen estrictamente a los roles 'anon' y 'authenticated'
+-- para prevenir que usuarios maliciosos alteren saldos, cartones o datos entre salas.
+-- ------------------------------------------------------------------------------
+
+-- Limpieza exhaustiva de políticas previas (permisivas o heredadas)
 DROP POLICY IF EXISTS "Public read tenants safe" ON public.tenants;
 DROP POLICY IF EXISTS "Public read tenants" ON public.tenants;
 DROP POLICY IF EXISTS "Allow backend all on tenants" ON public.tenants;
@@ -461,49 +471,97 @@ DROP POLICY IF EXISTS "Public read cards" ON public.cards;
 DROP POLICY IF EXISTS "Allow backend all on cards" ON public.cards;
 
 DROP POLICY IF EXISTS "Allow backend all on players" ON public.players;
+DROP POLICY IF EXISTS "Public read players safe" ON public.players;
+DROP POLICY IF EXISTS "Public read players" ON public.players;
+
 DROP POLICY IF EXISTS "Allow backend all on wallets" ON public.wallets;
 DROP POLICY IF EXISTS "Allow backend all on wallet_transactions" ON public.wallet_transactions;
+DROP POLICY IF EXISTS "Allow backend all on wallet_activations" ON public.wallet_activations;
+
 DROP POLICY IF EXISTS "Allow backend all on sellers" ON public.sellers;
+DROP POLICY IF EXISTS "Public read sellers" ON public.sellers;
+
 DROP POLICY IF EXISTS "Allow backend all on receipts" ON public.receipts;
 DROP POLICY IF EXISTS "Allow backend all on bingo_claims" ON public.bingo_claims;
+DROP POLICY IF EXISTS "Allow backend all on gift_invitations" ON public.gift_invitations;
+DROP POLICY IF EXISTS "Public read gift_invitations" ON public.gift_invitations;
+
 DROP POLICY IF EXISTS "Allow backend all on notifications" ON public.notifications;
+DROP POLICY IF EXISTS "Public read notifications" ON public.notifications;
+
 DROP POLICY IF EXISTS "Allow backend all on ai_presets" ON public.ai_presets;
 DROP POLICY IF EXISTS "Allow backend all on admin_sessions" ON public.admin_sessions;
 DROP POLICY IF EXISTS "Allow backend all on super_admin_events" ON public.super_admin_events;
+
 DROP POLICY IF EXISTS "Allow backend all on free_game_prizes" ON public.free_game_prizes;
+DROP POLICY IF EXISTS "Public read free_game_prizes" ON public.free_game_prizes;
+
 DROP POLICY IF EXISTS "Allow backend all on player_paid_game_participations" ON public.player_paid_game_participations;
 
--- Crear políticas permisivas para el backend (service_role y APIs autorizadas) y lectura pública
-CREATE POLICY "Public read tenants safe" ON public.tenants FOR SELECT USING (true);
-CREATE POLICY "Allow backend all on tenants" ON public.tenants FOR ALL USING (true) WITH CHECK (true);
+-- 1. SALAS (tenants): Lectura pública para cargar temas visuales y metadatos de salas
+DROP POLICY IF EXISTS "Public read tenants safe" ON public.tenants;
+CREATE POLICY "Public read tenants safe" ON public.tenants 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
 
-CREATE POLICY "Public read game" ON public.game FOR SELECT USING (true);
-CREATE POLICY "Allow backend all on game" ON public.game FOR ALL USING (true) WITH CHECK (true);
+-- 2. JUEGOS (game): Lectura pública para seguir el sorteo y estado de la partida
+DROP POLICY IF EXISTS "Public read game" ON public.game;
+CREATE POLICY "Public read game" ON public.game 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
 
-CREATE POLICY "Public read patterns" ON public.patterns FOR SELECT USING (true);
-CREATE POLICY "Allow backend all on patterns" ON public.patterns FOR ALL USING (true) WITH CHECK (true);
+-- 3. PATRONES Y FIGURAS: Lectura pública para conocer los premios y figuras en juego
+DROP POLICY IF EXISTS "Public read patterns" ON public.patterns;
+CREATE POLICY "Public read patterns" ON public.patterns 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
 
-CREATE POLICY "Public read game_patterns" ON public.game_patterns FOR SELECT USING (true);
-CREATE POLICY "Allow backend all on game_patterns" ON public.game_patterns FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "Public read game_patterns" ON public.game_patterns;
+CREATE POLICY "Public read game_patterns" ON public.game_patterns 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
 
-CREATE POLICY "Public read settings" ON public.settings FOR SELECT USING (true);
-CREATE POLICY "Allow backend all on settings" ON public.settings FOR ALL USING (true) WITH CHECK (true);
+-- 4. CONFIGURACIÓN (settings): Lectura pública de ajustes visuales y generales
+DROP POLICY IF EXISTS "Public read settings" ON public.settings;
+CREATE POLICY "Public read settings" ON public.settings 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
 
-CREATE POLICY "Public read cards" ON public.cards FOR SELECT USING (true);
-CREATE POLICY "Allow backend all on cards" ON public.cards FOR ALL USING (true) WITH CHECK (true);
+-- 5. CARTONES (cards): Lectura pública para cargar los cartones asignados
+DROP POLICY IF EXISTS "Public read cards" ON public.cards;
+CREATE POLICY "Public read cards" ON public.cards 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
 
-CREATE POLICY "Allow backend all on players" ON public.players FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on wallets" ON public.wallets FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on wallet_transactions" ON public.wallet_transactions FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on sellers" ON public.sellers FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on receipts" ON public.receipts FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on bingo_claims" ON public.bingo_claims FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on notifications" ON public.notifications FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on ai_presets" ON public.ai_presets FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on admin_sessions" ON public.admin_sessions FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on super_admin_events" ON public.super_admin_events FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on free_game_prizes" ON public.free_game_prizes FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow backend all on player_paid_game_participations" ON public.player_paid_game_participations FOR ALL USING (true) WITH CHECK (true);
+-- 6. JUGADORES (players): Lectura pública de verificación básica de existencia
+DROP POLICY IF EXISTS "Public read players safe" ON public.players;
+CREATE POLICY "Public read players safe" ON public.players 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
+
+-- 7. VENDEDORES (sellers): Lectura pública para validar código de promotor
+DROP POLICY IF EXISTS "Public read sellers" ON public.sellers;
+CREATE POLICY "Public read sellers" ON public.sellers 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
+
+-- 8. PREMIOS DE JUEGOS GRATIS (free_game_prizes): Lectura pública del historial de ganadores
+DROP POLICY IF EXISTS "Public read free_game_prizes" ON public.free_game_prizes;
+CREATE POLICY "Public read free_game_prizes" ON public.free_game_prizes 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
+
+-- 9. REGALOS E INVITACIONES (gift_invitations): Lectura pública
+DROP POLICY IF EXISTS "Public read gift_invitations" ON public.gift_invitations;
+CREATE POLICY "Public read gift_invitations" ON public.gift_invitations 
+    FOR SELECT TO anon, authenticated 
+    USING (true);
+
+-- 9. TABLAS FINANCIERAS Y DE CONTROL (MÁXIMA SEGURIDAD: ZERO-ACCESS DIRECTO PARA ANON):
+-- wallets, wallet_transactions, wallet_activations, receipts, bingo_claims, notifications, admin_sessions
+-- Al no tener políticas PERMISSIVE creadas para 'anon' o 'authenticated', la API REST de Supabase
+-- deniega 100% cualquier consulta o modificación directa desde el navegador.
+-- Todas estas tablas son administradas exclusivamente por el backend Node.js mediante SUPABASE_SERVICE_ROLE_KEY.
 
 -- Notificar recarga de caché del schema PostgREST
 NOTIFY pgrst, 'reload schema';

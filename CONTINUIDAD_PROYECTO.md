@@ -85,51 +85,66 @@
     - **Consolidación y Migración Total de Base de Datos:**
       - Creado script unificado e idempotente: `comprehensive_multitenant_fix_migration.sql` con la definición y ajuste de las 21 tablas del sistema, campos `tenant_id`, tabla faltante `admin_sessions`, restricciones compuestas y políticas RLS.
 
+15. **Blindaje Crítico de Permisos, RLS y Aislamiento Multi-Tenant (Auditoría Integral Resuelta):**
+    - **Aislamiento en Activación y Finalización de Juegos (`doActivateGame` & `POST /api/games/:id/activate`):**
+      - Se corrigió el problema más crítico del SaaS donde la activación de un juego en una sala ejecutaba un barrido global que eliminaba los cartones y reseteaba a estado `pending` a los jugadores de **todas** las demás salas. Ahora el reinicio y archivado opera estrictamente sobre el `tenant_id` de la sala activa.
+    - **Aislamiento Estricto de Canales de Ably Realtime:**
+      - Se eliminaron todas las emisiones a canales globales sin especificar sala (`getChannel()`).
+      - Eventos de nuevo jugador (`new_player`), aprobación de compras (`player_approved`), rechazo de compras (`player_rejected`), comisiones de referidos (`player_${phone}`), actualización de stream de video y anuncios de ganadores de lotería se emiten estrictamente en el canal particionado de la sala correspondiente (`bingo-tenant-${tenantId}`).
+    - **Aislamiento en Obtención de Juego Activo (`getActiveGame`):**
+      - Se corrigió la omisión de `tenantId` en endpoints clave (`/api/players/:phone/cards`, `/api/bingo`, `/api/players`, `/api/players/claim-free-cards`, `/api/players/:id/approve`). Cada consulta de juego activo ahora recibe y respeta el identificador del tenant, garantizando que un jugador no reciba datos de la sala principal ni de salas ajenas.
+    - **Protección de Borrado en Cascada de Jugadores (`DELETE /api/admin/players/:id`):**
+      - Se blindó la eliminación de registros relacionados (comprobantes, transacciones de billetera, reclamos de bingo y billeteras) para filtrar por `tenant_id`. Si un mismo número de teléfono juega en múltiples salas, el borrado en una sala no destruye sus datos ni su saldo en otras salas.
+    - **Aislamiento Estricto en Consultas de Billetera (`/api/wallet` y `/api/wallet/history`):**
+      - Se añadió validación cruzada: un jugador o administrador solo puede consultar saldo e historial financiero si su token verificado pertenece exactamente a la sala consultada.
+    - **Blindaje RLS Zero-Trust en Supabase (`comprehensive_multitenant_fix_migration.sql` & `secure_rls_migration.sql`):**
+      - Eliminadas las políticas permisivas `FOR ALL USING (true)` que permitían a clientes anónimos con `VITE_SUPABASE_ANON_KEY` alterar tablas financieras.
+      - Tablas financieras (`wallets`, `wallet_transactions`, `wallet_activations`, `receipts`, `bingo_claims`) restringidas a cero acceso directo desde el navegador (solo backend con `service_role`).
+      - Revocado el acceso anónimo a columnas sensibles (`admin_password` en `tenants` y `password` en `players`).
+    - **Creación de Documentación Especializada Reglamentaria (`AGENTS.md`):**
+      - Creados `docs/SEGURIDAD_SUPABASE.md`, `docs/PANELES_Y_PERMISOS.md` y `docs/ONESIGNAL_ABLY.md` documentando la arquitectura de seguridad, matriz de roles y particionamiento de eventos.
+    - **Resolución de Error de Compilación TypeScript:**
+      - Corregido error TS2304 en `server.ts` (`globalSettings` no declarada) y verificado con `tsc --noEmit` resultando en código de salida 0 (sin errores).
+
 ---
 
 ## 3. Estado del Motor de Bingo y Tareas Pendientes
 
 ### ⚙️ Diagnóstico del Motor de Bingo Autónomo (`serverAutoplay`):
-- **Estado Actual:** El backend cuenta con un bucle central (`setInterval`) y una variable global única:
-  ```typescript
-  serverAutoplay = { isRunning: false, gameId: null, isDrawing: false, ... }
-  ```
-- **Comportamiento:** Actualmente el servidor extrae balotas automáticamente para **un único juego activo a la vez**. Los eventos de Ably (`game_update`, `ball_drawn`) se transmiten por el canal principal.
-- **Siguiente Fase de Evolución Multi-Tenant del Motor:**
-  1. Transformar `serverAutoplay` en un mapa de motores por sala: `Map<string, RoomAutoplayEngine>`.
-  2. Particionar canales de Ably por sala (`game_update_${tenantId}`, `ball_drawn_${tenantId}`) para que múltiples salas puedan realizar sorteos automáticos independientes y simultáneos.
+- **Estado Actual:** El backend cuenta con `RoomAutoplayState` y un mapa en memoria (`roomAutoplays = new Map<string, RoomAutoplayState>()`) preparado para soportar bucles de sorteo independientes por sala.
+- **Canales de Ably:** Particionados dinámicamente mediante `getChannel(tenantId)` hacia `bingo-tenant-${tenantId}`.
 
 ---
 
 ## 4. Tareas Técnicas Pendientes y Despliegue:
 1. **Ejecución de Migración DDL en Supabase:**
-   - **Archivo:** `comprehensive_multitenant_fix_migration.sql` (reemplaza y consolida las migraciones anteriores).
-   - **Detalle:** Contiene la creación de las 21 tablas, adición de `tenant_id` en `patterns`, `game_patterns`, `settings`, creación de `admin_sessions`, siembra de patrones predeterminados y políticas RLS blindadas.
-   - **Acción requerida:** Copiar y ejecutar en el SQL Editor de Supabase.
+   - **Archivos:** `comprehensive_multitenant_fix_migration.sql` o `secure_rls_migration.sql`.
+   - **Acción requerida:** Ejecutar en el SQL Editor de Supabase para aplicar el blindaje RLS y la protección de contraseñas.
 2. **Sincronización a GitHub:**
-   - Commits locales listos en la rama `main` para ser subidos desde GitHub Desktop (`Push origin`).
+   - Subir los commits de las ramas correspondientes.
 3. **Despliegue a Producción (Render.com):**
-   - El archivo `render.yaml` ya se encuentra optimizado para desplegar el servicio web con `tsx server.ts`.
+   - El servicio web está configurado para ejecutarse con `tsx server.ts`.
 
 ---
 
-## 4. Trazabilidad de Archivos Clave
+## 5. Trazabilidad de Archivos Clave
 
-- `server.ts`: Motor de bingo autónomo, API Express, endpoints SaaS (`/api/tenants`, `/api/admin/tenant-login`), filtrado multi-tenant.
-- `saas_multitenant_migration.sql`: Script PostgreSQL con tabla `tenants`, columnas de admin y restricciones compuestas únicas `(tenant_id, phone)`.
-- `src/App.tsx`: Definición de rutas (`/`, `/sala/:slug`, `/sala/:slug/admin`, `/sala/:slug/admin/login`) y protección estricta `ProtectedRoute` / `PlayerProtectedRoute`.
-- `src/AuthContext.tsx`: Métodos `loginTenantAdmin`, `loginPlayer` y persistencia con aislamiento por sala.
-- `src/pages/AdminLogin.tsx`: Login de administración con soporte para sala específica (`/sala/:slug/admin/login`) y detección de accesos no autorizados entre salas.
-- `src/pages/SaaSMarketingLanding.tsx`: Landing page con captura de credenciales del nuevo organizador y entrega de enlace directo al panel admin.
-- `src/pages/Home.tsx`: Acceso seguro a salas con teléfono, contraseña y PIN de sala.
-- `src/pages/PlayerDashboard.tsx`: Tablero de juego del jugador.
-- `render.yaml`: Configuración de despliegue en Render.
+- `docs/SEGURIDAD_SUPABASE.md`: Especificación de RLS, separación anon/service_role y modelo zero-trust.
+- `docs/PANELES_Y_PERMISOS.md`: Matriz de roles (superadmin, admin de sala, seller, player) y aislamiento de tokens HMAC.
+- `docs/ONESIGNAL_ABLY.md`: Especificación de canales de Ably y segmentación de push en OneSignal por sala.
+- `server.ts`: Motor de bingo, APIs Express, filtros multi-tenant y canales particionados de Ably.
+- `secure_rls_migration.sql`: Script PostgreSQL de blindaje estricto de RLS para Supabase.
+- `comprehensive_multitenant_fix_migration.sql`: Script consolidado con las 21 tablas, RLS y restricciones compuestas.
+- `src/App.tsx`: Definición de rutas y protecciones de acceso (`ProtectedRoute`, `PlayerProtectedRoute`).
+- `src/AuthContext.tsx`: Métodos de autenticación y persistencia con aislamiento por sala.
+- `CONTINUIDAD_PROYECTO.md`: Registro exhaustivo de estado y evolución del proyecto.
 
 ---
 
-## 5. Reglas de Negocio y Restricciones
+## 6. Reglas de Negocio y Restricciones
 - No alterar la evaluación en RAM de los 20,000 cartones (optimización crítica de rendimiento).
 - Todo jugador pertenece exclusivamente a la sala (`tenant_id`) donde se registró.
 - Las credenciales de administrador de una sala JAMÁS pueden funcionar en otra sala.
 - Ningún dato (jugadores, billeteras, juegos, cartones) debe cruzarse entre salas.
 - No exponer credenciales ni claves maestras (`service_role`, tokens privados) en el frontend.
+

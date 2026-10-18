@@ -1751,10 +1751,20 @@ app.get('/api/wallet', async (req, res) => {
     const authUser = await getAuthenticatedUser(req);
     let canViewBalance = false;
     if (authUser) {
+      const userTenant = (authUser.tenant_id || 'default').toLowerCase();
+      const reqTenant = (tenantId || 'default').toLowerCase();
+      const isSameTenant = userTenant === reqTenant ||
+        (userTenant === 'bingo-lite' && reqTenant === 'default') ||
+        (userTenant === 'default' && reqTenant === 'bingo-lite');
+
       if (authUser.role === 'admin') {
-        canViewBalance = true;
+        if (authUser.isSuperAdmin || isSameTenant) {
+          canViewBalance = true;
+        }
       } else if (authUser.role === 'player' && normalizePhone(authUser.phone || '') === phone) {
-        canViewBalance = true;
+        if (isSameTenant) {
+          canViewBalance = true;
+        }
       }
     }
 
@@ -1778,12 +1788,21 @@ app.get('/api/wallet/history', async (req, res) => {
     return res.status(401).json({ error: 'No autorizado: Debes iniciar sesión para consultar el historial financiero.' });
   }
 
+  const userTenant = (authUser.tenant_id || 'default').toLowerCase();
+  const reqTenant = (tenantId || 'default').toLowerCase();
+  const isSameTenant = userTenant === reqTenant ||
+    (userTenant === 'bingo-lite' && reqTenant === 'default') ||
+    (userTenant === 'default' && reqTenant === 'bingo-lite');
+
   if (authUser.role === 'player') {
     if (normalizePhone(authUser.phone || '') !== phone) {
       return res.status(403).json({ error: 'Acceso denegado: Solo puedes consultar tu propio historial de billetera.' });
     }
+    if (!isSameTenant) {
+      return res.status(403).json({ error: 'Acceso denegado: Tu sesión pertenece a otra sala.' });
+    }
   } else if (authUser.role === 'admin' && !authUser.isSuperAdmin) {
-    if (authUser.tenant_id && authUser.tenant_id.toLowerCase() !== tenantId.toLowerCase()) {
+    if (!isSameTenant) {
       return res.status(403).json({ error: 'Acceso denegado: No puedes consultar datos de jugadores de otra sala.' });
     }
   }
@@ -2367,16 +2386,17 @@ async function payReferralCommission(player: any, game: any, cardCount: number) 
       const title = '🎉 ¡Ganaste una Comisión de Referido!';
       const msg = `Tu referido ${player.name || 'un amigo'} compró ${cardCount} cartón(es) y has ganado $${commissionAmount.toLocaleString('es-CO')} (${commissionPercent}%) acreditados a tu billetera.`;
 
+      const targetTenant = (player as any).tenant_id || (referrer as any).tenant_id;
       sendPushNotification({
         recipient: 'single',
         phone: referrer.phone,
         title,
         message: msg,
-        tenantId: (player as any).tenant_id || (referrer as any).tenant_id
+        tenantId: targetTenant
       }).catch(() => { });
 
       try {
-        await getChannel().publish(`player_${referrer.phone}`, {
+        await getChannel(targetTenant).publish(`player_${referrer.phone}`, {
           type: 'commission_received',
           amount: commissionAmount,
           title,
@@ -4329,8 +4349,9 @@ app.delete('/api/games/:id', requireAdmin, async (req, res) => {
     const { error } = await supabase.from('game').delete().eq('id', gameId);
     if (error) return res.status(500).json({ error: error.message });
 
-    invalidateGameCaches();
-    setTimeout(() => getChannel().publish('games_updated', {}), 500);
+    const gameTenant = (gameToDelete?.tenant_id || 'default').toLowerCase();
+    invalidateGameCaches(gameId, gameTenant);
+    setTimeout(() => getChannel(gameTenant).publish('games_updated', {}), 500);
     res.json({ success: true });
   } catch (err: any) {
     console.error('Error in DELETE /api/games/:id:', err);
@@ -4340,25 +4361,46 @@ app.delete('/api/games/:id', requireAdmin, async (req, res) => {
 
 // Activate Game
 async function doActivateGame(gameId: number) {
-  // End all currently active games
-  const { data: previousGames } = await supabase.from('game')
+  const { data: targetGame } = await supabase.from('game').select('tenant_id, name').eq('id', gameId).maybeSingle();
+  const tenantFilter = (targetGame?.tenant_id || 'default').toLowerCase();
+
+  // End all currently active games ONLY for this tenant
+  let prevGamesQ = supabase.from('game')
     .select('id')
     .in('status', ['waiting', 'playing', 'paused']);
+  if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
+    prevGamesQ = prevGamesQ.eq('tenant_id', tenantFilter);
+  } else {
+    prevGamesQ = prevGamesQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+  }
+  const { data: previousGames } = await prevGamesQ;
 
   if (previousGames && previousGames.length > 0) {
     const previousGameIds = previousGames.map((g: any) => g.id);
     await supabase.from('cards').delete().in('game_id', previousGameIds);
 
-    // reset players because we are starting fresh or ending previous games
-    await supabase.from('players').update({
+    // reset players ONLY for this tenant
+    let playerResetQ = supabase.from('players').update({
       card_count: 0,
       status: 'pending'
     }).neq('phone', '0000000000');
+    if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
+      playerResetQ = playerResetQ.eq('tenant_id', tenantFilter);
+    } else {
+      playerResetQ = playerResetQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
+    await playerResetQ;
   }
 
-  await supabase.from('game')
+  let endGamesQ = supabase.from('game')
     .update({ status: 'ended' })
     .in('status', ['waiting', 'playing', 'paused']);
+  if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
+    endGamesQ = endGamesQ.eq('tenant_id', tenantFilter);
+  } else {
+    endGamesQ = endGamesQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+  }
+  await endGamesQ;
 
   // Activate selected game
   const { error } = await supabase.from('game')
@@ -4369,9 +4411,9 @@ async function doActivateGame(gameId: number) {
 
   winLocks.clear(); // Clear memory locks for the new game
 
-  invalidateGameCaches();
+  invalidateGameCaches(gameId, tenantFilter);
   await broadcastGameUpdate(gameId);
-  setTimeout(() => getChannel().publish('games_updated', {}), 500);
+  setTimeout(() => getChannel(tenantFilter).publish('games_updated', {}), 500);
 
   // Send push notification to all subscribed players that the game has started
   try {
@@ -4381,7 +4423,7 @@ async function doActivateGame(gameId: number) {
       title: '🎱 ¡El Bingo ha Comenzado!',
       message: `El sorteo para "${fullState?.name || 'la partida'}" ya está en vivo. ¡Ingresa para seguir tus cartones!`,
       url: getAppUrl(),
-      tenantId: (fullState as any)?.tenant_id
+      tenantId: tenantFilter
     }).catch(() => { });
   } catch (e) { }
 }
@@ -4449,9 +4491,9 @@ app.post('/api/games/:id/activate', requireAdmin, async (req, res) => {
 
     winLocks.clear(); // Clear memory locks for the new game
 
-    invalidateGameCaches();
+    invalidateGameCaches(gameId, tenantFilter);
     await broadcastGameUpdate(gameId);
-    setTimeout(() => getChannel().publish('games_updated', {}), 500);
+    setTimeout(() => getChannel(tenantFilter).publish('games_updated', {}), 500);
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -5375,17 +5417,18 @@ app.post('/api/lottery-numbers/winner', requireAdmin, async (req, res) => {
     const title = '🎉 ¡Tenemos Ganador de Lotería!';
     const message = `El premio de lotería ha sido para ${winnerName} con el código ganador #${codeStr}. ¡Felicidades!`;
 
+    const targetTenant = (req as any).tenantId;
     sendPushNotification({
       recipient: 'all',
       title,
       message,
-      tenantId: (req as any).tenantId
+      tenantId: targetTenant
     }).catch(() => { });
 
     notificationSent = true;
 
     try {
-      await getChannel().publish('lottery_winner_announced', {
+      await getChannel(targetTenant).publish('lottery_winner_announced', {
         title,
         message,
         winnerName,
@@ -6018,6 +6061,8 @@ app.post('/api/admin/cleanup-storage', async (req, res) => {
 // Update Game Status
 app.post('/api/game/status', requireAdmin, async (req, res) => {
   const { gameId, status, prize, card_value, final_note, is_free, ai_knowledge_base, ai_model, ai_animator_enabled, ai_chat_enabled, whatsapp_template } = req.body;
+  const adminUser = (req as any).adminUser;
+  const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
 
   let game;
   if (gameId) {
@@ -6030,9 +6075,16 @@ app.post('/api/game/status', requireAdmin, async (req, res) => {
   }
 
   if (!game) {
-    const rawGame = await getActiveGame();
+    const rawGame = await getActiveGame(targetTenant);
     if (rawGame) {
       game = await getGameFullState(rawGame.id);
+    }
+  }
+
+  if (game && !adminUser?.isSuperAdmin && adminUser?.tenant_id) {
+    const gameTenant = (game.tenant_id || 'default').toLowerCase();
+    if (gameTenant !== adminUser.tenant_id.toLowerCase()) {
+      return res.status(403).json({ error: 'Acceso denegado: Este juego pertenece a otra sala.' });
     }
   }
 
@@ -6056,13 +6108,12 @@ app.post('/api/game/status', requireAdmin, async (req, res) => {
   if (req.body.bg_volume !== undefined) globalSettingsUpdates.bg_volume = req.body.bg_volume;
   if (req.body.fx_volume !== undefined) globalSettingsUpdates.fx_volume = req.body.fx_volume;
 
-  const targetTenant = (req as any).tenantId || (game?.tenant_id) || getTenantIdFromRequest(req);
   if (Object.keys(globalSettingsUpdates).length > 0) {
     await saveGameSettings('global', globalSettingsUpdates, targetTenant);
   }
 
   if (!game) {
-    invalidateGameCaches();
+    invalidateGameCaches(undefined, targetTenant);
     if (status || prize !== undefined || card_value !== undefined) {
       return res.status(404).json({ error: 'No game found' });
     }
@@ -6098,7 +6149,7 @@ app.post('/api/game/status', requireAdmin, async (req, res) => {
     await endGameCleanup(game.id, game.final_note || "");
   }
 
-  invalidateGameCaches();
+  invalidateGameCaches(game.id, targetTenant);
   await broadcastGameUpdate(game.id);
   res.json({ success: true });
 });
@@ -6226,35 +6277,36 @@ app.post('/api/admin/upload-header', upload.single('header_image'), async (req: 
 // Update Stream Status
 app.post('/api/game/stream', requireAdmin, async (req, res) => {
   const { stream_id, stream_active } = req.body;
+  const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
 
-  // Save to global settings so it is persistent across games
+  // Save to room settings so it is persistent across games for this tenant
   const globalUpdates: any = {};
   if (stream_id !== undefined) globalUpdates.stream_id = stream_id;
   if (stream_active !== undefined) globalUpdates.stream_active = stream_active;
 
   if (Object.keys(globalUpdates).length > 0) {
     try {
-      await saveGameSettings('global', globalUpdates);
-      console.log('Saved Twitch settings to app_global_settings:', globalUpdates);
+      await saveGameSettings('global', globalUpdates, targetTenant);
+      console.log(`Saved Twitch settings for room [${targetTenant}]:`, globalUpdates);
     } catch (err: any) {
 
     }
   }
 
-  let game = await getActiveGame();
+  let game = await getActiveGame(targetTenant);
   if (game) {
     const updates: any = {};
     if (stream_id !== undefined) updates.stream_id = stream_id;
     if (stream_active !== undefined) updates.stream_active = stream_active;
 
     await supabase.from('game').update(updates).eq('id', game.id);
-    invalidateGameCaches();
+    invalidateGameCaches(game.id, targetTenant);
     await broadcastGameUpdate(game.id);
   }
 
-  invalidateGameCaches();
-  if (stream_id !== undefined) getChannel().publish('stream_updated', stream_id);
-  if (stream_active !== undefined) getChannel().publish('stream_status_updated', { active: stream_active });
+  invalidateGameCaches(undefined, targetTenant);
+  if (stream_id !== undefined) getChannel(targetTenant).publish('stream_updated', stream_id);
+  if (stream_active !== undefined) getChannel(targetTenant).publish('stream_status_updated', { active: stream_active });
 
   res.json({ success: true });
 });
@@ -8174,7 +8226,7 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
     if (gameId) {
       game = await getGameFullState(parseInt(gameId));
     } else {
-      game = await getActiveGame();
+      game = await getActiveGame(targetTenant);
     }
 
     if (!game) {
@@ -8189,8 +8241,14 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
       return res.status(400).json({ error: 'Este juego no es gratuito.' });
     }
 
-    // Check if player exists
-    let { data: player } = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
+    // Check if player exists in this tenant
+    let playerQuery = supabase.from('players').select('*').eq('phone', phone);
+    if (targetTenant && targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+      playerQuery = playerQuery.eq('tenant_id', targetTenant);
+    } else {
+      playerQuery = playerQuery.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
+    let { data: player } = await playerQuery.maybeSingle();
 
     if (!player) {
       const referralCode = Math.floor(1000 + Math.random() * 9000).toString();
@@ -8209,6 +8267,7 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
           card_count: 2,
           status: 'approved',
           referral_code: referralCode,
+          tenant_id: targetTenant || 'default',
           receipt_url: JSON.stringify([currentReceipt])
         })
         .select()
@@ -8266,8 +8325,8 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
 
     // Always generate 2 cards for this game and ensure approved status
     await generateCardsForPlayer(player.id, game.id, 2, false, false);
-    getChannel().publish('new_player', player);
-    invalidatePlayersCaches();
+    getChannel(targetTenant).publish('new_player', player);
+    invalidatePlayersCaches(targetTenant);
 
     return res.json({ success: true, message: '¡2 cartones gratis asignados exitosamente!', player });
   } catch (err: any) {
@@ -8310,12 +8369,13 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
   let audit: any = null;
 
   try {
+    const effectiveTenant = (rawTenantId || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
     // Buscar el juego
     let game;
     if (gameId) {
       game = await getGameFullState(parseInt(gameId));
     } else {
-      game = await getActiveGame();
+      game = await getActiveGame(effectiveTenant);
     }
 
     if (!game) {
@@ -8571,7 +8631,6 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       console.log(`[Free Game Auto-Approval] Player ${phone} set to APPROVED with ${finalCardCount} cards.`);
     }
 
-    const effectiveTenant = (rawTenantId || (req as any).tenantId || 'default').toLowerCase();
     let selectPlayerQuery = supabase
       .from('players')
       .select('*')
@@ -8710,8 +8769,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         }
       }
 
-      getChannel().publish('new_player', updatedPlayer);
-      invalidatePlayersCaches();
+      getChannel(effectiveTenant).publish('new_player', updatedPlayer);
+      invalidatePlayersCaches(effectiveTenant);
       try {
         await supabase.from('gift_invitations').update({ status: 'claimed' }).eq('recipient_phone', phone);
       } catch (err) {
@@ -8788,8 +8847,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     }
 
     console.log('Jugador registrado con éxito:', newPlayer.id);
-    getChannel().publish('new_player', newPlayer);
-    invalidatePlayersCaches();
+    getChannel(effectiveTenant).publish('new_player', newPlayer);
+    invalidatePlayersCaches(effectiveTenant);
     try {
       await supabase.from('gift_invitations').update({ status: 'claimed' }).eq('recipient_phone', phone);
     } catch (err) {
@@ -9133,16 +9192,32 @@ app.delete('/api/admin/players/:id', requireAdmin, async (req, res) => {
 
     if (player) {
       const phone = player.phone;
+      const pTenant = (player.tenant_id || 'default').toLowerCase();
 
-      // 2. Delete related records in other tables
-      // We use Promise.all to delete in parallel
+      // 2. Delete related records in other tables strictly scoped to this tenant
+      let delReceipts = supabase.from('receipts').delete().eq('player_phone', phone);
+      let delTx = supabase.from('wallet_transactions').delete().eq('player_phone', phone);
+      let delClaims = supabase.from('bingo_claims').delete().eq('player_phone', phone);
+      let delWallets = supabase.from('wallets').delete().eq('phone', phone);
+
+      if (pTenant && pTenant !== 'default' && pTenant !== 'bingo-lite') {
+        delReceipts = delReceipts.eq('tenant_id', pTenant);
+        delTx = delTx.eq('tenant_id', pTenant);
+        delClaims = delClaims.eq('tenant_id', pTenant);
+        delWallets = delWallets.eq('tenant_id', pTenant);
+      } else {
+        delReceipts = delReceipts.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+        delTx = delTx.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+        delClaims = delClaims.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+        delWallets = delWallets.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      }
+
       await Promise.all([
         supabase.from('cards').delete().eq('player_id', id),
-        supabase.from('cards').delete().eq('player_phone', phone),
-        supabase.from('receipts').delete().eq('player_phone', phone),
-        supabase.from('wallet_transactions').delete().eq('player_phone', phone),
-        supabase.from('bingo_claims').delete().eq('player_phone', phone),
-        supabase.from('wallets').delete().eq('phone', phone)
+        delReceipts,
+        delTx,
+        delClaims,
+        delWallets
       ]);
     } else {
       await supabase.from('cards').delete().eq('player_id', id);
@@ -9156,9 +9231,10 @@ app.delete('/api/admin/players/:id', requireAdmin, async (req, res) => {
 
     if (deleteError) throw deleteError;
 
-    invalidatePlayersCaches();
-    invalidateGameCaches();
-    getChannel().publish('player_rejected', { id });
+    const pTenant = (player?.tenant_id || 'default').toLowerCase();
+    invalidatePlayersCaches(pTenant);
+    invalidateGameCaches(undefined, pTenant);
+    getChannel(pTenant).publish('player_rejected', { id });
     res.json({ success: true });
   } catch (err: any) {
 
@@ -9353,8 +9429,9 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
     if (targetGameId) {
       game = await getGameFullState(targetGameId);
     }
+    const playerTenant = (player.tenant_id || (req as any).tenantId || 'default').toLowerCase();
     if (!game) {
-      game = await getActiveGame();
+      game = await getActiveGame(playerTenant);
     }
 
     if (game) {
@@ -9393,9 +9470,9 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
       }).catch(() => { });
     }
 
-    getChannel().publish('player_approved', { id: playerId, phone: player.phone });
-    invalidatePlayersCaches();
-    invalidateGameCaches();
+    getChannel(playerTenant).publish('player_approved', { id: playerId, phone: player.phone });
+    invalidatePlayersCaches(playerTenant);
+    invalidateGameCaches(game?.id, playerTenant);
     res.json({ success: true, message: 'Jugador aprobado y cartones asignados correctamente' });
   } catch (err: any) {
     console.error('[Approve Player] Error:', err);
@@ -9468,7 +9545,8 @@ app.post('/api/admin/players/approve-all', requireAdmin, async (req, res) => {
           }
         } catch (e) { }
 
-        let game = targetGameId ? await getGameFullState(targetGameId) : await getActiveGame();
+        const playerTenant = (player.tenant_id || (req as any).tenantId || 'default').toLowerCase();
+        let game = targetGameId ? await getGameFullState(targetGameId) : await getActiveGame(playerTenant);
         if (game) {
           const { data: existingCards } = await supabase.from('cards').select('id').eq('player_id', player.id).eq('game_id', game.id);
           const currentCardCount = existingCards ? existingCards.length : 0;
@@ -9480,7 +9558,7 @@ app.post('/api/admin/players/approve-all', requireAdmin, async (req, res) => {
           payReferralCommission(player, game, targetCount).catch(() => { });
         }
 
-        getChannel().publish('player_approved', { id: player.id, phone: player.phone });
+        getChannel(playerTenant).publish('player_approved', { id: player.id, phone: player.phone });
         if (player.phone) {
           sendPushNotification({
             recipient: 'single',
@@ -9497,8 +9575,9 @@ app.post('/api/admin/players/approve-all', requireAdmin, async (req, res) => {
       }
     }
 
-    invalidatePlayersCaches();
-    invalidateGameCaches();
+    const adminTenant = (adminUser?.tenant_id || (req as any).tenantId || 'default').toLowerCase();
+    invalidatePlayersCaches(adminTenant);
+    invalidateGameCaches(undefined, adminTenant);
     res.json({ success: true, message: `Se han aprobado ${approvedCount} jugadores masivamente.` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -9545,9 +9624,10 @@ app.post('/api/players/:id/reject', requireAdmin, async (req, res) => {
       });
     }
 
-    getChannel().publish('player_rejected', { id: playerId });
-    invalidatePlayersCaches();
-    invalidateGameCaches();
+    const playerTenant = (player.tenant_id || (req as any).tenantId || 'default').toLowerCase();
+    getChannel(playerTenant).publish('player_rejected', { id: playerId });
+    invalidatePlayersCaches(playerTenant);
+    invalidateGameCaches(undefined, playerTenant);
     res.json({ success: true, message: 'Compra rechazada y cartones eliminados exitosamente.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Error al rechazar compra' });
@@ -9806,7 +9886,7 @@ app.get('/api/players/:phone/cards', async (req, res) => {
     touchPlayerPresence(phone, player.name);
 
     // 1. Get active game (can be null)
-    let game = await getActiveGame();
+    let game = await getActiveGame(targetTenant);
 
     // --- AUTO-ASSIGNMENT FOR FREE GAMES ---
     if (game && (game.is_free || game.type === 'free')) {
@@ -9836,7 +9916,7 @@ app.get('/api/players/:phone/cards', async (req, res) => {
             player.status = 'approved';
             player.card_count = cardsToAssign;
           }
-          getChannel().publish('player_approved', { id: player.id, phone: player.phone });
+          getChannel(targetTenant).publish('player_approved', { id: player.id, phone: player.phone });
         }
       } catch (autoErr) {
         console.error('[Auto-Assign] Error:', autoErr);
@@ -9938,10 +10018,17 @@ app.get('/api/players/:phone/cards', async (req, res) => {
 
 // Bingo Claim
 app.post('/api/bingo', async (req, res) => {
-  const { card_number, phone: rawPhone, marked_cells } = req.body;
+  const { card_number, phone: rawPhone, marked_cells, tenantId: qTenantId } = req.body;
   const phone = normalizePhone(rawPhone);
+  const targetTenant = ((qTenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
 
-  const { data: player } = await supabase.from('players').select('*').eq('phone', phone).single();
+  let playerQ = supabase.from('players').select('*').eq('phone', phone);
+  if (targetTenant && targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+    playerQ = playerQ.eq('tenant_id', targetTenant);
+  } else {
+    playerQ = playerQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+  }
+  const { data: player } = await playerQ.maybeSingle();
 
   if (!player) return res.status(400).json({ error: 'Player not found' });
 
@@ -9953,7 +10040,7 @@ app.post('/api/bingo', async (req, res) => {
 
   if (!card) return res.status(400).json({ error: 'Card not found for this player' });
 
-  let game = await getActiveGame();
+  let game = await getActiveGame(targetTenant);
 
   if (!game) return res.status(400).json({ error: 'No active game' });
 
@@ -10204,8 +10291,8 @@ async function sendPushNotification({ recipient, phone, title, message, url, ten
       console.log(`[Notification] Suppressed broadcast push notification for room [${scopedTenant}] due to maintenance mode.`);
       return { success: true, message: 'Skipped due to maintenance mode' };
     }
-    const onesignalAppId = process.env.ONESIGNAL_APP_ID || process.env.VITE_ONESIGNAL_APP_ID || globalSettings.onesignal_app_id;
-    const rawApiKey = process.env.ONESIGNAL_REST_API_KEY || globalSettings.onesignal_rest_api_key;
+    const onesignalAppId = process.env.ONESIGNAL_APP_ID || process.env.VITE_ONESIGNAL_APP_ID || roomSettings.onesignal_app_id;
+    const rawApiKey = process.env.ONESIGNAL_REST_API_KEY || roomSettings.onesignal_rest_api_key;
     const onesignalApiKey = rawApiKey ? String(rawApiKey).replace(/^Basic\s+/i, '').replace(/^Key\s+/i, '').trim() : '';
 
     let targetIds: string[] = [];
