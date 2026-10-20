@@ -67,7 +67,7 @@ export default defineConfig(({ mode }) => {
     ],
     build: {
       outDir: 'dist',
-      emptyOutDir: true,
+      emptyOutDir: false, // Preservar chunks previos para no generar 404 a pestañas abiertas de usuarios durante despliegues
       sourcemap: false,
     },
     resolve: {

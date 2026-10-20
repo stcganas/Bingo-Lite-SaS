@@ -34,8 +34,22 @@ export function lazyWithRetry<T extends ComponentType<any>>(
       if (isChunkError && !pageHasBeenForceRefreshed) {
         // Marcamos que ya se recargó para evitar bucles infinitos
         sessionStorage.setItem(`chunk_reload_${chunkName}`, 'true');
-        console.log(`[lazyWithRetry] Recargando página para sincronizar nueva versión de "${chunkName}"...`);
-        window.location.reload();
+        console.log(`[lazyWithRetry] Limpiando cachés y sincronizando nueva versión de "${chunkName}"...`);
+        
+        try {
+          if (typeof window !== 'undefined' && 'caches' in window) {
+            caches.keys().then(names => Promise.all(names.map(n => caches.delete(n)))).catch(() => {});
+          }
+          if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(regs => {
+              regs.forEach(r => r.update().catch(() => {}));
+            }).catch(() => {});
+          }
+        } catch (e) {}
+
+        const targetUrl = new URL(window.location.href);
+        targetUrl.searchParams.set('_chunk_sync', Date.now().toString());
+        window.location.replace(targetUrl.toString());
         // Devolvemos una promesa pendiente para no romper el render antes del reload
         return new Promise(() => {});
       }
