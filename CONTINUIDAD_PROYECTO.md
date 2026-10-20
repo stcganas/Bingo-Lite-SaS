@@ -187,3 +187,42 @@
 
 ### ⚠️ Acción Pendiente (Manual):
 - **Ejecutar `fix_rls_storage_and_updates.sql` en Supabase SQL Editor** para activar las políticas de escritura del backend. Sin este paso, el error de RLS en subida de comprobantes y edición de usuarios persiste.
+
+---
+
+## 8. Correcciones Aplicadas en Sesión de Testing (2026-10-20)
+
+### 🐛 Errores Corregidos:
+
+1. **Billeteras no sincronizadas en tiempo real (Admin Dashboard)**
+   - **Causa raíz:** El handler `onWalletUpdated` de Ably en `AdminDashboard.tsx` solo actualizaba jugadores ya presentes en la lista. Si un nuevo jugador hacía una recarga, el admin no lo veía hasta refrescar manualmente.
+   - **Corrección:** El handler ahora detecta si el jugador existe en la lista; si no, dispara `fetchWalletPlayers()`. Además, cualquier evento `wallet_updated` también actualiza `fetchRechargeRequests()` para mostrar cambios de estado en tiempo real.
+
+2. **Comprobantes de recarga rechazados por RLS (`new row violates row-level security policy`)**
+   - **Causa raíz:** El bucket `receipts` de Supabase Storage tenía RLS sin políticas suficientes para el `service_role` del backend.
+   - **Corrección en SQL:** Nuevo script `fix_wallets_and_receipts.sql` — Crea/actualiza buckets con `allowed_mime_types`, agrega políticas `FOR ALL TO service_role` en `storage.objects` para todos los buckets, y políticas de escritura para las 21 tablas del sistema.
+   - **⚠️ ACCIÓN REQUERIDA:** Ejecutar `fix_wallets_and_receipts.sql` en el SQL Editor de Supabase.
+
+3. **Recargas manuales del jugador visualmente desaparecen**
+   - **Causa raíz 1 (Frontend):** `handleRechargeSubmit` en `PlayerDashboard.tsx` enviaba el formulario sin incluir el `tenantId` en el `FormData`. El servidor no podía identificar correctamente la sala.
+   - **Corrección en Frontend:** Se agrega `formData.append('tenantId', tenantSlug)` al formulario de recarga.
+   - **Causa raíz 2 (Backend):** El endpoint `POST /api/wallet/recharge-request` no extraía el `tenantId` del body ni filtraba la búsqueda del jugador por sala.
+   - **Corrección en Backend:** Se extrae `bodyTenantId` del `req.body`, se construye `requestTenantId` con prioridad `body > middleware`, y la búsqueda del jugador ahora filtra por `tenant_id` cuando la sala no es `default`.
+
+4. **Endpoint `/api/admin/wallet/recharge` sin protección de autenticación**
+   - **Causa raíz:** Faltaba el middleware `requireAdmin` en el endpoint de recarga manual del administrador (línea ~1839 de `server.ts`).
+   - **Corrección:** Se agrega `requireAdmin` como middleware del endpoint para que solo admins autenticados puedan hacer recargas directas.
+
+### 📁 Archivos Modificados en esta Sesión:
+- `server.ts`:
+  - Línea ~1839: `requireAdmin` agregado a `POST /api/admin/wallet/recharge`.
+  - Líneas ~8877-8000: Extracción correcta de `tenantId` y filtrado del jugador por sala en `POST /api/wallet/recharge-request`.
+- `src/pages/PlayerDashboard.tsx`:
+  - `handleRechargeSubmit`: Se agrega `tenantId` al `FormData` de la recarga.
+- `src/pages/AdminDashboard.tsx`:
+  - `onWalletUpdated`: Mejorado para refrescar lista completa y recargas pendientes.
+- `fix_wallets_and_receipts.sql`: **NUEVO** — Script SQL consolidado con correcciones de RLS, buckets y columnas `tenant_id`.
+
+### ⚠️ Acción Pendiente (Manual):
+- **Ejecutar `fix_wallets_and_receipts.sql` en Supabase SQL Editor** para aplicar las políticas de storage y garantizar que los buckets y columnas `tenant_id` estén correctamente configurados.
+

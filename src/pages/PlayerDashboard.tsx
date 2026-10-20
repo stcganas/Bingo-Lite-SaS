@@ -750,6 +750,10 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       formData.append('amount', rechargeAmount);
       formData.append('note', rechargeNote);
       formData.append('receipt', rechargeReceipt);
+      // Enviar tenantId para que el servidor aísle la recarga por sala correctamente
+      if (tenantSlug) {
+        formData.append('tenantId', tenantSlug);
+      }
 
       const res = await fetch('/api/wallet/recharge-request', {
         method: 'POST',

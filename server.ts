@@ -1836,7 +1836,7 @@ app.get('/api/wallet/history', async (req, res) => {
   }
 });
 
-app.post('/api/admin/wallet/recharge', async (req, res) => {
+app.post('/api/admin/wallet/recharge', requireAdmin, async (req, res) => {
   const { phone: rawPhone, amount, tenantId: qTenantId } = req.body;
   const phone = normalizePhone(rawPhone);
   const numAmount = parseFloat(amount);
@@ -8876,9 +8876,11 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
 // Wallet Recharge Request Endpoint (with optional receipt file upload & validation)
 app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: any, res) => {
   try {
-    const { phone: rawPhone, amount, note } = req.body;
+    const { phone: rawPhone, amount, note, tenantId: bodyTenantId } = req.body;
     const phone = normalizePhone(rawPhone);
     const numericAmount = parseInt(amount || '0');
+    // Extraer tenantId correctamente: primero del body (enviado por el frontend), luego del request
+    const requestTenantId = (bodyTenantId || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
 
     if (!phone) {
       return res.status(400).json({ error: 'Número de teléfono requerido' });
@@ -8956,8 +8958,12 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
     }
 
     // 3. Save receipt / transaction to player's history or notifications
-    // Locate player to update history and wallet activations
-    const { data: player } = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
+    // Locate player to update history and wallet activations - filtrar por tenant para evitar cruce entre salas
+    let playerSearchQ = supabase.from('players').select('*').eq('phone', phone);
+    if (requestTenantId && requestTenantId !== 'default' && requestTenantId !== 'bingo-lite') {
+      playerSearchQ = playerSearchQ.eq('tenant_id', requestTenantId);
+    }
+    const { data: player } = await playerSearchQ.maybeSingle();
 
     if (player) {
       let historyArray: any[] = [];
@@ -8992,8 +8998,8 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
     }
 
     if (!isSilentlyInvalid) {
-      // Obtener tenantId del jugador o del request para aislar la recarga
-      const rechargeTenantId = (player?.tenant_id || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
+      // Obtener tenantId del jugador o del request para aislar la recarga (prioridad: jugador > body > middleware)
+      const rechargeTenantId = (player?.tenant_id || requestTenantId || 'default').toLowerCase();
       // Auto-approve recharge: Automatically update wallet balance with tenant isolation
       await updateWalletBalance(phone, numericAmount, `Recarga automática aprobada por $${numericAmount} (Ref: ${referenceNumber})`, 'recharge', rechargeTenantId);
 

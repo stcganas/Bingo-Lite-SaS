@@ -1631,13 +1631,22 @@ export default function AdminDashboard() {
     const onWalletUpdated = (msg: any) => {
       console.log('DEBUG: Evento wallet_updated recibido en AdminDashboard:', msg.data);
       const { phone, balance } = msg.data;
-      setWalletPlayers((prev) =>
-        prev.map((player) =>
-          comparePhones(player.phone, phone)
-            ? { ...player, balance }
-            : player
-        )
-      );
+      // Actualizar saldo en la lista de billeteras inmediatamente (si el jugador ya está en la vista)
+      setWalletPlayers((prev) => {
+        const exists = prev.some((player) => comparePhones(player.phone, phone));
+        if (exists) {
+          return prev.map((player) =>
+            comparePhones(player.phone, phone)
+              ? { ...player, balance }
+              : player
+          );
+        }
+        // Si el jugador no está en la lista, refrescar la lista completa
+        fetchWalletPlayers();
+        return prev;
+      });
+      // También refrescar solicitudes de recarga para mostrar cambios de estado
+      fetchRechargeRequests();
     };
     channel.subscribe('wallet_updated', onWalletUpdated);
 
