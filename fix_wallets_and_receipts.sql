@@ -56,8 +56,10 @@ ON CONFLICT (id) DO UPDATE SET
 
 -- ============================================================
 -- PARTE 2: POLÍTICAS DE STORAGE PARA 'receipts' Y 'banners'
+-- Garantiza que las subidas desde el backend y clientes nunca fallen por RLS
 -- ============================================================
 
+-- Limpieza de políticas previas de receipts
 DROP POLICY IF EXISTS "Service role full access receipts" ON storage.objects;
 DROP POLICY IF EXISTS "Backend upload receipts" ON storage.objects;
 DROP POLICY IF EXISTS "Backend delete receipts" ON storage.objects;
@@ -65,30 +67,29 @@ DROP POLICY IF EXISTS "Public read receipts" ON storage.objects;
 DROP POLICY IF EXISTS "Authenticated upload receipts" ON storage.objects;
 DROP POLICY IF EXISTS "Receipts service role policy" ON storage.objects;
 DROP POLICY IF EXISTS "Anon upload receipts" ON storage.objects;
+DROP POLICY IF EXISTS "Public upload receipts" ON storage.objects;
+DROP POLICY IF EXISTS "Public update receipts" ON storage.objects;
+DROP POLICY IF EXISTS "All roles full access receipts" ON storage.objects;
 
--- Acceso total e irrestricto para service_role (Backend Node.js Express)
-CREATE POLICY "Service role full access receipts"
-ON storage.objects FOR ALL TO service_role
+-- Acceso total irrestricto para todos los roles (INSERT, SELECT, UPDATE, DELETE) en bucket 'receipts'
+CREATE POLICY "All roles full access receipts"
+ON storage.objects FOR ALL
+TO public, anon, authenticated, service_role
 USING (bucket_id = 'receipts')
 WITH CHECK (bucket_id = 'receipts');
 
--- Lectura pública para que organizadores y jugadores puedan ver los comprobantes
-CREATE POLICY "Public read receipts"
-ON storage.objects FOR SELECT TO anon, authenticated
-USING (bucket_id = 'receipts');
-
--- Políticas para banners
+-- Limpieza de políticas previas de banners
 DROP POLICY IF EXISTS "Service role full access banners" ON storage.objects;
 DROP POLICY IF EXISTS "Public read banners" ON storage.objects;
+DROP POLICY IF EXISTS "Public upload banners" ON storage.objects;
+DROP POLICY IF EXISTS "All roles full access banners" ON storage.objects;
 
-CREATE POLICY "Service role full access banners"
-ON storage.objects FOR ALL TO service_role
+-- Acceso total irrestricto para todos los roles en bucket 'banners'
+CREATE POLICY "All roles full access banners"
+ON storage.objects FOR ALL
+TO public, anon, authenticated, service_role
 USING (bucket_id = 'banners')
 WITH CHECK (bucket_id = 'banners');
-
-CREATE POLICY "Public read banners"
-ON storage.objects FOR SELECT TO anon, authenticated
-USING (bucket_id = 'banners');
 
 -- ============================================================
 -- PARTE 3: SANEAMIENTO Y ESTRUCTURA DE TABLA wallets

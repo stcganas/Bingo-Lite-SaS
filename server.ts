@@ -1037,6 +1037,13 @@ app.post('/api/tenants', async (req, res) => {
       tenantsCache.set(slug, { tenant: createdTenant, timestamp: Date.now() });
     }
 
+    // Clonar inmediatamente los patrones estándar del sistema para que esta sala tenga sus figuras independientes
+    try {
+      await seedRoomPatterns(slug);
+    } catch (seedErr: any) {
+      console.warn(`[CreateTenant] Notice sembrando figuras para sala ${slug}:`, seedErr?.message);
+    }
+
     const host = req.headers.host || 'bingolite.click';
     const forwardedProto = req.headers['x-forwarded-proto'];
     const proto = (typeof forwardedProto === 'string' ? forwardedProto : '') || (req.secure ? 'https' : 'http');
@@ -4499,7 +4506,19 @@ app.delete('/api/games/:id', requireAdmin, async (req, res) => {
       }
     }
 
-    // 4. Proceder con el borrado seguro del juego
+    // 4. Limpieza en cascada de todas las dependencias del juego (evita violación de Foreign Key)
+    await Promise.allSettled([
+      supabase.from('game_patterns').delete().eq('game_id', gameId),
+      supabase.from('cards').delete().eq('game_id', gameId),
+      supabase.from('wallet_activations').delete().eq('game_id', gameId),
+      supabase.from('lottery_numbers_in_play').delete().eq('game_id', gameId),
+      supabase.from('bingo_claims').delete().eq('game_id', gameId)
+    ]);
+
+    // Limpiar memoria y estado del juego
+    invalidateGameCaches(gameId, (gameToDelete?.tenant_id || 'default').toLowerCase());
+
+    // 5. Proceder con el borrado definitivo del juego
     const { error } = await supabase.from('game').delete().eq('id', gameId);
     if (error) return res.status(500).json({ error: error.message });
 
@@ -4889,6 +4908,43 @@ const SYSTEM_DEFAULT_PATTERNS = [
   }
 ];
 
+// Helper para clonar los patrones por defecto del sistema de forma 100% independiente para una sala
+async function seedRoomPatterns(tenantId: string) {
+  const normTenant = (tenantId || 'default').toLowerCase();
+  try {
+    // 1. Obtener patrones base de 'bingo-lite' o 'default'
+    const { data: basePatterns } = await supabase.from('patterns')
+      .select('name, grid, is_active')
+      .or('tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null')
+      .order('id', { ascending: true });
+
+    const source = (basePatterns && basePatterns.length > 0)
+      ? basePatterns
+      : SYSTEM_DEFAULT_PATTERNS;
+
+    // Desduplicar por nombre para sembrar catálogo limpio
+    const seenNames = new Set<string>();
+    const toInsert: any[] = [];
+    for (const p of source) {
+      if (!p.name || seenNames.has(p.name.trim().toLowerCase())) continue;
+      seenNames.add(p.name.trim().toLowerCase());
+      toInsert.push({
+        name: p.name,
+        grid: p.grid,
+        is_active: p.is_active !== undefined ? p.is_active : true,
+        tenant_id: normTenant
+      });
+    }
+
+    if (toInsert.length > 0) {
+      await supabase.from('patterns').insert(toInsert);
+      console.log(`[seedRoomPatterns] ${toInsert.length} patrones clonados exitosamente para sala: ${normTenant}`);
+    }
+  } catch (err: any) {
+    console.warn(`[seedRoomPatterns] Advertencia sembrando patrones para ${normTenant}:`, err?.message);
+  }
+}
+
 app.get('/api/patterns', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const targetTenant = getTenantIdFromRequest(req);
@@ -4899,33 +4955,29 @@ app.get('/api/patterns', async (req, res) => {
   }
 
   try {
-    // 1. Intentar consultar filtrando por tenant_id de la sala o por patrones globales del sistema
-    let query = supabase.from('patterns').select('*');
-    if (targetTenant && targetTenant !== 'default') {
-      query = query.or(`tenant_id.eq.${targetTenant},tenant_id.eq.default,tenant_id.is.null`);
-    }
-    let { data, error } = await query.order('name', { ascending: true });
+    // 1. Consultar patrones asignados a esta sala específica
+    let { data, error } = await supabase.from('patterns')
+      .select('*')
+      .eq('tenant_id', targetTenant)
+      .order('name', { ascending: true });
 
-    // Fallback si la columna tenant_id no existiese aún en BD
-    if (error && error.message && error.message.includes('tenant_id')) {
-      const fallback = await supabase.from('patterns').select('*').order('name', { ascending: true });
-      data = fallback.data;
-      error = fallback.error;
-    }
-
-    // 2. Si la base de datos no tiene patrones registrados, sembrar automáticamente las figuras estándar
+    // 2. Si la sala aún no tiene patrones propios creados, sembrar inmediatamente los del sistema
     if (!error && (!data || data.length === 0)) {
-      try {
-        const toSeed = SYSTEM_DEFAULT_PATTERNS.map(p => ({ ...p, tenant_id: 'default' }));
-        const { data: insertedDefaults } = await supabase.from('patterns').insert(toSeed).select();
-        if (insertedDefaults && insertedDefaults.length > 0) {
-          data = insertedDefaults;
-        } else {
-          data = SYSTEM_DEFAULT_PATTERNS.map((p, idx) => ({ id: idx + 1, ...p, tenant_id: 'default' }));
-        }
-      } catch (seedErr) {
-        data = SYSTEM_DEFAULT_PATTERNS.map((p, idx) => ({ id: idx + 1, ...p, tenant_id: 'default' }));
-      }
+      await seedRoomPatterns(targetTenant);
+      const { data: seededData } = await supabase.from('patterns')
+        .select('*')
+        .eq('tenant_id', targetTenant)
+        .order('name', { ascending: true });
+      data = seededData;
+    }
+
+    // 3. Si aún así está vacío (ej. sala default), buscar patrones globales del sistema
+    if (!data || data.length === 0) {
+      const { data: globalPatterns } = await supabase.from('patterns')
+        .select('*')
+        .or('tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null')
+        .order('name', { ascending: true });
+      data = globalPatterns;
     }
 
     const finalPatterns = data || [];
@@ -4933,7 +4985,7 @@ app.get('/api/patterns', async (req, res) => {
     res.json(finalPatterns);
   } catch (err: any) {
     console.warn('[GetPatterns] Fallback a figuras del sistema por excepción:', err?.message || err);
-    const fallbackList = SYSTEM_DEFAULT_PATTERNS.map((p, idx) => ({ id: idx + 1, ...p, tenant_id: 'default' }));
+    const fallbackList = SYSTEM_DEFAULT_PATTERNS.map((p, idx) => ({ id: idx + 1, ...p, tenant_id: targetTenant }));
     res.json(fallbackList);
   }
 });

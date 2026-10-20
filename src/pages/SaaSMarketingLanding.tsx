@@ -148,7 +148,7 @@ export default function SaaSMarketingLanding() {
             <a href="#capacidad" className="hover:text-blue-400 transition">Capacidad (20k)</a>
             <a href="#calculadora" className="hover:text-blue-400 transition">Calculadora</a>
             <Link to="/sala/bingo-lite" className="flex items-center gap-1.5 text-amber-400 hover:text-amber-300 transition font-bold">
-              <Play size={14} className="fill-amber-400" /> Sala Demo en Vivo
+              <Play size={14} className="fill-amber-400" /> Sala pública "Entrar"
             </Link>
           </nav>
 
@@ -196,7 +196,7 @@ export default function SaaSMarketingLanding() {
               className="w-full sm:w-auto px-7 py-4 rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 font-bold text-base transition flex items-center justify-center gap-2"
             >
               <Play size={16} className="text-amber-400 fill-amber-400" />
-              <span>Ver Sala Demo</span>
+              <span>Sala pública "Entrar"</span>
             </Link>
           </div>
 
