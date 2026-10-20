@@ -190,39 +190,46 @@
 
 ---
 
-## 8. Correcciones Aplicadas en Sesión de Testing (2026-10-20)
+## 8. Correcciones Aplicadas en Sesión de Testing y Estabilización (2026-10-20)
 
-### 🐛 Errores Corregidos:
+### 🐛 Errores Corregidos y Causas Raíz Identificadas:
 
-1. **Billeteras no sincronizadas en tiempo real (Admin Dashboard)**
-   - **Causa raíz:** El handler `onWalletUpdated` de Ably en `AdminDashboard.tsx` solo actualizaba jugadores ya presentes en la lista. Si un nuevo jugador hacía una recarga, el admin no lo veía hasta refrescar manualmente.
-   - **Corrección:** El handler ahora detecta si el jugador existe en la lista; si no, dispara `fetchWalletPlayers()`. Además, cualquier evento `wallet_updated` también actualiza `fetchRechargeRequests()` para mostrar cambios de estado en tiempo real.
+1. **Recargas manuales rechazadas o que desaparecen visualmente:**
+   - **Causa Raíz Crítica:** En `updateWalletBalance()` (`server.ts`, línea ~470), la consulta de verificación ejecutaba:
+     `supabase.from('wallets').select('id, phone').eq('phone', phone)`
+     La tabla `wallets` en Supabase **no tiene columna `id`** (su clave primaria es `phone`). PostgREST retornaba error `42703: column wallets.id does not exist` y `data: null`. Por tanto, el código asumía que el registro no existía e intentaba hacer un `INSERT`, el cual colisionaba con la clave única (`23505: duplicate key value violates unique constraint "wallets_pkey"`). El saldo nunca se persistía en Supabase, por lo que la recarga "desaparecía visualmente" en cuanto el frontend refrescaba.
+   - **Corrección en `server.ts`:** Se cambió la consulta a `select('phone, balance, tenant_id')`, se corrigió el `UPDATE` con marca de tiempo `updated_at`, y se añadió fallback con manejo seguro de restricciones.
+   - **Verificación:** Comprobado mediante prueba directa contra Supabase: el balance se actualiza y persiste exitosamente con `error: null`.
 
-2. **Comprobantes de recarga rechazados por RLS (`new row violates row-level security policy`)**
-   - **Causa raíz:** El bucket `receipts` de Supabase Storage tenía RLS sin políticas suficientes para el `service_role` del backend.
-   - **Corrección en SQL:** Nuevo script `fix_wallets_and_receipts.sql` — Crea/actualiza buckets con `allowed_mime_types`, agrega políticas `FOR ALL TO service_role` en `storage.objects` para todos los buckets, y políticas de escritura para las 21 tablas del sistema.
-   - **⚠️ ACCIÓN REQUERIDA:** Ejecutar `fix_wallets_and_receipts.sql` en el SQL Editor de Supabase.
+2. **Rechazo de comprobantes de recarga por "falta de permisos" / "auditoría fallida":**
+   - **Causa Raíz 1 (Gemini AI Audit):** La función `auditReceiptWithGemini` en `server.ts` rechazaba de inmediato el comprobante (`immediateRejectionMessage`) con código 400 cuando la variable `GEMINI_API_KEY` no estaba presente en el `.env` o si la IA estaba saturada.
+   - **Corrección en Backend:** Si no hay API key o si la IA está ocupada, el sistema ya **NO** rechaza el comprobante; lo acepta y lo marca con `isSilentlyInvalid = true` para **revisión manual del administrador** en la lista de "Solicitudes de Recarga".
+   - **Causa Raíz 2 (MIME-Type en Storage):** Si el comprobante venía con MIME types móviles no estándar (`image/pjpeg`, `image/heic`, etc.), Supabase Storage rechazaba la subida con error 415.
+   - **Corrección:** Se normaliza el `contentType` antes de la subida a Supabase Storage con `upsert: true`, y se configuró el bucket `receipts` para admitir formatos de imagen sin restricción rígida.
+   - **Causa Raíz 3 (Jugador no localizado):** Si el jugador aún no tenía fila en `players`, la solicitud se perdía. Ahora el endpoint busca por `phone` o crea preventivamente el registro para que la solicitud siempre quede guardada y visible para el administrador.
 
-3. **Recargas manuales del jugador visualmente desaparecen**
-   - **Causa raíz 1 (Frontend):** `handleRechargeSubmit` en `PlayerDashboard.tsx` enviaba el formulario sin incluir el `tenantId` en el `FormData`. El servidor no podía identificar correctamente la sala.
-   - **Corrección en Frontend:** Se agrega `formData.append('tenantId', tenantSlug)` al formulario de recarga.
-   - **Causa raíz 2 (Backend):** El endpoint `POST /api/wallet/recharge-request` no extraía el `tenantId` del body ni filtraba la búsqueda del jugador por sala.
-   - **Corrección en Backend:** Se extrae `bodyTenantId` del `req.body`, se construye `requestTenantId` con prioridad `body > middleware`, y la búsqueda del jugador ahora filtra por `tenant_id` cuando la sala no es `default`.
+3. **Sincronización en Tiempo Real de Billeteras:**
+   - **Ably Scoped por Sala:** En `AdminDashboard.tsx` y `PlayerDashboard.tsx` se integró el parámetro dinámico `tenantSlug` / `currentTenant` en `getBingoChannel(tenant)` para garantizar que ambos paneles estén escuchando en el mismo canal (`bingo-tenant-${slug}`).
+   - **Emisión Dual en Backend:** `updateWalletBalance()` ahora emite `wallet_updated` tanto en el canal de la sala como en el canal global (`bingo-channel`), asegurando que tanto el superadministrador como los administradores locales reciban los cambios en vivo.
+   - **Actualización Optimista:** En `AdminDashboard.tsx`, al pulsar "OK" en recarga manual, el saldo se actualiza de inmediato en pantalla y luego se sincroniza con el backend.
+   - **Polling de Seguridad y Refresco al Ganar Foco:** Se añadió un temporizador de refresco en segundo plano (cada 15-20s) y escucha al evento `window.addEventListener('focus', ...)` tanto en el panel de administración como en el del jugador. Si el usuario cambia de pestaña o se reconecta internet, los saldos se refrescan instantáneamente.
 
-4. **Endpoint `/api/admin/wallet/recharge` sin protección de autenticación**
-   - **Causa raíz:** Faltaba el middleware `requireAdmin` en el endpoint de recarga manual del administrador (línea ~1839 de `server.ts`).
-   - **Corrección:** Se agrega `requireAdmin` como middleware del endpoint para que solo admins autenticados puedan hacer recargas directas.
+### 📁 Archivos Modificados:
+- [`server.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/server.ts):
+  - Corrección de `updateWalletBalance`: eliminada columna inexistente `id`, fix de `update`/`upsert`.
+  - Corrección de `auditReceiptWithGemini`: comprobantes sin API key o con IA ocupada pasan a revisión manual sin rechazo inmediato.
+  - Corrección de `POST /api/wallet/recharge-request`: upload con MIME seguro, localización/creación de jugador, emisión Ably live.
+- [`src/pages/AdminDashboard.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/pages/AdminDashboard.tsx):
+  - Obtención de `slug` de sala con `useParams`.
+  - Conexión al canal de Ably de la sala correspondiente.
+  - En `handleRecharge`: envío de `tenantId`, actualización optimista del saldo en UI.
+  - Sincronización periódica cada 15s y al ganar foco (`window focus`).
+- [`src/pages/PlayerDashboard.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/pages/PlayerDashboard.tsx):
+  - Conexión de Ably con `getBingoChannel(tenantSlug)`.
+  - Sincronización periódica cada 20s y al ganar foco (`window focus`).
 
-### 📁 Archivos Modificados en esta Sesión:
-- `server.ts`:
-  - Línea ~1839: `requireAdmin` agregado a `POST /api/admin/wallet/recharge`.
-  - Líneas ~8877-8000: Extracción correcta de `tenantId` y filtrado del jugador por sala en `POST /api/wallet/recharge-request`.
-- `src/pages/PlayerDashboard.tsx`:
-  - `handleRechargeSubmit`: Se agrega `tenantId` al `FormData` de la recarga.
-- `src/pages/AdminDashboard.tsx`:
-  - `onWalletUpdated`: Mejorado para refrescar lista completa y recargas pendientes.
-- `fix_wallets_and_receipts.sql`: **NUEVO** — Script SQL consolidado con correcciones de RLS, buckets y columnas `tenant_id`.
-
-### ⚠️ Acción Pendiente (Manual):
-- **Ejecutar `fix_wallets_and_receipts.sql` en Supabase SQL Editor** para aplicar las políticas de storage y garantizar que los buckets y columnas `tenant_id` estén correctamente configurados.
+### ⚙️ Verificaciones Técnicas Ejecutadas:
+- **TypeScript:** Compilado con `npx tsc --noEmit` resultando en **0 errores** (código de salida 0).
+- **Prueba Supabase Storage:** Subida y borrado de comprobante en bucket `receipts` ejecutada con éxito (`error: null`).
+- **Prueba Persistencia Billetera:** Actualización directa y verificación en tabla `wallets` ejecutada con éxito (`error: null`).
 

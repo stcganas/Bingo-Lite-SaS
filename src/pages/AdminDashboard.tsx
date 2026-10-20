@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { getBingoChannel } from '../ably';
 import { Play, Pause, Square, RefreshCcw, CheckCircle2, XCircle, Users, Trophy, Clock, Plus, Trash2, Calendar, Gamepad2, Grid, Settings, List, Volume2, Volume1, VolumeX, Radio, MessageSquare, Save, LogOut, ChevronDown, ChevronUp, HardDrive, Bot, Wallet, DollarSign, Ban, Shield, ShieldCheck, Edit3, Mail, MapPin, Share2, Copy, MessageCircle, X, BellRing, History, Loader2, Image, Upload, Music, Sliders, BarChart2, Sparkles, Gift, Download, Zap, Gauge, FastForward, Timer, PlayCircle, StopCircle, ArrowRight, Check, Key, QrCode, Scan, Star, SlidersHorizontal, Search, CheckSquare, Wrench } from 'lucide-react';
 import { useTTS } from '../hooks/useTTS';
@@ -51,7 +51,9 @@ const getBallColor = (ball: number) => {
 
 export default function AdminDashboard() {
   const { user, logout, updatePassword } = useAuth();
-  const channel = getBingoChannel();
+  const { slug } = useParams<{ slug?: string }>();
+  const currentTenant = slug || (user?.tenant_id && user.tenant_id !== 'global' ? user.tenant_id : undefined);
+  const channel = getBingoChannel(currentTenant);
   const { speak, stop, speakNative, setWinnerSpeechActive } = useTTS();
   const lastAnnouncedBallIdRef = useRef<string | null>(null);
   const lastAnnouncedBallTimeRef = useRef<number>(0);
@@ -1278,6 +1280,24 @@ export default function AdminDashboard() {
     if (activeTab === 'wallet') {
       fetchWalletPlayers();
       fetchRechargeRequests();
+
+      // Sincronización periódica de seguridad cada 15s mientras la pestaña wallet está activa
+      const interval = setInterval(() => {
+        fetchWalletPlayers();
+        fetchRechargeRequests();
+      }, 15000);
+
+      // Refrescar al volver a la pestaña del navegador
+      const onFocus = () => {
+        fetchWalletPlayers();
+        fetchRechargeRequests();
+      };
+      window.addEventListener('focus', onFocus);
+
+      return () => {
+        clearInterval(interval);
+        window.removeEventListener('focus', onFocus);
+      };
     }
   }, [activeTab]);
 
@@ -1287,20 +1307,36 @@ export default function AdminDashboard() {
       return;
     }
 
+    const amountNum = parseFloat(rechargeAmount);
+
     try {
       const res = await apiFetch('/api/admin/wallet/recharge', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone, amount: parseFloat(rechargeAmount) })
+        body: JSON.stringify({ 
+          phone, 
+          amount: amountNum,
+          tenantId: currentTenant || undefined
+        })
       });
 
       if (res.ok) {
         toast.success('Recarga exitosa');
         setRechargeAmount('');
         setSelectedWalletPlayer(null);
-        fetchWalletPlayers();
+        // Actualización optimista inmediata en la UI
+        setWalletPlayers((prev) =>
+          prev.map((player) =>
+            comparePhones(player.phone, phone)
+              ? { ...player, balance: (Number(player.balance) || 0) + amountNum }
+              : player
+          )
+        );
+        // Sincronización oficial con el backend
+        await fetchWalletPlayers();
       } else {
-        toast.error('Error al recargar');
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error || 'Error al recargar');
       }
     } catch (err) {
       toast.error('Error de conexión');

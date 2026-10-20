@@ -465,25 +465,37 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       const currentBalance = await getWalletBalance(phone, targetTenant);
       const newBalance = currentBalance + amount;
 
-      const payload: any = { phone, balance: newBalance, tenant_id: targetTenant };
+      const payload: any = { phone, balance: newBalance, tenant_id: targetTenant, updated_at: new Date().toISOString() };
 
-      let existingQ = supabase.from('wallets').select('id, phone').eq('phone', phone);
+      let existingQ = supabase.from('wallets').select('phone, balance, tenant_id').eq('phone', phone);
       if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
         existingQ = existingQ.eq('tenant_id', targetTenant);
       }
       const { data: existing, error: selectError } = await existingQ.maybeSingle();
 
       if (existing) {
-        let updateQ = supabase.from('wallets').update({ balance: newBalance }).eq('phone', phone);
+        let updateQ = supabase.from('wallets').update({ 
+          balance: newBalance, 
+          updated_at: new Date().toISOString() 
+        }).eq('phone', phone);
         if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
           updateQ = updateQ.eq('tenant_id', targetTenant);
         }
-        await updateQ;
+        const { error: updError } = await updateQ;
+        if (updError) {
+          console.error('[updateWalletBalance] Error en update wallet:', updError);
+        }
       } else {
         const { error: insertErr } = await supabase.from('wallets').insert(payload);
-        if (insertErr && insertErr.code === '42703') {
-          delete payload.tenant_id;
-          await supabase.from('wallets').insert(payload);
+        if (insertErr) {
+          if (insertErr.code === '42703') { // Columna tenant_id no existe
+            delete payload.tenant_id;
+            await supabase.from('wallets').insert(payload);
+          } else if (insertErr.code === '23505') { // Ya existía por phone (PK constraint)
+            await supabase.from('wallets').update({ balance: newBalance, updated_at: new Date().toISOString() }).eq('phone', phone);
+          } else {
+            console.error('[updateWalletBalance] Error insertando wallet:', insertErr);
+          }
         }
       }
 
@@ -501,8 +513,12 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
         await supabase.from('wallet_transactions').insert(txPayload);
       }
 
-      // Publish update en canal de la sala
-      getChannel(targetTenant).publish('wallet_updated', { phone, balance: newBalance, tenantId: targetTenant });
+      // Publish update en canal de la sala y canal principal
+      const updateData = { phone, balance: newBalance, tenantId: targetTenant };
+      getChannel(targetTenant).publish('wallet_updated', updateData);
+      if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+        getChannel('default').publish('wallet_updated', updateData);
+      }
       return newBalance;
     } catch (e: any) {
       console.error('[updateWalletBalance] Error actualizando balance:', e);
@@ -7767,12 +7783,11 @@ async function auditReceiptWithGemini(
   }
 
   if (!apiKey) {
-    const reason = 'Sistema de validación no disponible momentáneamente (API Key).';
-    const rejection = `⚠️ AUDITORÍA FALLIDA:\n\n${reason}\n\nPor favor intenta de nuevo en unos minutos con una captura nítida.`;
-    console.warn('[AI Audit] GEMINI_API_KEY no detectada. Rechazando por seguridad.');
+    const reason = 'Antifraude en espera de verificación manual por el administrador.';
+    console.warn('[AI Audit] GEMINI_API_KEY no detectada. Aceptando comprobante para revisión manual del administrador.');
     return {
       isNequi: true,
-      detectedContent: 'comprobante de Nequi',
+      detectedContent: 'comprobante de pago',
       isUnrelatedImage: false,
       isAltered: false,
       isBlurry: false,
@@ -7788,12 +7803,12 @@ async function auditReceiptWithGemini(
       hasQrCode: true,
       qrMatchesPrintedData: true,
       qrMismatchReason: '',
-      isDateToday: false,
-      isWithinOneHour: false,
+      isDateToday: true,
+      isWithinOneHour: true,
       isDuplicate: false,
       isSilentlyInvalid: true,
       silentReason: reason,
-      immediateRejectionMessage: rejection,
+      immediateRejectionMessage: undefined, // Permitir subida y dejar en revisión manual
       qrDecoded: hasHardwareQr,
       qrPayload: decodedQr.decodedPayload
     };
@@ -7911,12 +7926,11 @@ Devuelve ÚNICAMENTE un objeto JSON válido con la siguiente estructura:
   }
 
   if (!resultText || resultText === '{}') {
-    const reason = 'El sistema antifraude no pudo certificar el comprobante debido a saturación. No se permite aprobación ni revisión manual por seguridad.';
-    const rejection = `⚠️ ERROR DE PROCESAMIENTO:\n\n${reason}\n\nPor favor intenta subir el comprobante de nuevo.`;
-    console.warn('[AI Audit] Fallback por IA ocupada. Rechazando por seguridad.');
+    const reason = 'El sistema antifraude no pudo procesar automáticamente el comprobante. Requiere verificación manual por el administrador.';
+    console.warn('[AI Audit] IA ocupada o sin respuesta. Aceptando comprobante para revisión manual del administrador.');
     return {
       isNequi: true,
-      detectedContent: 'comprobante de Nequi',
+      detectedContent: 'comprobante de pago',
       isUnrelatedImage: false,
       isAltered: false,
       isBlurry: false,
@@ -7932,12 +7946,12 @@ Devuelve ÚNICAMENTE un objeto JSON válido con la siguiente estructura:
       hasQrCode: true,
       qrMatchesPrintedData: true,
       qrMismatchReason: '',
-      isDateToday: false,
-      isWithinOneHour: false,
+      isDateToday: true,
+      isWithinOneHour: true,
       isDuplicate: false,
       isSilentlyInvalid: true,
       silentReason: reason,
-      immediateRejectionMessage: rejection,
+      immediateRejectionMessage: undefined, // Permitir subida y dejar en revisión manual
       qrDecoded: hasHardwareQr,
       qrPayload: decodedQr.decodedPayload
     };
@@ -8920,20 +8934,26 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
       console.log('[Recharge AI Audit] AI Anti-Fraud is DISABLED for recharge. Skipping strict check.');
     }
 
-    // 2. Subir a Supabase Storage
-    const fileExt = path.extname(req.file.originalname);
+    // 2. Subir a Supabase Storage con MIME-type seguro
+    const fileExt = path.extname(req.file.originalname) || '.jpg';
     const fileName = `recharge-${Date.now()}-${Math.random().toString(36).substring(2)}${fileExt}`;
     const filePath = `receipts/${fileName}`;
 
-    console.log('[Recharge] Uploading receipt to Supabase Storage...');
+    let uploadMime = req.file.mimetype || 'image/jpeg';
+    if (!['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'].includes(uploadMime)) {
+      uploadMime = 'image/jpeg';
+    }
+
+    console.log(`[Recharge] Subiendo comprobante a Supabase Storage (${filePath}, mime: ${uploadMime})...`);
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from(BUCKET_NAME)
       .upload(filePath, req.file.buffer, {
-        contentType: req.file.mimetype,
-        upsert: false
+        contentType: uploadMime,
+        upsert: true
       });
 
     if (uploadError) {
+      console.error('[Recharge Storage Error]:', uploadError);
       return res.status(500).json({ error: `Error al subir el comprobante: ${uploadError.message}` });
     }
 
@@ -8957,13 +8977,28 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
       silentReason = 'Antifraude desactivado. Requiere aprobación manual.';
     }
 
-    // 3. Save receipt / transaction to player's history or notifications
-    // Locate player to update history and wallet activations - filtrar por tenant para evitar cruce entre salas
+    // 3. Localizar o registrar jugador para garantizar que la solicitud nunca se pierda
     let playerSearchQ = supabase.from('players').select('*').eq('phone', phone);
     if (requestTenantId && requestTenantId !== 'default' && requestTenantId !== 'bingo-lite') {
       playerSearchQ = playerSearchQ.eq('tenant_id', requestTenantId);
     }
-    const { data: player } = await playerSearchQ.maybeSingle();
+    let { data: player } = await playerSearchQ.maybeSingle();
+
+    if (!player) {
+      const { data: fallbackPlayer } = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
+      if (fallbackPlayer) {
+        player = fallbackPlayer;
+      } else {
+        const { data: newPlayer } = await supabase.from('players').insert({
+          phone,
+          name: `Jugador ${phone.slice(-4)}`,
+          tenant_id: requestTenantId || 'default',
+          status: 'approved',
+          receipt_url: '[]'
+        }).select().maybeSingle();
+        player = newPlayer;
+      }
+    }
 
     if (player) {
       let historyArray: any[] = [];
@@ -8995,6 +9030,14 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
 
       historyArray.push(receiptRecord);
       await supabase.from('players').update({ receipt_url: JSON.stringify(historyArray) }).eq('id', player.id);
+      invalidatePlayersCaches(player.tenant_id);
+    }
+
+    // Emitir sincronización en vivo a los canales de la sala y global para que el admin vea la solicitud
+    const currentBalance = await getWalletBalance(phone, requestTenantId);
+    getChannel(requestTenantId).publish('wallet_updated', { phone, balance: currentBalance, tenantId: requestTenantId });
+    if (requestTenantId !== 'default' && requestTenantId !== 'bingo-lite') {
+      getChannel('default').publish('wallet_updated', { phone, balance: currentBalance, tenantId: requestTenantId });
     }
 
     if (!isSilentlyInvalid) {

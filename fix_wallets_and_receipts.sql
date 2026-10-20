@@ -1,41 +1,55 @@
 -- ==============================================================================
--- CORRECCIÓN CRÍTICA: BILLETERAS, COMPROBANTES Y RLS STORAGE
+-- CORRECCIÓN CRÍTICA DEFINITIVA: BILLETERAS, COMPROBANTES Y RLS STORAGE (V2)
 -- Bingo Lite SaaS Multi-Tenant
--- Fecha: 2026-10-20
+-- Fecha de actualización: 2026-10-20
 --
 -- Problemas que corrige:
--- 1. "new row violates row-level security policy" al subir comprobantes
--- 2. Recargas manuales visualmente desaparecen (tenant_id incorrecto en wallets)
--- 3. Billeteras no sincronizadas entre el admin y el jugador
--- 4. Falta de columna tenant_id en wallets y wallet_transactions si no existe
+-- 1. "new row violates row-level security policy" / error 415 MIME-type en storage
+-- 2. Eliminación de restricciones rígidas de formato en bucket receipts (permite HEIC, WEBP, PNG, JPG, PDF)
+-- 3. Aumento del límite de comprobantes a 15MB
+-- 4. Asegura columnas tenant_id y updated_at en tabla wallets
+-- 5. Asegura columna tenant_id en tabla wallet_transactions
+-- 6. Índices multi-tenant para balance y consultas en vivo
+-- 7. Políticas de escritura Backend (service_role) para todas las tablas del sistema
 --
--- INSTRUCCIONES: Ejecutar COMPLETO en Supabase SQL Editor (Project Settings > SQL Editor)
--- Este script es IDEMPOTENTE: seguro de ejecutar múltiples veces.
+-- INSTRUCCIONES: Ejecutar COMPLETO en Supabase SQL Editor (SQL Editor > New Query > Run)
+-- Este script es IDEMPOTENTE: seguro de ejecutar múltiples veces sin afectar datos existentes.
 -- ==============================================================================
 
 -- ============================================================
--- PARTE 1: ASEGURAR BUCKETS DE STORAGE CON CONFIGURACIÓN PÚBLICA
+-- PARTE 1: CONFIGURACIÓN ROBUSTA DE BUCKETS DE STORAGE
 -- ============================================================
 
+-- Bucket 'receipts': público, 15MB, sin bloqueo de MIME types móviles
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
   'receipts',
   'receipts',
   true,
+  15728640,
+  NULL -- NULL permite cualquier tipo de imagen/documento (evita rechazos por image/heic, pjpeg, etc.)
+)
+ON CONFLICT (id) DO UPDATE SET
+  public = true,
+  file_size_limit = 15728640,
+  allowed_mime_types = NULL;
+
+-- Bucket 'banners': público, 10MB
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'banners',
+  'banners',
+  true,
   10485760,
-  ARRAY['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf']
+  NULL
 )
 ON CONFLICT (id) DO UPDATE SET
   public = true,
   file_size_limit = 10485760,
-  allowed_mime_types = ARRAY['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
-
-INSERT INTO storage.buckets (id, name, public, file_size_limit)
-VALUES ('banners', 'banners', true, 5242880)
-ON CONFLICT (id) DO UPDATE SET public = true, file_size_limit = 5242880;
+  allowed_mime_types = NULL;
 
 -- ============================================================
--- PARTE 2: POLÍTICAS DE STORAGE PARA EL BUCKET 'receipts'
+-- PARTE 2: POLÍTICAS DE STORAGE PARA 'receipts' Y 'banners'
 -- ============================================================
 
 DROP POLICY IF EXISTS "Service role full access receipts" ON storage.objects;
@@ -44,24 +58,20 @@ DROP POLICY IF EXISTS "Backend delete receipts" ON storage.objects;
 DROP POLICY IF EXISTS "Public read receipts" ON storage.objects;
 DROP POLICY IF EXISTS "Authenticated upload receipts" ON storage.objects;
 DROP POLICY IF EXISTS "Receipts service role policy" ON storage.objects;
+DROP POLICY IF EXISTS "Anon upload receipts" ON storage.objects;
 
+-- Acceso total e irrestricto para service_role (Backend Node.js)
 CREATE POLICY "Service role full access receipts"
 ON storage.objects FOR ALL TO service_role
 USING (bucket_id = 'receipts')
 WITH CHECK (bucket_id = 'receipts');
 
+-- Lectura pública para que organizadores y jugadores puedan ver los comprobantes
 CREATE POLICY "Public read receipts"
 ON storage.objects FOR SELECT TO anon, authenticated
 USING (bucket_id = 'receipts');
 
-CREATE POLICY "Authenticated upload receipts"
-ON storage.objects FOR INSERT TO authenticated
-WITH CHECK (bucket_id = 'receipts');
-
--- ============================================================
--- PARTE 3: POLÍTICAS DE STORAGE PARA EL BUCKET 'banners'
--- ============================================================
-
+-- Políticas para banners
 DROP POLICY IF EXISTS "Service role full access banners" ON storage.objects;
 DROP POLICY IF EXISTS "Public read banners" ON storage.objects;
 
@@ -75,11 +85,12 @@ ON storage.objects FOR SELECT TO anon, authenticated
 USING (bucket_id = 'banners');
 
 -- ============================================================
--- PARTE 4: ASEGURAR COLUMNA tenant_id EN TABLA wallets
+-- PARTE 3: COLUMNAS tenant_id Y updated_at EN TABLA wallets
 -- ============================================================
 
 DO $$
 BEGIN
+  -- Columna tenant_id
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public'
@@ -91,10 +102,23 @@ BEGIN
   ELSE
     RAISE NOTICE 'Columna tenant_id ya existe en wallets';
   END IF;
+
+  -- Columna updated_at
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'wallets'
+      AND column_name = 'updated_at'
+  ) THEN
+    ALTER TABLE public.wallets ADD COLUMN updated_at TIMESTAMPTZ DEFAULT now();
+    RAISE NOTICE 'Columna updated_at agregada a wallets';
+  ELSE
+    RAISE NOTICE 'Columna updated_at ya existe en wallets';
+  END IF;
 END $$;
 
 -- ============================================================
--- PARTE 5: ASEGURAR COLUMNA tenant_id EN TABLA wallet_transactions
+-- PARTE 4: COLUMNA tenant_id EN TABLA wallet_transactions
 -- ============================================================
 
 DO $$
@@ -113,7 +137,7 @@ BEGIN
 END $$;
 
 -- ============================================================
--- PARTE 6: ÍNDICES PARA RENDIMIENTO EN CONSULTAS MULTI-TENANT
+-- PARTE 5: ÍNDICES DE RENDIMIENTO MULTI-TENANT
 -- ============================================================
 
 CREATE INDEX IF NOT EXISTS idx_wallets_phone_tenant ON public.wallets (phone, tenant_id);
@@ -121,7 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_wallet_transactions_phone_tenant ON public.wallet
 CREATE INDEX IF NOT EXISTS idx_wallet_transactions_tenant ON public.wallet_transactions (tenant_id);
 
 -- ============================================================
--- PARTE 7: POLÍTICAS RLS PARA TODAS LAS TABLAS CRÍTICAS
+-- PARTE 6: POLÍTICAS RLS PARA ACCESO BACKEND (service_role)
 -- ============================================================
 
 DROP POLICY IF EXISTS "Backend full access players" ON public.players;
@@ -176,7 +200,7 @@ DROP POLICY IF EXISTS "Backend full access game_patterns" ON public.game_pattern
 CREATE POLICY "Backend full access game_patterns"
 ON public.game_patterns FOR ALL TO service_role USING (true) WITH CHECK (true);
 
--- Tablas opcionales (solo si existen)
+-- Tablas complementarias (si existen)
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='receipts') THEN
@@ -214,25 +238,27 @@ BEGIN
 END $$;
 
 -- ============================================================
--- PARTE 8: FORZAR REFRESH DEL SCHEMA EN POSTGREST
+-- PARTE 7: RECARGAR SCHEMA EN POSTGREST
 -- ============================================================
 NOTIFY pgrst, 'reload schema';
 
 -- ============================================================
--- VERIFICACIÓN FINAL - Ver resultados de buckets y columnas
+-- VERIFICACIÓN FINAL
 -- ============================================================
 SELECT
   'BUCKET' as tipo,
   name as nombre,
-  public::text as detalle
+  concat('Público: ', public, ' | Límite: ', round(file_size_limit / 1048576), 'MB | Tipos: ', coalesce(array_to_string(allowed_mime_types, ','), 'TODOS (Sin restricción)')) as detalle
 FROM storage.buckets
 WHERE id IN ('receipts', 'banners')
 UNION ALL
 SELECT
-  'WALLETS_TENANT_COL' as tipo,
-  column_name as nombre,
+  'COLUMNA' as tipo,
+  concat(table_name, '.', column_name) as nombre,
   data_type as detalle
 FROM information_schema.columns
 WHERE table_schema = 'public'
-  AND table_name IN ('wallets', 'wallet_transactions')
-  AND column_name = 'tenant_id';
+  AND (
+    (table_name = 'wallets' AND column_name IN ('tenant_id', 'updated_at'))
+    OR (table_name = 'wallet_transactions' AND column_name = 'tenant_id')
+  );

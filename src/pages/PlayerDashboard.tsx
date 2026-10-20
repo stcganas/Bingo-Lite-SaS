@@ -143,7 +143,7 @@ ${refUrl}
       fetchReferralStats();
     }
   }, [user?.phone, fetchReferralStats]);
-  const channel = getBingoChannel();
+  const channel = getBingoChannel(tenantSlug || undefined);
   const userRef = useRef(user);
   useEffect(() => {
     userRef.current = user;
@@ -863,6 +863,24 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
   useEffect(() => {
     if (user?.phone) {
       fetchWalletBalance();
+      fetchWalletHistory();
+
+      // Sincronización periódica de saldo en segundo plano
+      const interval = setInterval(() => {
+        fetchWalletBalance();
+      }, 20000);
+
+      // Refrescar inmediatamente al volver a la pestaña
+      const onFocus = () => {
+        fetchWalletBalance();
+        fetchWalletHistory();
+      };
+      window.addEventListener('focus', onFocus);
+
+      return () => {
+        clearInterval(interval);
+        window.removeEventListener('focus', onFocus);
+      };
     }
   }, [user?.phone, gameState?.id]);
 
