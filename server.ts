@@ -668,6 +668,16 @@ const ably = ablyInstance;
 // ============================================================================
 const ADMIN_HMAC_SECRET = process.env.ADMIN_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || crypto.randomBytes(32).toString('hex');
 const PLAYER_HMAC_SECRET = process.env.PLAYER_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || ADMIN_HMAC_SECRET;
+// SEGURIDAD: Separación de dominio criptográfico. Aunque ambos secretos coincidan (fallback a la service role key),
+// una firma de jugador NUNCA puede validarse como firma de administrador.
+const ADMIN_TOKEN_DOMAIN = 'bingo-admin-v2:';
+
+// Cuenta ÚNICA de Super Administrador de la plataforma y de la sala principal (bingo-lite).
+// Se ignora deliberadamente ADMIN_EMAILS para impedir que se agreguen superadmins por variable de entorno.
+const SUPER_ADMIN_EMAILS: readonly string[] = Object.freeze(['stcganas@gmail.com']);
+function getSuperAdminEmails(): readonly string[] {
+  return SUPER_ADMIN_EMAILS;
+}
 
 interface AdminTokenPayload {
   uid: string;
@@ -682,20 +692,30 @@ function createAdminToken(payload: Omit<AdminTokenPayload, 'exp'>): string {
   const exp = Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60); // 7 días de validez
   const data: AdminTokenPayload = { ...payload, exp };
   const encodedData = Buffer.from(JSON.stringify(data)).toString('base64url');
-  const signature = crypto.createHmac('sha256', ADMIN_HMAC_SECRET).update(encodedData).digest('base64url');
+  const signature = crypto.createHmac('sha256', ADMIN_HMAC_SECRET).update(ADMIN_TOKEN_DOMAIN + encodedData).digest('base64url');
   return `${encodedData}.${signature}`;
 }
 
 function verifyAdminToken(token: string): AdminTokenPayload | null {
   try {
-    if (!token || !token.includes('.')) return null;
-    const [encodedData, signature] = token.split('.');
-    const expectedSignature = crypto.createHmac('sha256', ADMIN_HMAC_SECRET).update(encodedData).digest('base64url');
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+    if (!token || token.startsWith('plyr.')) return null;
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+    const [encodedData, signature] = parts;
+    const expectedSignature = crypto.createHmac('sha256', ADMIN_HMAC_SECRET).update(ADMIN_TOKEN_DOMAIN + encodedData).digest('base64url');
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSignature);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
       return null;
     }
     const data: AdminTokenPayload = JSON.parse(Buffer.from(encodedData, 'base64url').toString('utf8'));
-    if (data.exp && data.exp < Math.floor(Date.now() / 1000)) {
+    // SEGURIDAD: El payload debe declarar explícitamente rol de administrador
+    if (!data || data.role !== 'admin') return null;
+    if (!data.exp || data.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    // Un superadmin solo es válido si su correo sigue autorizado
+    if (data.isSuperAdmin && !getSuperAdminEmails().includes((data.email || '').toLowerCase())) {
       return null;
     }
     return data;
@@ -731,6 +751,7 @@ function verifyPlayerToken(token: string): PlayerTokenPayload | null {
       return null;
     }
     const data: PlayerTokenPayload = JSON.parse(Buffer.from(encodedData, 'base64url').toString('utf8'));
+    if (!data || data.role !== 'player' || !data.phone) return null;
     if (data.exp && data.exp < Math.floor(Date.now() / 1000)) {
       return null;
     }
