@@ -1920,7 +1920,7 @@ app.post('/api/admin/wallet/recharge', requireAdmin, async (req, res) => {
 
   const actualTenant = player?.tenant_id || targetTenant;
   const newBalance = await updateWalletBalance(phone, numAmount, `Recarga por el administrador por $${numAmount}`, 'recharge', actualTenant);
-  res.json({ success: true, newBalance });
+  res.json({ success: true, newBalance, phone });
 });
 
 app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
@@ -1930,7 +1930,8 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
       ? adminUser.tenant_id.toLowerCase()
       : (((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase());
 
-    let query = supabase.from('players').select('name, phone, tenant_id');
+    // 1. Obtener jugadores registrados respetando tenant
+    let query = supabase.from('players').select('id, name, phone, tenant_id, created_at');
     if (targetTenant && targetTenant !== 'global') {
       if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
         query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
@@ -1938,14 +1939,61 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
         query = query.eq('tenant_id', targetTenant);
       }
     }
-    const { data: players, error } = await query;
+    const { data: players, error } = await query.order('created_at', { ascending: false });
     if (error) throw error;
 
-    const wallets = await Promise.all((players || []).map(async (p: any) => ({
-      ...p,
-      balance: await getWalletBalance(p.phone, p.tenant_id || targetTenant || 'default')
-    })));
-    res.json(wallets);
+    // 2. Consulta en bloque a la tabla wallets (1 sola query rápida a BD en lugar de N consultas con Promise.all)
+    const { data: allWallets } = await supabase.from('wallets').select('phone, balance, tenant_id, updated_at');
+    const walletMap = new Map<string, number>();
+    (allWallets || []).forEach((w: any) => {
+      const cleanPhone = normalizePhone(w.phone);
+      if (!cleanPhone) return;
+      const wTenant = (w.tenant_id || 'default').toLowerCase();
+      const current = walletMap.get(cleanPhone);
+      const bal = Number(w.balance) || 0;
+
+      // Coincidencia de tenant para default/bingo-lite
+      const isDefaultOrBingoLite = (targetTenant === 'default' || targetTenant === 'bingo-lite' || !targetTenant || targetTenant === 'global');
+      if (isDefaultOrBingoLite) {
+        if (wTenant === 'default' || wTenant === 'bingo-lite') {
+          if (current === undefined || bal > current) {
+            walletMap.set(cleanPhone, bal);
+          }
+        } else if (current === undefined) {
+          walletMap.set(cleanPhone, bal);
+        }
+      } else {
+        if (wTenant === targetTenant) {
+          if (current === undefined || bal > current) {
+            walletMap.set(cleanPhone, bal);
+          }
+        }
+      }
+    });
+
+    // 3. Desduplicar jugadores por teléfono canónico para evitar repetición de tarjetas en UI
+    const seenPhones = new Set<string>();
+    const deduplicatedWallets: any[] = [];
+
+    for (const p of (players || [])) {
+      const cleanPhone = normalizePhone(p.phone);
+      if (!cleanPhone || seenPhones.has(cleanPhone)) continue;
+      seenPhones.add(cleanPhone);
+
+      const balance = walletMap.has(cleanPhone)
+        ? (walletMap.get(cleanPhone) || 0)
+        : await getWalletBalance(cleanPhone, p.tenant_id || targetTenant || 'default');
+
+      deduplicatedWallets.push({
+        id: p.id,
+        name: p.name,
+        phone: cleanPhone,
+        tenant_id: p.tenant_id || targetTenant || 'default',
+        balance
+      });
+    }
+
+    res.json(deduplicatedWallets);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -9067,11 +9115,10 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
       invalidatePlayersCaches(player.tenant_id);
     }
 
-    // Emitir sincronización en vivo a los canales de la sala y global para que el admin vea la solicitud
-    const currentBalance = await getWalletBalance(phone, requestTenantId);
-    getChannel(requestTenantId).publish('wallet_updated', { phone, balance: currentBalance, tenantId: requestTenantId });
+    // Emitir sincronización en vivo para que el panel de administración actualice la lista de comprobantes
+    getChannel(requestTenantId).publish('recharge_request_submitted', { phone, amount: numericAmount, tenantId: requestTenantId });
     if (requestTenantId !== 'default' && requestTenantId !== 'bingo-lite') {
-      getChannel('default').publish('wallet_updated', { phone, balance: currentBalance, tenantId: requestTenantId });
+      getChannel('default').publish('recharge_request_submitted', { phone, amount: numericAmount, tenantId: requestTenantId });
     }
 
     if (!isSilentlyInvalid) {
@@ -9883,7 +9930,7 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
     const targetTenant = (player.tenant_id || adminUser.tenant_id || 'default').toLowerCase();
 
     // 1. Credit wallet balance with tenant isolation
-    await updateWalletBalance(player.phone, amount, `Recarga de billetera aprobada por administrador`, 'recharge', targetTenant);
+    const newBalance = await updateWalletBalance(player.phone, amount, `Recarga de billetera aprobada por administrador`, 'recharge', targetTenant);
 
     // 2. Mark as approved in receipt logs
     receipt.is_silent_error = false;
@@ -9895,16 +9942,20 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
 
     invalidatePlayersCaches(player.tenant_id);
 
-    // 3. Notify player
-    await sendPushNotification({
-      recipient: 'single',
-      phone: player.phone,
-      title: '✅ Recarga Aprobada',
-      message: `¡Tu solicitud de recarga por $${amount} ha sido verificada y aprobada de forma manual por el organizador!`,
-      tenantId: player.tenant_id || (req as any).tenantId
-    });
+    // 3. Notify player (envoltorio no bloqueante para garantizar respuesta exitosa inmediata)
+    try {
+      await sendPushNotification({
+        recipient: 'single',
+        phone: player.phone,
+        title: '✅ Recarga Aprobada',
+        message: `¡Tu solicitud de recarga por $${amount} ha sido verificada y aprobada de forma manual por el organizador!`,
+        tenantId: player.tenant_id || (req as any).tenantId
+      });
+    } catch (pushErr: any) {
+      console.warn('[Approve Recharge] Notificación push no entregada (no crítico):', pushErr?.message);
+    }
 
-    res.json({ success: true });
+    res.json({ success: true, balance: newBalance, phone: player.phone });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

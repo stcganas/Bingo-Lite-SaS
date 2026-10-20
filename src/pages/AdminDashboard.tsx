@@ -1197,7 +1197,8 @@ export default function AdminDashboard() {
   const fetchWalletPlayers = async () => {
     try {
       const timestamp = Date.now();
-      const res = await apiFetch(`/api/admin/players/wallets?_t=${timestamp}`);
+      const tenantParam = currentTenant ? `&tenantId=${encodeURIComponent(currentTenant)}` : '';
+      const res = await apiFetch(`/api/admin/players/wallets?_t=${timestamp}${tenantParam}`);
       if (res.ok) {
         const data = await res.json();
         setWalletPlayers(data);
@@ -1236,8 +1237,12 @@ export default function AdminDashboard() {
         method: 'POST'
       });
       if (res.ok) {
+        const data = await res.json().catch(() => ({}));
         toast.success('¡Recarga aprobada con éxito!');
         setRechargeRequests(prev => prev.map(r => r.id === requestId ? { ...r, status: 'approved', validation_reason: 'Aprobado manualmente por el organizador.' } : r));
+        if (data.phone && typeof data.balance === 'number') {
+          setWalletPlayers(prev => prev.map(p => comparePhones(p.phone, data.phone) ? { ...p, balance: data.balance } : p));
+        }
         fetchRechargeRequests(true);
         fetchWalletPlayers();
       } else {
@@ -1338,14 +1343,16 @@ export default function AdminDashboard() {
       });
 
       if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const confirmedBalance = typeof data.newBalance === 'number' ? data.newBalance : null;
         toast.success('Recarga exitosa');
         setRechargeAmount('');
         setSelectedWalletPlayer(null);
-        // Actualización optimista inmediata en la UI
+        // Actualización inmediata con el balance confirmado por el servidor
         setWalletPlayers((prev) =>
           prev.map((player) =>
             comparePhones(player.phone, phone)
-              ? { ...player, balance: (Number(player.balance) || 0) + amountNum }
+              ? { ...player, balance: confirmedBalance !== null ? confirmedBalance : (Number(player.balance) || 0) + amountNum }
               : player
           )
         );
@@ -1711,6 +1718,12 @@ export default function AdminDashboard() {
     };
     channel.subscribe('server_autoplay_updated', onServerAutoplayUpdated);
 
+    const onRechargeRequestSubmitted = (msg: any) => {
+      console.log('DEBUG: Evento recharge_request_submitted recibido en AdminDashboard:', msg.data);
+      fetchRechargeRequests(true);
+    };
+    channel.subscribe('recharge_request_submitted', onRechargeRequestSubmitted);
+
     return () => {
       channel.unsubscribe('game_update', onGameUpdate);
       channel.unsubscribe('games_updated', onGamesUpdated);
@@ -1725,6 +1738,7 @@ export default function AdminDashboard() {
       channel.unsubscribe('chat_status_updated', onChatStatusUpdated);
       channel.unsubscribe('wallet_updated', onWalletUpdated);
       channel.unsubscribe('server_autoplay_updated', onServerAutoplayUpdated);
+      channel.unsubscribe('recharge_request_submitted', onRechargeRequestSubmitted);
     };
   }, [channel]);
 
@@ -5717,8 +5731,8 @@ export default function AdminDashboard() {
 
               <div className="p-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {walletPlayers.map((player) => (
-                    <div key={player.phone} className="bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 space-y-3">
+                  {walletPlayers.map((player, idx) => (
+                    <div key={`${player.phone}-${idx}`} className="bg-slate-50 p-4 rounded-2xl border-2 border-slate-100 space-y-3">
                       <div className="flex justify-between items-start">
                         <div>
                           <p className="font-black text-slate-800">{player.name}</p>
