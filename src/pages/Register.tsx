@@ -278,15 +278,37 @@ export default function Register() {
       console.log('Resultado del registro:', result);
 
       if (result.success) {
+        // Guardar token y sesión de jugador directamente para garantizar autenticación inmediata
+        const currentSlug = tenantSlug || tenant.slug || 'bingo-lite';
+        if (result.token) {
+          localStorage.setItem('bingo_player_token', result.token);
+        }
+        if (result.player) {
+          const playerObj = {
+            uid: result.player.id ? `player-${result.player.id}` : `player-${result.player.phone}`,
+            name: result.player.name || formData.name,
+            role: 'player' as const,
+            phone: result.player.phone || normalizedPhone,
+            email: result.player.email,
+            city: result.player.city,
+            tenant_id: currentSlug
+          };
+          localStorage.setItem('bingo_player', JSON.stringify(playerObj));
+          localStorage.setItem(`bingo_player_${currentSlug.toLowerCase()}`, JSON.stringify(playerObj));
+        }
+
         // Construir el Resumen de Cuenta completo para WhatsApp
         const roomName = tenant.name || 'Bingo Lite Oficial';
         const roomAccessCode = formData.room_code || tenant.access_code || 'LITE777';
         const origin = typeof window !== 'undefined' ? window.location.origin : 'https://bingolite.click';
-        const currentSlug = tenantSlug || tenant.slug || 'bingo-lite';
         const roomDirectUrl = `${origin}/sala/${currentSlug}`;
 
         // Iniciar sesión del jugador automáticamente con el código de sala pre-cargado
-        await loginPlayer(normalizedPhone, formData.password, formData.name, roomAccessCode, currentSlug);
+        try {
+          await loginPlayer(normalizedPhone, formData.password, formData.name, roomAccessCode, currentSlug);
+        } catch (loginErr) {
+          console.warn('[Register] Aviso en loginPlayer secundario (token ya preservado):', loginErr);
+        }
         
         const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
         if (soundSettings.buyCard) playBuyCardSound();

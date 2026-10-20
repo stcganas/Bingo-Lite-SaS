@@ -457,14 +457,17 @@ async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<nu
     } else {
       query = query.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
     }
-    const { data: rows } = await query.order('updated_at', { ascending: false }).limit(1);
+    const { data: rows } = await query.order('updated_at', { ascending: false });
     if (rows && rows.length > 0) {
-      return Number(rows[0].balance) || 0;
+      // Priorizar fila con balance positivo si existen múltiples filas para default/bingo-lite
+      const positiveRow = rows.find(r => Number(r.balance) > 0);
+      return positiveRow ? Number(positiveRow.balance) : Number(rows[0].balance) || 0;
     }
     // Fallback: si no hay fila con ese tenant exacto, consultar cualquier billetera del teléfono
-    const { data: fallbackRows } = await supabase.from('wallets').select('balance').eq('phone', phone).order('updated_at', { ascending: false }).limit(1);
+    const { data: fallbackRows } = await supabase.from('wallets').select('balance').eq('phone', phone).order('updated_at', { ascending: false });
     if (fallbackRows && fallbackRows.length > 0) {
-      return Number(fallbackRows[0].balance) || 0;
+      const positiveRow = fallbackRows.find(r => Number(r.balance) > 0);
+      return positiveRow ? Number(positiveRow.balance) : Number(fallbackRows[0].balance) || 0;
     }
     return 0;
   } catch (e: any) {
@@ -496,16 +499,18 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       } else {
         existingQ = existingQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
       }
-      const { data: existingRows } = await existingQ.limit(1);
+      const { data: existingRows } = await existingQ.order('updated_at', { ascending: false });
       const existing = existingRows && existingRows.length > 0 ? existingRows[0] : null;
 
       if (existing) {
         let updateQ = supabase.from('wallets').update({ 
           balance: newBalance, 
-          tenant_id: targetTenant,
+          tenant_id: existing.tenant_id || targetTenant,
           updated_at: new Date().toISOString() 
         }).eq('phone', phone);
-        if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+        if (existing.tenant_id) {
+          updateQ = updateQ.eq('tenant_id', existing.tenant_id);
+        } else if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
           updateQ = updateQ.eq('tenant_id', targetTenant);
         }
         const { error: updError } = await updateQ;
@@ -1500,7 +1505,7 @@ setTimeout(clearOldNotifications, 5000);
 setInterval(clearOldNotifications, 12 * 60 * 60 * 1000);
 
 // Endpoint for manual purge of notifications older than 24 hours
-app.post('/api/admin/notifications/clear-old', async (req, res) => {
+app.post('/api/admin/notifications/clear-old', requireAdmin, async (req, res) => {
   if (!supabase) {
     return res.status(500).json({ error: 'Database connection is not configured.' });
   }
@@ -1785,9 +1790,11 @@ app.get('/api/wallet', async (req, res) => {
     const activated = gameId ? await isWalletActivated(phone, parseInt(gameId as string)) : false;
 
     // Check if player already exists in this tenant and has a password
-    let playerQ = supabase.from('players').select('id, password').eq('phone', phone);
+    let playerQ = supabase.from('players').select('id, password, tenant_id').eq('phone', phone);
     if (tenantId !== 'default' && tenantId !== 'bingo-lite') {
       playerQ = playerQ.eq('tenant_id', tenantId);
+    } else {
+      playerQ = playerQ.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
     }
     const { data: player } = await playerQ.maybeSingle();
     const hasPassword = !!(player?.password && player.password.trim() !== '');
@@ -1813,9 +1820,24 @@ app.get('/api/wallet', async (req, res) => {
       }
     }
 
-    const balance = canViewBalance ? await getWalletBalance(phone, tenantId) : 0;
+    // Si el jugador registrado en la sala aún no tiene contraseña configurada, permitir ver saldo
+    if (!hasPassword && player) {
+      canViewBalance = true;
+    }
 
-    res.json({ balance, activated, hasPassword, authenticated: canViewBalance });
+    if (!canViewBalance) {
+      // CRÍTICO: Devolver HTTP 401. Devolver 200 con balance: 0 falseaba que el saldo se había borrado
+      // en cada sondeo de fondo del cliente.
+      return res.status(401).json({
+        error: 'No autorizado para consultar saldo.',
+        authenticated: false,
+        hasPassword,
+        activated
+      });
+    }
+
+    const balance = await getWalletBalance(phone, tenantId);
+    res.json({ balance, activated, hasPassword, authenticated: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -2081,7 +2103,7 @@ app.get('/api/admin/winners', requireAdmin, async (req, res) => {
 });
 
 // UPDATE Winner Payment Status
-app.patch('/api/admin/winners/:ids/status', async (req, res) => {
+app.patch('/api/admin/winners/:ids/status', requireAdmin, async (req, res) => {
   const idsParam = req.params.ids;
   const { status, reason } = req.body;
 
@@ -2716,7 +2738,7 @@ app.post('/api/admin/trigger-fx-volume', requireAdmin, async (req, res) => {
   }
 });
 
-app.post('/api/admin/upload-audio', upload.single('audio'), async (req, res) => {
+app.post('/api/admin/upload-audio', requireAdmin, upload.single('audio'), async (req, res) => {
   // Audio upload is disabled to save Supabase egress bandwidth.
   // The user will use direct GitHub URLs instead.
   return res.status(403).json({
@@ -3878,7 +3900,7 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
 });
 
 // Endpoint para que el Administrador pueda ajustar o acreditar juegos pagos a un jugador
-app.post('/api/admin/free-games/adjust-paid-games', async (req, res) => {
+app.post('/api/admin/free-games/adjust-paid-games', requireAdmin, async (req, res) => {
   try {
     const { player_id, phone, count } = req.body;
     let resolvedPlayerId = player_id ? Number(player_id) : null;
@@ -3908,7 +3930,7 @@ app.post('/api/admin/free-games/adjust-paid-games', async (req, res) => {
 });
 
 // Registrar premio manual en juegos gratis (Administrador)
-app.post('/api/admin/free-games/record-prize', async (req, res) => {
+app.post('/api/admin/free-games/record-prize', requireAdmin, async (req, res) => {
   try {
     const { player_id, phone, amount, game_name, pattern_name, notes, won_at } = req.body;
     const numAmount = parseInt(String(amount || '0').replace(/[^0-9]/g, ''), 10);
@@ -3975,7 +3997,7 @@ app.post('/api/admin/free-games/record-prize', async (req, res) => {
 });
 
 // Eliminar premio manual en juegos gratis (Administrador)
-app.delete('/api/admin/free-games/prize/:id', async (req, res) => {
+app.delete('/api/admin/free-games/prize/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -5907,7 +5929,7 @@ app.post('/api/gift-invitations', async (req, res) => {
 });
 
 // Full Database Purge (Reset to zero, preserving only admin stcganas@gmail.com)
-app.post('/api/admin/reset-database-clean', async (req, res) => {
+app.post('/api/admin/reset-database-clean', requireSuperAdmin, async (req, res) => {
   try {
     console.log('[DB Reset] Starting complete database purge requested by admin...');
     if (!supabase) {
@@ -5938,52 +5960,11 @@ app.post('/api/admin/reset-database-clean', async (req, res) => {
     await supabase.from('wallet_transactions').delete().neq('id', -999999);
     await supabase.from('wallet_activations').delete().neq('id', -999999);
 
-    // 8. Find if admin exists in players table
-    const { data: existingAdmin } = await supabase
-      .from('players')
-      .select('*')
-      .or(`email.eq.${adminEmail},name.ilike.%stcganas%`)
-      .maybeSingle();
+    // 8. Delete all players (Admins live in Supabase Auth, NEVER in players table)
+    await supabase.from('players').delete().neq('id', -999999);
 
-    let preservedAdminId: number | null = existingAdmin?.id || null;
-
-    if (preservedAdminId) {
-      // Delete all players EXCEPT admin
-      await supabase.from('players').delete().neq('id', preservedAdminId);
-      // Reset admin player to clean 0 cards
-      await supabase.from('players').update({
-        card_count: 0,
-        receipt_url: null,
-        status: 'approved',
-        is_blocked: false
-      }).eq('id', preservedAdminId);
-    } else {
-      // Delete all players
-      await supabase.from('players').delete().neq('id', -999999);
-      // Create clean Admin player record with stcganas@gmail.com
-      const { data: newAdmin } = await supabase.from('players').insert({
-        name: 'Administrador',
-        email: adminEmail,
-        phone: '3005191519',
-        city: 'Colombia',
-        card_count: 0,
-        status: 'approved',
-        is_blocked: false,
-        receipt_url: null,
-        referral_code: 'ADMIN'
-      }).select().single();
-      if (newAdmin) preservedAdminId = newAdmin.id;
-    }
-
-    // 9. Reset wallets (keep only admin wallet with 0 balance)
+    // 9. Reset wallets completely (administrators do not hold player wallets)
     await supabase.from('wallets').delete().neq('id', -999999);
-    if (existingAdmin?.phone || '3005191519') {
-      const adminPhone = existingAdmin?.phone || '3005191519';
-      await supabase.from('wallets').insert({
-        phone: adminPhone,
-        balance: 0
-      });
-    }
 
     // 10. Clean receipt images from storage
     try {
@@ -6032,7 +6013,7 @@ app.post('/api/admin/reset-database-clean', async (req, res) => {
 });
 
 // Cleanup Storage and Receipt History
-app.post('/api/admin/cleanup-storage', async (req, res) => {
+app.post('/api/admin/cleanup-storage', requireAdmin, async (req, res) => {
   try {
     // 1. Get all players with receipt history
     const { data: players, error: fetchError } = await supabase
@@ -6195,7 +6176,7 @@ app.post('/api/game/status', requireAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/admin/upload-login-bg', upload.single('login_bg_image'), async (req: any, res) => {
+app.post('/api/admin/upload-login-bg', requireAdmin, upload.single('login_bg_image'), async (req: any, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No se recibió ninguna imagen' });
@@ -6248,7 +6229,7 @@ app.post('/api/admin/upload-login-bg', upload.single('login_bg_image'), async (r
   }
 });
 
-app.post('/api/admin/upload-header', upload.single('header_image'), async (req: any, res) => {
+app.post('/api/admin/upload-header', requireAdmin, upload.single('header_image'), async (req: any, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No se recibió ninguna imagen' });
@@ -6425,16 +6406,29 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
   }
 
   // Group winners by player ID to handle prize splitting by person (defensive extraction)
+  const adminEmails = ['comamosexpress@gmail.com', 'stcganas@gmail.com', ...(process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()) : [])];
+  const adminPhones = ['3000000000', '3005191519'];
+
   const uniquePlayersMap = new Map<string, any>();
   for (const w of winners) {
     const pId = w.player?.id || w.card?.player_id || (w as any).player_id;
     if (pId) {
       const pData = w.player || {};
+      const pPhone = normalizePhone(pData.phone || (w as any).player_phone || '');
+      const pEmail = (pData.email || '').toLowerCase();
+      const pName = (pData.name || (w as any).player_name || '').toLowerCase();
+
+      // REGLA ESTRICTA: Los administradores NO juegan ni ganan bingos/figuras
+      if (adminEmails.includes(pEmail) || adminPhones.includes(pPhone) || pName.includes('administrador') || pName.includes('stc ganas')) {
+        console.warn(`[processBingoWin] Omitiendo cuenta administrativa detectada en cartón (${pData.name || pId}).`);
+        continue;
+      }
+
       uniquePlayersMap.set(String(pId), {
         id: pId,
         name: pData.name || (w as any).player_name || 'Jugador',
         city: pData.city || '',
-        phone: pData.phone || (w as any).player_phone || ''
+        phone: pPhone
       });
     }
   }
@@ -7052,6 +7046,22 @@ app.post('/api/game/reset', requireAdmin, async (req, res) => {
 });
 
 async function generateCardsForPlayer(playerId: number, gameId: number, cardCount: number, isReserved: boolean = false, deleteExisting: boolean = true) {
+  // SEGURIDAD CRÍTICA: Los administradores NO son jugadores y NUNCA deben recibir cartones
+  try {
+    const { data: playerCheck } = await supabase.from('players').select('email, phone, name').eq('id', playerId).maybeSingle();
+    if (playerCheck) {
+      const pEmail = (playerCheck.email || '').toLowerCase();
+      const pPhone = normalizePhone(playerCheck.phone || '');
+      const pName = (playerCheck.name || '').toLowerCase();
+      const adminEmails = ['comamosexpress@gmail.com', 'stcganas@gmail.com', ...(process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()) : [])];
+      const adminPhones = ['3000000000', '3005191519'];
+      if (adminEmails.includes(pEmail) || adminPhones.includes(pPhone) || pName.includes('administrador') || pName.includes('stc ganas')) {
+        console.warn(`[generateCardsForPlayer] Bloqueo de seguridad: No se generan cartones para la cuenta de administrador (${playerCheck.name}, ID: ${playerId}).`);
+        return [];
+      }
+    }
+  } catch (chkErr) {}
+
   // First, delete any existing cards for this player and game to prevent duplicates if called multiple times
   if (deleteExisting) {
     await supabase.from('cards').delete().eq('player_id', playerId).eq('game_id', gameId);
@@ -8398,6 +8408,16 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     return res.status(400).json({ error: 'El número de teléfono de WhatsApp debe tener exactamente 10 dígitos.' });
   }
 
+  // REGLA ESTRICTA: Los administradores no pueden registrarse ni participar como jugadores
+  const cleanEmail = (email || '').trim().toLowerCase();
+  const adminEmails = ['comamosexpress@gmail.com', 'stcganas@gmail.com', ...(process.env.ADMIN_EMAILS ? process.env.ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()) : [])];
+  const adminPhones = ['3000000000', '3005191519'];
+  if (adminEmails.includes(cleanEmail) || adminPhones.includes(phone) || (name && name.toLowerCase().includes('administrador'))) {
+    return res.status(400).json({
+      error: 'Acceso denegado: Las cuentas de administrador son exclusivamente para la gestión y programación de salas. No pueden registrarse ni participar como jugadores.'
+    });
+  }
+
   let receipt_url = null;
   let referenceNumber: string | null = null;
   let finalCardCount = 1;
@@ -9285,30 +9305,24 @@ app.delete('/api/admin/players/:id', requireAdmin, async (req, res) => {
       const phone = player.phone;
       const pTenant = (player.tenant_id || 'default').toLowerCase();
 
-      // 2. Delete related records in other tables strictly scoped to this tenant
+      // 2. Delete related records in other tables strictly scoped to this tenant (game cards and claims)
+      // NOTA CRÍTICA: La billetera (wallets) y el historial de transacciones (wallet_transactions)
+      // NUNCA deben borrarse al eliminar el registro de un jugador en una partida.
       let delReceipts = supabase.from('receipts').delete().eq('player_phone', phone);
-      let delTx = supabase.from('wallet_transactions').delete().eq('player_phone', phone);
       let delClaims = supabase.from('bingo_claims').delete().eq('player_phone', phone);
-      let delWallets = supabase.from('wallets').delete().eq('phone', phone);
 
       if (pTenant && pTenant !== 'default' && pTenant !== 'bingo-lite') {
         delReceipts = delReceipts.eq('tenant_id', pTenant);
-        delTx = delTx.eq('tenant_id', pTenant);
         delClaims = delClaims.eq('tenant_id', pTenant);
-        delWallets = delWallets.eq('tenant_id', pTenant);
       } else {
         delReceipts = delReceipts.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-        delTx = delTx.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
         delClaims = delClaims.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-        delWallets = delWallets.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
       }
 
       await Promise.all([
         supabase.from('cards').delete().eq('player_id', id),
         delReceipts,
-        delTx,
-        delClaims,
-        delWallets
+        delClaims
       ]);
     } else {
       await supabase.from('cards').delete().eq('player_id', id);
@@ -9369,14 +9383,12 @@ app.get('/api/players', async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Auto-heal/auto-approve any players stuck in 'pending' for free games or gift invitations
-    const isCurrentGameFree = Boolean(game && (game.is_free || game.type === 'free' || parseAmountWithDecimals(game.card_value || '0') === 0));
-
+    // Auto-heal/auto-approve only players who specifically registered for THIS game via gift or free registration
     for (const p of (players || [])) {
       if (p.status === 'pending') {
-        const isGiftReceipt = Boolean(p.receipt_url && p.receipt_url.includes('GIFT_'));
-        const isFreeReceipt = Boolean(p.receipt_url && (p.receipt_url.includes('FREE_GAME') || p.receipt_url.includes('free')));
-        if (isGiftReceipt || isFreeReceipt || isCurrentGameFree) {
+        const isGiftReceipt = Boolean(p.receipt_url && p.receipt_url.includes('GIFT_') && game?.id && p.receipt_url.includes(String(game.id)));
+        const isFreeReceipt = Boolean(p.receipt_url && (p.receipt_url.includes('FREE_GAME') || p.receipt_url.includes('free')) && game?.id && p.receipt_url.includes(String(game.id)));
+        if (isGiftReceipt || isFreeReceipt) {
           p.status = 'approved';
           const targetCards = isGiftReceipt ? 1 : 2;
           await supabase.from('players').update({ status: 'approved', card_count: targetCards }).eq('id', p.id);
@@ -9448,7 +9460,10 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
     const adminUser = (req as any).adminUser;
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const playerTenant = (player.tenant_id || 'default').toLowerCase();
-      if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
+      const adminTenant = (adminUser.tenant_id || 'default').toLowerCase();
+      const isSameTenant = playerTenant === adminTenant ||
+        ((playerTenant === 'default' || playerTenant === 'bingo-lite') && (adminTenant === 'default' || adminTenant === 'bingo-lite'));
+      if (!isSameTenant) {
         return res.status(403).json({
           error: `Acceso denegado: El jugador pertenece a la sala "${player.tenant_id}". No tienes autorización para aprobarlo.`
         });
@@ -9576,7 +9591,12 @@ app.post('/api/admin/players/approve-all', requireAdmin, async (req, res) => {
     const adminUser = (req as any).adminUser;
     let query = supabase.from('players').select('id, tenant_id').eq('status', 'pending');
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
-      query = query.eq('tenant_id', adminUser.tenant_id);
+      const adminTenant = adminUser.tenant_id.toLowerCase();
+      if (adminTenant === 'default' || adminTenant === 'bingo-lite') {
+        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        query = query.eq('tenant_id', adminTenant);
+      }
     }
     const { data: pendingPlayers, error: fetchErr } = await query;
 
@@ -9683,6 +9703,19 @@ app.post('/api/players/:id/reject', requireAdmin, async (req, res) => {
 
     if (fetchErr || !player) {
       return res.status(404).json({ error: 'Jugador no encontrado' });
+    }
+
+    const adminUser = (req as any).adminUser;
+    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+      const playerTenant = (player.tenant_id || 'default').toLowerCase();
+      const adminTenant = (adminUser.tenant_id || 'default').toLowerCase();
+      const isSameTenant = playerTenant === adminTenant ||
+        ((playerTenant === 'default' || playerTenant === 'bingo-lite') && (adminTenant === 'default' || adminTenant === 'bingo-lite'));
+      if (!isSameTenant) {
+        return res.status(403).json({
+          error: `Acceso denegado: El jugador pertenece a la sala "${player.tenant_id}". No tienes autorización para gestionarlo.`
+        });
+      }
     }
 
     // 1. Delete all generated cards for this player so they cannot participate or win
@@ -9810,7 +9843,10 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
     const adminUser = (req as any).adminUser;
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const playerTenant = (player.tenant_id || 'default').toLowerCase();
-      if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
+      const adminTenant = (adminUser.tenant_id || 'default').toLowerCase();
+      const isSameTenant = playerTenant === adminTenant ||
+        ((playerTenant === 'default' || playerTenant === 'bingo-lite') && (adminTenant === 'default' || adminTenant === 'bingo-lite'));
+      if (!isSameTenant) {
         return res.status(403).json({
           error: `Acceso denegado: Esta solicitud pertenece a la sala "${player.tenant_id}". No puedes gestionarla.`
         });
@@ -9891,7 +9927,10 @@ app.post('/api/admin/recharge-requests/:id/reject', requireAdmin, async (req, re
     const adminUser = (req as any).adminUser;
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const playerTenant = (player.tenant_id || 'default').toLowerCase();
-      if (playerTenant !== adminUser.tenant_id.toLowerCase()) {
+      const adminTenant = (adminUser.tenant_id || 'default').toLowerCase();
+      const isSameTenant = playerTenant === adminTenant ||
+        ((playerTenant === 'default' || playerTenant === 'bingo-lite') && (adminTenant === 'default' || adminTenant === 'bingo-lite'));
+      if (!isSameTenant) {
         return res.status(403).json({
           error: `Acceso denegado: Esta solicitud pertenece a la sala "${player.tenant_id}". No puedes gestionarla.`
         });
@@ -10641,7 +10680,7 @@ app.get('/sw.js', (req, res) => {
 });
 
 // Endpoint to get current OneSignal push settings
-app.get('/api/admin/notifications/settings', async (req, res) => {
+app.get('/api/admin/notifications/settings', requireAdmin, async (req, res) => {
   try {
     const globalSettings = await getGameSettings('global') || {};
     const onesignalAppId = process.env.ONESIGNAL_APP_ID || process.env.VITE_ONESIGNAL_APP_ID || globalSettings.onesignal_app_id || '';
@@ -10666,7 +10705,7 @@ app.get('/api/admin/notifications/settings', async (req, res) => {
 });
 
 // Endpoint to save OneSignal push settings in global database configuration
-app.post('/api/admin/notifications/settings', async (req, res) => {
+app.post('/api/admin/notifications/settings', requireSuperAdmin, async (req, res) => {
   try {
     const { onesignal_app_id, onesignal_rest_api_key } = req.body;
     const updates: any = {};
@@ -11069,7 +11108,7 @@ async function generateAIAudioInChunks(ai: any, text: string, voice: string, sty
   return { audio_base64: finalWavBuffer.toString('base64'), is_quota_exceeded };
 }
 
-app.post('/api/admin/broadcast-announcement', async (req, res) => {
+app.post('/api/admin/broadcast-announcement', requireAdmin, async (req, res) => {
   try {
     const { text, voice, audio_base64 } = req.body;
     if (!text) {
@@ -11132,7 +11171,7 @@ app.post('/api/admin/broadcast-announcement', async (req, res) => {
   }
 });
 
-app.post('/api/admin/generate-ai-audio', async (req, res) => {
+app.post('/api/admin/generate-ai-audio', requireAdmin, async (req, res) => {
   try {
     const { text, voice } = req.body;
     if (!text) {
@@ -12286,8 +12325,35 @@ async function startServer() {
 
   if (distExists) {
     console.log('Production build found: Serving static assets and SPA routes from dist folder.');
-    app.use(express.static(path.join(process.cwd(), 'dist')));
+    app.use(express.static(path.join(process.cwd(), 'dist'), {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        } else if (filePath.includes(path.sep + 'assets' + path.sep) || filePath.includes('/assets/')) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      }
+    }));
+
+    // CRÍTICO: Si un archivo estático (.js, .css, .map, etc.) de assets no existe en dist,
+    // devolver 404 inmediatamente. NUNCA devolver index.html para archivos .js/.css,
+    // ya que esto provoca "TypeError: Failed to fetch dynamically imported module".
+    app.use('/assets', (req, res) => {
+      res.status(404).json({ error: 'Asset no encontrado (puede pertenecer a una versión previa).' });
+    });
+    app.use((req, res, next) => {
+      if (req.path.match(/\.(js|css|map|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot)$/i)) {
+        return res.status(404).send('Archivo no encontrado');
+      }
+      next();
+    });
+
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
     });
   } else {

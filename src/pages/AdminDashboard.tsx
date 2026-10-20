@@ -713,6 +713,8 @@ export default function AdminDashboard() {
   // Wallet recharge requests state
   const [rechargeRequests, setRechargeRequests] = useState<any[]>([]);
   const [isRechargeLoading, setIsRechargeLoading] = useState(false);
+  const [processingRechargeId, setProcessingRechargeId] = useState<string | null>(null);
+  const isFetchingRechargeRef = useRef(false);
   const [selectedReceiptUrl, setSelectedReceiptUrl] = useState<string | null>(null);
 
   const [userSearch, setUserSearch] = useState('');
@@ -1205,8 +1207,12 @@ export default function AdminDashboard() {
     }
   };
 
-  const fetchRechargeRequests = async () => {
-    setIsRechargeLoading(true);
+  const fetchRechargeRequests = async (isBackground = false) => {
+    if (isFetchingRechargeRef.current) return;
+    isFetchingRechargeRef.current = true;
+    if (!isBackground && rechargeRequests.length === 0) {
+      setIsRechargeLoading(true);
+    }
     try {
       const timestamp = Date.now();
       const res = await apiFetch(`/api/admin/recharge-requests?_t=${timestamp}`);
@@ -1218,42 +1224,53 @@ export default function AdminDashboard() {
       console.error('Error fetching recharge requests:', err);
     } finally {
       setIsRechargeLoading(false);
+      isFetchingRechargeRef.current = false;
     }
   };
 
   const handleApproveRechargeRequest = async (requestId: string) => {
+    if (processingRechargeId) return;
+    setProcessingRechargeId(requestId);
     try {
-      const res = await apiFetch(`/api/admin/recharge-requests/${requestId}/approve`, {
+      const res = await apiFetch(`/api/admin/recharge-requests/${encodeURIComponent(requestId)}/approve`, {
         method: 'POST'
       });
       if (res.ok) {
         toast.success('¡Recarga aprobada con éxito!');
-        fetchRechargeRequests();
+        setRechargeRequests(prev => prev.map(r => r.id === requestId ? { ...r, status: 'approved', validation_reason: 'Aprobado manualmente por el organizador.' } : r));
+        fetchRechargeRequests(true);
         fetchWalletPlayers();
       } else {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         toast.error(data.error || 'Error al aprobar recarga');
       }
     } catch (err) {
       toast.error('Error al conectar con el servidor');
+    } finally {
+      setProcessingRechargeId(null);
     }
   };
 
   const handleRejectRechargeRequest = async (requestId: string) => {
+    if (processingRechargeId) return;
+    setProcessingRechargeId(requestId);
     try {
-      const res = await apiFetch(`/api/admin/recharge-requests/${requestId}/reject`, {
+      const res = await apiFetch(`/api/admin/recharge-requests/${encodeURIComponent(requestId)}/reject`, {
         method: 'POST'
       });
       if (res.ok) {
         toast.success('¡Recarga rechazada con éxito!');
-        fetchRechargeRequests();
+        setRechargeRequests(prev => prev.map(r => r.id === requestId ? { ...r, status: 'rejected', validation_reason: 'Rechazado manualmente por el organizador.' } : r));
+        fetchRechargeRequests(true);
         fetchWalletPlayers();
       } else {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         toast.error(data.error || 'Error al rechazar recarga');
       }
     } catch (err) {
       toast.error('Error al conectar con el servidor');
+    } finally {
+      setProcessingRechargeId(null);
     }
   };
 
@@ -1281,16 +1298,16 @@ export default function AdminDashboard() {
       fetchWalletPlayers();
       fetchRechargeRequests();
 
-      // Sincronización periódica de seguridad cada 15s mientras la pestaña wallet está activa
+      // Sincronización periódica de seguridad cada 15s mientras la pestaña wallet está activa (en segundo plano)
       const interval = setInterval(() => {
         fetchWalletPlayers();
-        fetchRechargeRequests();
+        fetchRechargeRequests(true);
       }, 15000);
 
-      // Refrescar al volver a la pestaña del navegador
+      // Refrescar al volver a la pestaña del navegador (en segundo plano sin parpadeo)
       const onFocus = () => {
         fetchWalletPlayers();
-        fetchRechargeRequests();
+        fetchRechargeRequests(true);
       };
       window.addEventListener('focus', onFocus);
 
@@ -1681,8 +1698,8 @@ export default function AdminDashboard() {
         fetchWalletPlayers();
         return prev;
       });
-      // También refrescar solicitudes de recarga para mostrar cambios de estado
-      fetchRechargeRequests();
+      // También refrescar solicitudes de recarga en segundo plano para mostrar cambios de estado sin parpadeo
+      fetchRechargeRequests(true);
     };
     channel.subscribe('wallet_updated', onWalletUpdated);
 
@@ -5652,15 +5669,19 @@ export default function AdminDashboard() {
                                 <div className="flex items-center justify-end gap-1.5">
                                   <button
                                     onClick={() => handleApproveRechargeRequest(req.id)}
-                                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white font-black text-xs rounded-xl border border-emerald-400/50 shadow-md transition-all active:scale-95 flex items-center gap-1"
+                                    disabled={processingRechargeId === req.id}
+                                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white font-black text-xs rounded-xl border border-emerald-400/50 shadow-md transition-all active:scale-95 flex items-center gap-1 cursor-pointer"
                                   >
-                                    <CheckCircle2 size={14} /> Aprobar
+                                    {processingRechargeId === req.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                                    Aprobar
                                   </button>
                                   <button
                                     onClick={() => handleRejectRechargeRequest(req.id)}
-                                    className="px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-black text-xs rounded-xl border border-rose-100 transition-all active:scale-95 flex items-center gap-1"
+                                    disabled={processingRechargeId === req.id}
+                                    className="px-4 py-2 bg-rose-50 hover:bg-rose-100 disabled:opacity-50 text-rose-700 font-black text-xs rounded-xl border border-rose-100 transition-all active:scale-95 flex items-center gap-1 cursor-pointer"
                                   >
-                                    <XCircle size={14} /> Rechazar
+                                    {processingRechargeId === req.id ? <Loader2 size={14} className="animate-spin" /> : <XCircle size={14} />}
+                                    Rechazar
                                   </button>
                                 </div>
                               ) : req.status === 'approved' ? (
@@ -7531,12 +7552,28 @@ export default function AdminDashboard() {
             >
               <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                 <span className="text-sm font-black text-slate-800 uppercase tracking-wider">Comprobante de Pago</span>
-                <button onClick={() => setSelectedReceiptUrl(null)} className="text-slate-400 hover:text-slate-600 transition-colors">
-                  <X size={20} />
-                </button>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={selectedReceiptUrl.split('#hash#')[0]}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-bold text-blue-600 hover:text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100 flex items-center gap-1 transition-colors"
+                  >
+                    Abrir original ↗
+                  </a>
+                  <button onClick={() => setSelectedReceiptUrl(null)} className="text-slate-400 hover:text-slate-600 transition-colors p-1">
+                    <X size={20} />
+                  </button>
+                </div>
               </div>
-              <div className="p-4 flex justify-center bg-slate-100 max-h-[70vh] overflow-y-auto">
-                <img src={selectedReceiptUrl} alt="Comprobante" className="max-w-full h-auto object-contain rounded-xl shadow-inner" />
+              <div className="p-4 flex justify-center bg-slate-100 max-h-[75vh] overflow-y-auto">
+                <img 
+                  src={selectedReceiptUrl.split('#hash#')[0]} 
+                  alt="Comprobante" 
+                  className="max-w-full h-auto object-contain rounded-xl shadow-inner cursor-zoom-in" 
+                  onClick={() => window.open(selectedReceiptUrl.split('#hash#')[0], '_blank')}
+                  title="Haz clic para ver en tamaño completo"
+                />
               </div>
             </motion.div>
           </div>

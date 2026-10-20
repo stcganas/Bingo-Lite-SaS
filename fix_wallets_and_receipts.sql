@@ -1,33 +1,39 @@
 -- ==============================================================================
--- CORRECCIÓN CRÍTICA DEFINITIVA: BILLETERAS, COMPROBANTES Y RLS STORAGE (V2)
+-- CORRECCIÓN DEFINITIVA Y SANEAMIENTO MAESTRO: BILLETERAS, COMPROBANTES Y SALAS
 -- Bingo Lite SaaS Multi-Tenant
 -- Fecha de actualización: 2026-10-20
 --
--- Problemas que corrige:
--- 1. "new row violates row-level security policy" / error 415 MIME-type en storage
--- 2. Eliminación de restricciones rígidas de formato en bucket receipts (permite HEIC, WEBP, PNG, JPG, PDF)
--- 3. Aumento del límite de comprobantes a 15MB
--- 4. Asegura columnas tenant_id y updated_at en tabla wallets
--- 5. Asegura columna tenant_id en tabla wallet_transactions
--- 6. Índices multi-tenant para balance y consultas en vivo
--- 7. Políticas de escritura Backend (service_role) para todas las tablas del sistema
+-- Contenido y correcciones que aplica este script:
+-- 1. Storage Buckets: Configuración de 'receipts' (15MB, sin restricción MIME) y 'banners' (10MB).
+-- 2. Storage RLS: Acceso total para backend (service_role) y lectura pública para comprobantes.
+-- 3. Tabla wallets: Columnas tenant_id y updated_at, saneamiento de nulos y PK compuesta (phone, tenant_id).
+-- 4. Tabla wallet_transactions: Columna tenant_id y saneamiento de nulos.
+-- 5. Tabla players: Columna tenant_id, saneamiento de nulos y valores por defecto.
+-- 6. PURGA Y SANEAMIENTO ANTI-JUGADOR FANTASMA:
+--    - Elimina cualquier registro de administrador de la tabla 'players' (los admins no deben ser jugadores).
+--    - Elimina cartones huérfanos o asociados a cuentas administrativas.
+--    - Limpia figuras/patrones de bingo ganados espuriamente por cuentas de administración.
+-- 7. Índices de rendimiento multi-tenant para balance y consultas en tiempo real.
+-- 8. Políticas RLS para acceso backend seguro (service_role) en todas las tablas del sistema.
+-- 9. Recarga de esquema de PostgREST (NOTIFY pgrst, 'reload schema').
 --
--- INSTRUCCIONES: Ejecutar COMPLETO en Supabase SQL Editor (SQL Editor > New Query > Run)
--- Este script es IDEMPOTENTE: seguro de ejecutar múltiples veces sin afectar datos existentes.
+-- INSTRUCCIONES:
+-- Ejecutar en Supabase SQL Editor (SQL Editor > New Query > Run).
+-- Este script es 100% IDEMPOTENTE: seguro de ejecutar múltiples veces sin afectar datos reales.
 -- ==============================================================================
 
 -- ============================================================
 -- PARTE 1: CONFIGURACIÓN ROBUSTA DE BUCKETS DE STORAGE
 -- ============================================================
 
--- Bucket 'receipts': público, 15MB, sin bloqueo de MIME types móviles
+-- Bucket 'receipts': público, 15MB, sin bloqueo de MIME types (soporta HEIC, WEBP, PNG, JPG, PDF)
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
   'receipts',
   'receipts',
   true,
   15728640,
-  NULL -- NULL permite cualquier tipo de imagen/documento (evita rechazos por image/heic, pjpeg, etc.)
+  NULL
 )
 ON CONFLICT (id) DO UPDATE SET
   public = true,
@@ -60,7 +66,7 @@ DROP POLICY IF EXISTS "Authenticated upload receipts" ON storage.objects;
 DROP POLICY IF EXISTS "Receipts service role policy" ON storage.objects;
 DROP POLICY IF EXISTS "Anon upload receipts" ON storage.objects;
 
--- Acceso total e irrestricto para service_role (Backend Node.js)
+-- Acceso total e irrestricto para service_role (Backend Node.js Express)
 CREATE POLICY "Service role full access receipts"
 ON storage.objects FOR ALL TO service_role
 USING (bucket_id = 'receipts')
@@ -85,12 +91,12 @@ ON storage.objects FOR SELECT TO anon, authenticated
 USING (bucket_id = 'banners');
 
 -- ============================================================
--- PARTE 3: COLUMNAS tenant_id Y updated_at EN TABLA wallets
+-- PARTE 3: SANEAMIENTO Y ESTRUCTURA DE TABLA wallets
 -- ============================================================
 
 DO $$
 BEGIN
-  -- Columna tenant_id
+  -- 1. Columna tenant_id
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public'
@@ -99,11 +105,9 @@ BEGIN
   ) THEN
     ALTER TABLE public.wallets ADD COLUMN tenant_id TEXT DEFAULT 'default';
     RAISE NOTICE 'Columna tenant_id agregada a wallets';
-  ELSE
-    RAISE NOTICE 'Columna tenant_id ya existe en wallets';
   END IF;
 
-  -- Columna updated_at
+  -- 2. Columna updated_at
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public'
@@ -112,11 +116,15 @@ BEGIN
   ) THEN
     ALTER TABLE public.wallets ADD COLUMN updated_at TIMESTAMPTZ DEFAULT now();
     RAISE NOTICE 'Columna updated_at agregada a wallets';
-  ELSE
-    RAISE NOTICE 'Columna updated_at ya existe en wallets';
   END IF;
 
-  -- Clave primaria compuesta (phone, tenant_id) para soporte multi-tenant total
+  -- 3. Sanear valores nulos o vacíos en tenant_id antes de restricciones
+  UPDATE public.wallets SET tenant_id = 'default' WHERE tenant_id IS NULL OR TRIM(tenant_id) = '';
+
+  -- 4. Asegurar que tenant_id sea NOT NULL
+  ALTER TABLE public.wallets ALTER COLUMN tenant_id SET NOT NULL;
+
+  -- 5. Clave primaria compuesta (phone, tenant_id) para soporte multi-tenant total
   IF EXISTS (
     SELECT 1 FROM information_schema.table_constraints tc
     JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
@@ -135,7 +143,7 @@ BEGIN
 END $$;
 
 -- ============================================================
--- PARTE 4: COLUMNA tenant_id EN TABLA wallet_transactions
+-- PARTE 4: SANEAMIENTO Y ESTRUCTURA DE TABLA wallet_transactions
 -- ============================================================
 
 DO $$
@@ -148,21 +156,85 @@ BEGIN
   ) THEN
     ALTER TABLE public.wallet_transactions ADD COLUMN tenant_id TEXT DEFAULT 'default';
     RAISE NOTICE 'Columna tenant_id agregada a wallet_transactions';
-  ELSE
-    RAISE NOTICE 'Columna tenant_id ya existe en wallet_transactions';
   END IF;
+
+  UPDATE public.wallet_transactions SET tenant_id = 'default' WHERE tenant_id IS NULL OR TRIM(tenant_id) = '';
 END $$;
 
 -- ============================================================
--- PARTE 5: ÍNDICES DE RENDIMIENTO MULTI-TENANT
+-- PARTE 5: SANEAMIENTO Y ESTRUCTURA DE TABLA players
+-- ============================================================
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'players'
+      AND column_name = 'tenant_id'
+  ) THEN
+    ALTER TABLE public.players ADD COLUMN tenant_id TEXT DEFAULT 'default';
+    RAISE NOTICE 'Columna tenant_id agregada a players';
+  END IF;
+
+  UPDATE public.players SET tenant_id = 'default' WHERE tenant_id IS NULL OR TRIM(tenant_id) = '';
+END $$;
+
+-- ============================================================
+-- PARTE 6: PURGA DEFINITIVA DE ADMINISTRADORES EN TABLA PLAYERS
+-- (Los administradores gestionan salas; NO participan como jugadores)
+-- ============================================================
+
+-- 1. Eliminar cualquier cartón asignado a cuentas administrativas
+DELETE FROM public.cards 
+WHERE player_id IN (
+  SELECT id FROM public.players 
+  WHERE email ILIKE '%stcganas%' 
+     OR email ILIKE '%comamosexpress%' 
+     OR name ILIKE '%administrador%' 
+     OR name ILIKE '%stc ganas%' 
+     OR phone IN ('3000000000', '3005191519')
+);
+
+-- 2. Limpiar patrones o figuras ganadas espuriamente por cuentas administrativas
+UPDATE public.game_patterns
+SET winner_player_id = NULL,
+    winner_card_number = NULL,
+    won_at = NULL,
+    payment_status = NULL
+WHERE winner_player_id IN (
+  SELECT id FROM public.players 
+  WHERE email ILIKE '%stcganas%' 
+     OR email ILIKE '%comamosexpress%' 
+     OR name ILIKE '%administrador%' 
+     OR name ILIKE '%stc ganas%' 
+     OR phone IN ('3000000000', '3005191519')
+);
+
+-- 3. Eliminar administradores de la tabla de jugadores
+DELETE FROM public.players 
+WHERE email ILIKE '%stcganas%' 
+   OR email ILIKE '%comamosexpress%' 
+   OR name ILIKE '%administrador%' 
+   OR name ILIKE '%stc ganas%' 
+   OR phone IN ('3000000000', '3005191519');
+
+-- 4. Eliminar cartones huérfanos que no pertenezcan a ningún jugador existente
+DELETE FROM public.cards 
+WHERE player_id NOT IN (SELECT id FROM public.players);
+
+-- ============================================================
+-- PARTE 7: ÍNDICES DE RENDIMIENTO MULTI-TENANT
 -- ============================================================
 
 CREATE INDEX IF NOT EXISTS idx_wallets_phone_tenant ON public.wallets (phone, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_wallet_transactions_phone_tenant ON public.wallet_transactions (player_phone, tenant_id);
 CREATE INDEX IF NOT EXISTS idx_wallet_transactions_tenant ON public.wallet_transactions (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_players_tenant_status ON public.players (tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_cards_game_player ON public.cards (game_id, player_id);
 
 -- ============================================================
--- PARTE 6: POLÍTICAS RLS PARA ACCESO BACKEND (service_role)
+-- PARTE 8: POLÍTICAS RLS PARA ACCESO BACKEND (service_role)
 -- ============================================================
 
 DROP POLICY IF EXISTS "Backend full access players" ON public.players;
@@ -217,7 +289,7 @@ DROP POLICY IF EXISTS "Backend full access game_patterns" ON public.game_pattern
 CREATE POLICY "Backend full access game_patterns"
 ON public.game_patterns FOR ALL TO service_role USING (true) WITH CHECK (true);
 
--- Tablas complementarias (si existen)
+-- Tablas complementarias si existen en la instalación
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='receipts') THEN
@@ -255,7 +327,7 @@ BEGIN
 END $$;
 
 -- ============================================================
--- PARTE 7: RECARGAR SCHEMA EN POSTGREST
+-- PARTE 9: RECARGAR SCHEMA EN POSTGREST
 -- ============================================================
 NOTIFY pgrst, 'reload schema';
 
@@ -278,4 +350,16 @@ WHERE table_schema = 'public'
   AND (
     (table_name = 'wallets' AND column_name IN ('tenant_id', 'updated_at'))
     OR (table_name = 'wallet_transactions' AND column_name = 'tenant_id')
-  );
+    OR (table_name = 'players' AND column_name = 'tenant_id')
+  )
+UNION ALL
+SELECT
+  'ADMINS_EN_PLAYERS' as tipo,
+  'Total cuentas admin residuales en players' as nombre,
+  count(*)::text as detalle
+FROM public.players
+WHERE email ILIKE '%stcganas%' 
+   OR email ILIKE '%comamosexpress%' 
+   OR name ILIKE '%administrador%' 
+   OR name ILIKE '%stc ganas%' 
+   OR phone IN ('3000000000', '3005191519');

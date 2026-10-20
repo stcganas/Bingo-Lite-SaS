@@ -705,11 +705,16 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       const res = await apiFetch(`/api/wallet?phone=${normalizedPhone}${tenantParam}&gameId=${gameStateRef.current?.id || ''}&_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
-        setWalletBalance(data.balance);
-        setWalletActivated(data.activated);
+        // Solo actualizar balance si la respuesta es autenticada y trae un número válido
+        if (typeof data.balance === 'number' && data.authenticated !== false) {
+          setWalletBalance(data.balance);
+        }
+        if (typeof data.activated === 'boolean') {
+          setWalletActivated(data.activated);
+        }
       }
     } catch (err: any) {
-      // ignored
+      // Ignorar errores de red para no borrar el saldo actual en pantalla
     }
   };
 
@@ -722,7 +727,9 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       const res = await apiFetch(`/api/wallet/history?phone=${normalizedPhone}${tenantParam}&_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
-        setWalletHistory(data);
+        if (Array.isArray(data)) {
+          setWalletHistory(data);
+        }
       }
     } catch (err: any) {
       // ignored
@@ -759,7 +766,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       const currentTenantId = tenantSlug || (user as any)?.tenant_id || 'default';
       formData.append('tenantId', currentTenantId);
 
-      const res = await fetch('/api/wallet/recharge-request', {
+      const res = await apiFetch('/api/wallet/recharge-request', {
         method: 'POST',
         body: formData
       });

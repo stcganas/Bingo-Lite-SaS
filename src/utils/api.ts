@@ -6,9 +6,17 @@ export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, ret
   // Auto-adjuntar token de administrador (HMAC token), token de jugador o token de sesión de Supabase
   if (!headers.has('Authorization')) {
     try {
+      const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+      const inputStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : '');
+      const isPlayerContext = pathname.includes('/player') || pathname.includes('/registration-success') || inputStr.includes('/api/wallet') || inputStr.includes('/recharge-request');
+      
       const adminToken = typeof window !== 'undefined' ? localStorage.getItem('bingo_admin_token') : null;
       const playerToken = typeof window !== 'undefined' ? localStorage.getItem('bingo_player_token') : null;
-      if (adminToken) {
+
+      // En contexto de jugador (pantalla de juego o API de billetera de jugador), dar prioridad estricta al playerToken
+      if (isPlayerContext && playerToken) {
+        headers.set('Authorization', `Bearer ${playerToken}`);
+      } else if (adminToken) {
         headers.set('Authorization', `Bearer ${adminToken}`);
       } else if (playerToken) {
         headers.set('Authorization', `Bearer ${playerToken}`);

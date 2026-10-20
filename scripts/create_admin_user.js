@@ -82,25 +82,8 @@ async function run() {
     console.log('✅ El usuario ya existe en la tabla "sellers".');
   }
 
-  // 3. Insertar / Registrar en la tabla public.players (si aplica como jugador admin)
-  const { data: existingPlayer } = await supabase
-    .from('players')
-    .select('*')
-    .eq('phone', phone)
-    .maybeSingle();
-
-  if (!existingPlayer) {
-    const { error: playerErr } = await supabase.from('players').insert({
-      name: 'Administrador STC Ganas',
-      phone: phone,
-      city: 'Sede Principal',
-      status: 'approved'
-    });
-    if (playerErr) console.error('Error creando registro en players:', playerErr.message);
-    else console.log('✅ Registro de Administrador insertado en la tabla "players".');
-  } else {
-    console.log('✅ El usuario ya existe en la tabla "players".');
-  }
+  // 3. Los administradores NO deben ser registrados en la tabla players
+  console.log('ℹ️ Omitiendo inserción en "players": los administradores no juegan ni poseen cartones.');
 
   console.log('\n======================================================');
   console.log('🎉 SCRIPT FINALIZADO EXITOSAMENTE');

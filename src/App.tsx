@@ -10,19 +10,28 @@ import { useEffect } from 'react';
 import Home from './pages/Home';
 import Register from './pages/Register';
 import SaaSMarketingLanding from './pages/SaaSMarketingLanding';
+import { lazyWithRetry } from './utils/lazyWithRetry';
 
-// Code-Splitting con carga diferida bajo demanda (reduce el bundle inicial más de un 60%)
-const FreeGames = React.lazy(() => import('./pages/FreeGames'));
-const PlayerDashboard = React.lazy(() => import('./pages/PlayerDashboard'));
-const AdminDashboard = React.lazy(() => import('./pages/AdminDashboard'));
-const AdminLogin = React.lazy(() => import('./pages/AdminLogin'));
-const AdminRegister = React.lazy(() => import('./pages/AdminRegister'));
-const ForgotPassword = React.lazy(() => import('./pages/ForgotPassword'));
-const ResetPassword = React.lazy(() => import('./pages/ResetPassword'));
-const RegistrationSuccess = React.lazy(() => import('./pages/RegistrationSuccess'));
-const DynamicsInfo = React.lazy(() => import('./pages/DynamicsInfo'));
-const SellerDashboard = React.lazy(() => import('./pages/SellerDashboard'));
-const SuperAdminDashboard = React.lazy(() => import('./pages/SuperAdminDashboard'));
+// Auto-recuperación ante actualizaciones de Vite en producción
+if (typeof window !== 'undefined') {
+  window.addEventListener('vite:preloadError', (event) => {
+    console.warn('[Vite] Error de precarga de módulo diferido detectado. Recargando para actualizar bundle...', event);
+    window.location.reload();
+  });
+}
+
+// Code-Splitting con carga diferida bajo demanda protegida con auto-reintento
+const FreeGames = lazyWithRetry(() => import('./pages/FreeGames'), 'FreeGames');
+const PlayerDashboard = lazyWithRetry(() => import('./pages/PlayerDashboard'), 'PlayerDashboard');
+const AdminDashboard = lazyWithRetry(() => import('./pages/AdminDashboard'), 'AdminDashboard');
+const AdminLogin = lazyWithRetry(() => import('./pages/AdminLogin'), 'AdminLogin');
+const AdminRegister = lazyWithRetry(() => import('./pages/AdminRegister'), 'AdminRegister');
+const ForgotPassword = lazyWithRetry(() => import('./pages/ForgotPassword'), 'ForgotPassword');
+const ResetPassword = lazyWithRetry(() => import('./pages/ResetPassword'), 'ResetPassword');
+const RegistrationSuccess = lazyWithRetry(() => import('./pages/RegistrationSuccess'), 'RegistrationSuccess');
+const DynamicsInfo = lazyWithRetry(() => import('./pages/DynamicsInfo'), 'DynamicsInfo');
+const SellerDashboard = lazyWithRetry(() => import('./pages/SellerDashboard'), 'SellerDashboard');
+const SuperAdminDashboard = lazyWithRetry(() => import('./pages/SuperAdminDashboard'), 'SuperAdminDashboard');
 
 import { AuthProvider, useAuth } from './AuthContext';
 import ErrorBoundary from './components/ErrorBoundary';
