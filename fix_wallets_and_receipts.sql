@@ -115,6 +115,23 @@ BEGIN
   ELSE
     RAISE NOTICE 'Columna updated_at ya existe en wallets';
   END IF;
+
+  -- Clave primaria compuesta (phone, tenant_id) para soporte multi-tenant total
+  IF EXISTS (
+    SELECT 1 FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+    WHERE tc.table_name = 'wallets' 
+      AND tc.constraint_type = 'PRIMARY KEY'
+      AND kcu.column_name = 'phone'
+      AND (
+        SELECT count(*) FROM information_schema.key_column_usage k2 
+        WHERE k2.constraint_name = tc.constraint_name
+      ) = 1
+  ) THEN
+    ALTER TABLE public.wallets DROP CONSTRAINT IF EXISTS wallets_pkey;
+    ALTER TABLE public.wallets ADD CONSTRAINT wallets_pkey PRIMARY KEY (phone, tenant_id);
+    RAISE NOTICE 'Clave primaria de wallets migrada a compuesta (phone, tenant_id)';
+  END IF;
 END $$;
 
 -- ============================================================

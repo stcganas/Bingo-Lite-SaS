@@ -745,15 +745,19 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     setRechargeStatus('idle');
 
     try {
+      const activePhone = (player?.phone || user?.phone || '').trim();
+      if (!activePhone) {
+        setRechargeError('No se pudo identificar tu número de teléfono. Por favor inicia sesión nuevamente.');
+        return;
+      }
       const formData = new FormData();
-      formData.append('phone', player?.phone || '');
+      formData.append('phone', activePhone);
       formData.append('amount', rechargeAmount);
       formData.append('note', rechargeNote);
       formData.append('receipt', rechargeReceipt);
-      // Enviar tenantId para que el servidor aísle la recarga por sala correctamente
-      if (tenantSlug) {
-        formData.append('tenantId', tenantSlug);
-      }
+      // Enviar tenantId con fallback para aislamiento correcto
+      const currentTenantId = tenantSlug || (user as any)?.tenant_id || 'default';
+      formData.append('tenantId', currentTenantId);
 
       const res = await fetch('/api/wallet/recharge-request', {
         method: 'POST',

@@ -419,31 +419,54 @@ async function getGiftStatsMap(targetGameId?: number) {
   return giftsMap;
 }
 
-// Wallet helper functions con aislamiento estricto por sala (Tenant)
+// Helper robusto para encontrar al jugador en un tenant específico evitando errores de colisión por teléfono duplicado
+async function findSpecificPlayer(rawPhone: string, targetTenant?: string): Promise<any | null> {
+  const phone = normalizePhone(rawPhone);
+  if (!phone) return null;
+  const normTenant = (targetTenant || 'default').toLowerCase();
+
+  try {
+    // 1. Intentar buscar coincidencia exacta con el tenant especificado
+    let q = supabase.from('players').select('*').eq('phone', phone);
+    if (normTenant !== 'default' && normTenant !== 'bingo-lite') {
+      q = q.eq('tenant_id', normTenant);
+    } else {
+      q = q.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    }
+    const { data: rows } = await q.order('created_at', { ascending: false }).limit(1);
+    if (rows && rows.length > 0) return rows[0];
+
+    // 2. Si no se encontró en esa sala, buscar la fila más reciente para ese teléfono
+    const { data: fallbackRows } = await supabase.from('players').select('*').eq('phone', phone).order('created_at', { ascending: false }).limit(1);
+    if (fallbackRows && fallbackRows.length > 0) return fallbackRows[0];
+  } catch (e) {
+    console.warn('[findSpecificPlayer] Error buscando jugador:', e);
+  }
+  return null;
+}
+
+// Wallet helper functions con aislamiento estricto por sala (Tenant) y fallback robusto
 async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
   if (!phone) return 0;
   const targetTenant = (tenantId || 'default').toLowerCase();
   try {
-    let query = supabase.from('wallets').select('balance').eq('phone', phone);
+    let query = supabase.from('wallets').select('balance, tenant_id').eq('phone', phone);
     if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
       query = query.eq('tenant_id', targetTenant);
     } else {
       query = query.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
     }
-    const { data, error } = await query.maybeSingle();
-    if (error) {
-      if (error.code === '42703') { // Columna tenant_id no existe aún en la tabla wallets de Supabase
-        // Si es una sala secundaria, no filtrar saldo global para no cruzar billeteras entre salas
-        if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-          return 0;
-        }
-        const fallback = await supabase.from('wallets').select('balance').eq('phone', phone).maybeSingle();
-        return fallback.data ? fallback.data.balance : 0;
-      }
-      if (error.code !== 'PGRST116') throw error;
+    const { data: rows } = await query.order('updated_at', { ascending: false }).limit(1);
+    if (rows && rows.length > 0) {
+      return Number(rows[0].balance) || 0;
     }
-    return data ? data.balance : 0;
+    // Fallback: si no hay fila con ese tenant exacto, consultar cualquier billetera del teléfono
+    const { data: fallbackRows } = await supabase.from('wallets').select('balance').eq('phone', phone).order('updated_at', { ascending: false }).limit(1);
+    if (fallbackRows && fallbackRows.length > 0) {
+      return Number(fallbackRows[0].balance) || 0;
+    }
+    return 0;
   } catch (e: any) {
     return 0;
   }
@@ -470,12 +493,16 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       let existingQ = supabase.from('wallets').select('phone, balance, tenant_id').eq('phone', phone);
       if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
         existingQ = existingQ.eq('tenant_id', targetTenant);
+      } else {
+        existingQ = existingQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
       }
-      const { data: existing, error: selectError } = await existingQ.maybeSingle();
+      const { data: existingRows } = await existingQ.limit(1);
+      const existing = existingRows && existingRows.length > 0 ? existingRows[0] : null;
 
       if (existing) {
         let updateQ = supabase.from('wallets').update({ 
           balance: newBalance, 
+          tenant_id: targetTenant,
           updated_at: new Date().toISOString() 
         }).eq('phone', phone);
         if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
@@ -488,11 +515,11 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       } else {
         const { error: insertErr } = await supabase.from('wallets').insert(payload);
         if (insertErr) {
-          if (insertErr.code === '42703') { // Columna tenant_id no existe
+          if (insertErr.code === '23505') { // Ya existía por phone (PK constraint)
+            await supabase.from('wallets').update({ balance: newBalance, tenant_id: targetTenant, updated_at: new Date().toISOString() }).eq('phone', phone);
+          } else if (insertErr.code === '42703') { // Columna tenant_id no existe
             delete payload.tenant_id;
             await supabase.from('wallets').insert(payload);
-          } else if (insertErr.code === '23505') { // Ya existía por phone (PK constraint)
-            await supabase.from('wallets').update({ balance: newBalance, updated_at: new Date().toISOString() }).eq('phone', phone);
           } else {
             console.error('[updateWalletBalance] Error insertando wallet:', insertErr);
           }
@@ -1863,19 +1890,15 @@ app.post('/api/admin/wallet/recharge', requireAdmin, async (req, res) => {
   const adminUser = (req as any).adminUser;
   let targetTenant = adminUser?.isSuperAdmin ? (qTenantId || (req as any).tenantId || 'default') : (adminUser?.tenant_id || 'default');
 
-  // Verificar que el jugador existe en el tenant asignado
-  let playerQ = supabase.from('players').select('id, phone, tenant_id').eq('phone', phone);
-  if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-    playerQ = playerQ.eq('tenant_id', targetTenant);
-  }
-  const { data: player } = await playerQ.maybeSingle();
+  // Verificar que el jugador existe en el tenant asignado usando el helper seguro (soporta múltiples salas)
+  const player = await findSpecificPlayer(phone, targetTenant);
   if (!player && adminUser && !adminUser.isSuperAdmin) {
     return res.status(404).json({ error: `El jugador no se encuentra registrado en tu sala (${targetTenant}).` });
   }
 
   const actualTenant = player?.tenant_id || targetTenant;
-  await updateWalletBalance(phone, numAmount, `Recarga por el administrador por $${numAmount}`, 'recharge', actualTenant);
-  res.json({ success: true, newBalance: await getWalletBalance(phone, actualTenant) });
+  const newBalance = await updateWalletBalance(phone, numAmount, `Recarga por el administrador por $${numAmount}`, 'recharge', actualTenant);
+  res.json({ success: true, newBalance });
 });
 
 app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
@@ -8977,27 +9000,18 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
       silentReason = 'Antifraude desactivado. Requiere aprobación manual.';
     }
 
-    // 3. Localizar o registrar jugador para garantizar que la solicitud nunca se pierda
-    let playerSearchQ = supabase.from('players').select('*').eq('phone', phone);
-    if (requestTenantId && requestTenantId !== 'default' && requestTenantId !== 'bingo-lite') {
-      playerSearchQ = playerSearchQ.eq('tenant_id', requestTenantId);
-    }
-    let { data: player } = await playerSearchQ.maybeSingle();
+    // 3. Localizar o registrar jugador para garantizar que la solicitud nunca se pierda (soporta teléfonos con múltiples salas)
+    let player = await findSpecificPlayer(phone, requestTenantId);
 
     if (!player) {
-      const { data: fallbackPlayer } = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
-      if (fallbackPlayer) {
-        player = fallbackPlayer;
-      } else {
-        const { data: newPlayer } = await supabase.from('players').insert({
-          phone,
-          name: `Jugador ${phone.slice(-4)}`,
-          tenant_id: requestTenantId || 'default',
-          status: 'approved',
-          receipt_url: '[]'
-        }).select().maybeSingle();
-        player = newPlayer;
-      }
+      const { data: newPlayer } = await supabase.from('players').insert({
+        phone,
+        name: `Jugador ${phone.slice(-4)}`,
+        tenant_id: requestTenantId || 'default',
+        status: 'approved',
+        receipt_url: '[]'
+      }).select().maybeSingle();
+      player = newPlayer;
     }
 
     if (player) {
