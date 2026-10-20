@@ -3,19 +3,19 @@ import { supabase } from '../lib/supabase';
 export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, retries = 3): Promise<Response> => {
   const headers = new Headers(init?.headers);
 
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
+  const inputStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : '');
+  const isAdminContext = pathname.includes('/admin') || inputStr.includes('/api/admin/');
+  const isPlayerContext = !isAdminContext && (
+    pathname.includes('/player') || 
+    pathname.includes('/registration-success') || 
+    inputStr.includes('/api/wallet') || 
+    inputStr.includes('/recharge-request')
+  );
+
   // Auto-adjuntar token de administrador (HMAC token), token de jugador o token de sesión de Supabase
   if (!headers.has('Authorization')) {
     try {
-      const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-      const inputStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : '');
-      const isAdminContext = pathname.includes('/admin') || inputStr.includes('/api/admin/');
-      const isPlayerContext = !isAdminContext && (
-        pathname.includes('/player') || 
-        pathname.includes('/registration-success') || 
-        inputStr.includes('/api/wallet') || 
-        inputStr.includes('/recharge-request')
-      );
-      
       const adminToken = typeof window !== 'undefined' ? localStorage.getItem('bingo_admin_token') : null;
       const playerToken = typeof window !== 'undefined' ? localStorage.getItem('bingo_player_token') : null;
 
@@ -42,23 +42,33 @@ export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, ret
   // Auto-adjuntar X-Tenant-Id si nos encontramos en la ruta de una sala o el usuario pertenece a una sala
   if (!headers.has('X-Tenant-Id')) {
     try {
-      const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
       const match = pathname.match(/\/sala\/([a-zA-Z0-9_-]+)/i);
       if (match && match[1]) {
         headers.set('X-Tenant-Id', match[1].toLowerCase());
       } else {
-        const adminSession = localStorage.getItem('bingo_admin_user');
-        if (adminSession) {
-          const parsed = JSON.parse(adminSession);
-          if (parsed.tenant_id && parsed.tenant_id !== 'global') {
-            headers.set('X-Tenant-Id', parsed.tenant_id.toLowerCase());
-          }
-        } else {
+        if (isPlayerContext) {
           const playerSession = localStorage.getItem('bingo_player');
           if (playerSession) {
             const parsed = JSON.parse(playerSession);
             if (parsed.tenant_id && parsed.tenant_id !== 'global') {
               headers.set('X-Tenant-Id', parsed.tenant_id.toLowerCase());
+            }
+          }
+        }
+        if (!headers.has('X-Tenant-Id')) {
+          const adminSession = localStorage.getItem('bingo_admin_user');
+          if (adminSession) {
+            const parsed = JSON.parse(adminSession);
+            if (parsed.tenant_id && parsed.tenant_id !== 'global') {
+              headers.set('X-Tenant-Id', parsed.tenant_id.toLowerCase());
+            }
+          } else {
+            const playerSession = localStorage.getItem('bingo_player');
+            if (playerSession) {
+              const parsed = JSON.parse(playerSession);
+              if (parsed.tenant_id && parsed.tenant_id !== 'global') {
+                headers.set('X-Tenant-Id', parsed.tenant_id.toLowerCase());
+              }
             }
           }
         }

@@ -181,47 +181,42 @@ BEGIN
 END $$;
 
 -- ============================================================
--- PARTE 6: PURGA DEFINITIVA DE ADMINISTRADORES EN TABLA PLAYERS
--- (Los administradores gestionan salas; NO participan como jugadores)
+-- PARTE 6: PURGA OPCIONAL DE CUENTAS DE PRUEBA / ADMINS EN PLAYERS
+-- (Desactivado por defecto para evitar borrado accidental de datos)
+-- Si necesitas eliminar jugadores de prueba administrativos, descomenta estas líneas:
 -- ============================================================
 
--- 1. Eliminar cualquier cartón asignado a cuentas administrativas
-DELETE FROM public.cards 
-WHERE player_id IN (
-  SELECT id FROM public.players 
-  WHERE email ILIKE '%stcganas%' 
-     OR email ILIKE '%comamosexpress%' 
-     OR name ILIKE '%administrador%' 
-     OR name ILIKE '%stc ganas%' 
-     OR phone IN ('3000000000', '3005191519')
-);
+-- 1. Eliminar cualquier cartón asignado a cuentas administrativas de prueba (OPCIONAL)
+-- DELETE FROM public.cards 
+-- WHERE player_id IN (
+--   SELECT id FROM public.players 
+--   WHERE email ILIKE '%stcganas%' 
+--      OR email ILIKE '%comamosexpress%' 
+--      OR phone IN ('3000000000', '3005191519')
+-- );
 
--- 2. Limpiar patrones o figuras ganadas espuriamente por cuentas administrativas
-UPDATE public.game_patterns
-SET winner_player_id = NULL,
-    winner_card_number = NULL,
-    won_at = NULL,
-    payment_status = NULL
-WHERE winner_player_id IN (
-  SELECT id FROM public.players 
-  WHERE email ILIKE '%stcganas%' 
-     OR email ILIKE '%comamosexpress%' 
-     OR name ILIKE '%administrador%' 
-     OR name ILIKE '%stc ganas%' 
-     OR phone IN ('3000000000', '3005191519')
-);
+-- 2. Limpiar patrones o figuras ganadas en pruebas (OPCIONAL)
+-- UPDATE public.game_patterns
+-- SET winner_player_id = NULL,
+--     winner_card_number = NULL,
+--     won_at = NULL,
+--     payment_status = NULL
+-- WHERE winner_player_id IN (
+--   SELECT id FROM public.players 
+--   WHERE email ILIKE '%stcganas%' 
+--      OR email ILIKE '%comamosexpress%' 
+--      OR phone IN ('3000000000', '3005191519')
+-- );
 
--- 3. Eliminar administradores de la tabla de jugadores
-DELETE FROM public.players 
-WHERE email ILIKE '%stcganas%' 
-   OR email ILIKE '%comamosexpress%' 
-   OR name ILIKE '%administrador%' 
-   OR name ILIKE '%stc ganas%' 
-   OR phone IN ('3000000000', '3005191519');
+-- 3. Eliminar administradores de prueba de la tabla de jugadores (OPCIONAL)
+-- DELETE FROM public.players 
+-- WHERE email ILIKE '%stcganas%' 
+--    OR email ILIKE '%comamosexpress%' 
+--    OR phone IN ('3000000000', '3005191519');
 
--- 4. Eliminar cartones huérfanos que no pertenezcan a ningún jugador existente
-DELETE FROM public.cards 
-WHERE player_id NOT IN (SELECT id FROM public.players);
+-- 4. Eliminar cartones huérfanos que no pertenezcan a ningún jugador existente (OPCIONAL)
+-- DELETE FROM public.cards 
+-- WHERE player_id NOT IN (SELECT id FROM public.players);
 
 -- ============================================================
 -- PARTE 7: ÍNDICES DE RENDIMIENTO MULTI-TENANT

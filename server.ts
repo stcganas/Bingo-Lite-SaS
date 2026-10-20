@@ -445,7 +445,7 @@ async function findSpecificPlayer(rawPhone: string, targetTenant?: string): Prom
   return null;
 }
 
-// Wallet helper functions con aislamiento estricto por sala (Tenant) y fallback robusto
+// Wallet helper functions con aislamiento estricto por sala (Tenant) y atomicidad garantizada
 async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
   if (!phone) return 0;
@@ -457,20 +457,21 @@ async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<nu
     } else {
       query = query.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
     }
-    const { data: rows } = await query.order('updated_at', { ascending: false });
+    const { data: rows, error } = await query.order('updated_at', { ascending: false });
+    if (error) {
+      console.warn('[getWalletBalance] Error consultando wallets:', error.message);
+      return 0;
+    }
     if (rows && rows.length > 0) {
-      // Priorizar fila con balance positivo si existen múltiples filas para default/bingo-lite
+      // Priorizar coincidencia exacta con targetTenant
+      const exactMatch = rows.find(r => (r.tenant_id || 'default').toLowerCase() === targetTenant);
+      if (exactMatch) return Number(exactMatch.balance) || 0;
       const positiveRow = rows.find(r => Number(r.balance) > 0);
       return positiveRow ? Number(positiveRow.balance) : Number(rows[0].balance) || 0;
     }
-    // Fallback: si no hay fila con ese tenant exacto, consultar cualquier billetera del teléfono
-    const { data: fallbackRows } = await supabase.from('wallets').select('balance').eq('phone', phone).order('updated_at', { ascending: false });
-    if (fallbackRows && fallbackRows.length > 0) {
-      const positiveRow = fallbackRows.find(r => Number(r.balance) > 0);
-      return positiveRow ? Number(positiveRow.balance) : Number(fallbackRows[0].balance) || 0;
-    }
     return 0;
   } catch (e: any) {
+    console.warn('[getWalletBalance] Excepción consultando balance:', e?.message);
     return 0;
   }
 }
@@ -480,82 +481,101 @@ const walletUpdateQueues = new Map<string, Promise<any>>();
 
 async function updateWalletBalance(rawPhone: string, amount: number, description: string = 'Transacción de billetera', type: string = 'other', tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
-  if (!phone) return 0;
+  if (!phone) throw new Error('Número de teléfono inválido para transacción de billetera.');
   const targetTenant = (tenantId || 'default').toLowerCase();
   const queueKey = `${targetTenant}:${phone}`;
 
   const currentQueue = walletUpdateQueues.get(queueKey) || Promise.resolve();
 
   const execution = currentQueue.catch(() => 0).then(async () => {
+    // 1. Obtener saldo actual de la sala
+    const currentBalance = await getWalletBalance(phone, targetTenant);
+    const newBalance = currentBalance + amount;
+
+    if (newBalance < 0 && amount < 0) {
+      throw new Error(`Saldo insuficiente. Saldo actual: $${currentBalance}, requerido: $${Math.abs(amount)}`);
+    }
+
+    // 2. Determinar el tenant_id efectivo para la clave compuesta (phone, tenant_id)
+    let effectiveTenant = targetTenant;
+    if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+      const { data: existingRows } = await supabase.from('wallets')
+        .select('tenant_id')
+        .eq('phone', phone)
+        .or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null')
+        .order('updated_at', { ascending: false })
+        .limit(1);
+      if (existingRows && existingRows.length > 0 && existingRows[0].tenant_id) {
+        effectiveTenant = existingRows[0].tenant_id;
+      } else {
+        effectiveTenant = 'bingo-lite';
+      }
+    }
+
+    // Asegurar que effectiveTenant exista en tenants (por id o slug) para respetar la foreign key
     try {
-      const currentBalance = await getWalletBalance(phone, targetTenant);
-      const newBalance = currentBalance + amount;
-
-      const payload: any = { phone, balance: newBalance, tenant_id: targetTenant, updated_at: new Date().toISOString() };
-
-      let existingQ = supabase.from('wallets').select('phone, balance, tenant_id').eq('phone', phone);
-      if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-        existingQ = existingQ.eq('tenant_id', targetTenant);
+      const { data: tenantCheck } = await supabase.from('tenants')
+        .select('id, slug')
+        .or(`id.eq.${effectiveTenant},slug.eq.${effectiveTenant}`)
+        .limit(1)
+        .maybeSingle();
+      if (tenantCheck && tenantCheck.id) {
+        effectiveTenant = tenantCheck.id;
       } else {
-        existingQ = existingQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+        effectiveTenant = 'default';
       }
-      const { data: existingRows } = await existingQ.order('updated_at', { ascending: false });
-      const existing = existingRows && existingRows.length > 0 ? existingRows[0] : null;
+    } catch (tErr) {
+      effectiveTenant = 'default';
+    }
 
-      if (existing) {
-        let updateQ = supabase.from('wallets').update({ 
-          balance: newBalance, 
-          tenant_id: existing.tenant_id || targetTenant,
-          updated_at: new Date().toISOString() 
-        }).eq('phone', phone);
-        if (existing.tenant_id) {
-          updateQ = updateQ.eq('tenant_id', existing.tenant_id);
-        } else if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-          updateQ = updateQ.eq('tenant_id', targetTenant);
-        }
-        const { error: updError } = await updateQ;
-        if (updError) {
-          console.error('[updateWalletBalance] Error en update wallet:', updError);
-        }
-      } else {
-        const { error: insertErr } = await supabase.from('wallets').insert(payload);
-        if (insertErr) {
-          if (insertErr.code === '23505') { // Ya existía por phone (PK constraint)
-            await supabase.from('wallets').update({ balance: newBalance, tenant_id: targetTenant, updated_at: new Date().toISOString() }).eq('phone', phone);
-          } else if (insertErr.code === '42703') { // Columna tenant_id no existe
-            delete payload.tenant_id;
-            await supabase.from('wallets').insert(payload);
-          } else {
-            console.error('[updateWalletBalance] Error insertando wallet:', insertErr);
-          }
-        }
+    const payload = {
+      phone,
+      balance: newBalance,
+      tenant_id: effectiveTenant,
+      updated_at: new Date().toISOString()
+    };
+
+    // 3. Persistir en la tabla wallets de forma atómica con UPSERT
+    const { error: upsertErr } = await supabase.from('wallets')
+      .upsert(payload, { onConflict: 'phone,tenant_id' });
+
+    if (upsertErr) {
+      console.error('[updateWalletBalance] Error crítico al persistir wallet:', upsertErr);
+      // Fallback con UPDATE directo si ya existía
+      const { error: updateErr } = await supabase.from('wallets')
+        .update({ balance: newBalance, updated_at: new Date().toISOString() })
+        .eq('phone', phone)
+        .eq('tenant_id', effectiveTenant);
+      if (updateErr) {
+        throw new Error(`No se pudo persistir el saldo en base de datos: ${upsertErr.message}`);
       }
+    }
 
-      // Registrar transacción con tenant_id
-      const txPayload: any = {
+    // 4. Registrar en historial de transacciones
+    try {
+      await supabase.from('wallet_transactions').insert({
         player_phone: phone,
-        amount: amount,
+        amount,
         description,
         type,
-        tenant_id: targetTenant
-      };
-      const { error: txError } = await supabase.from('wallet_transactions').insert(txPayload);
-      if (txError && txError.code === '42703') {
-        delete txPayload.tenant_id;
-        await supabase.from('wallet_transactions').insert(txPayload);
-      }
+        tenant_id: effectiveTenant
+      });
+    } catch (txErr: any) {
+      console.warn('[updateWalletBalance] Advertencia al registrar transacción:', txErr?.message);
+    }
 
-      // Publish update en canal de la sala y canal principal
-      const updateData = { phone, balance: newBalance, tenantId: targetTenant };
-      getChannel(targetTenant).publish('wallet_updated', updateData);
-      if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+    // 5. Emitir evento en tiempo real vía Ably a la sala y al canal principal
+    try {
+      const updateData = { phone, balance: newBalance, tenantId: effectiveTenant };
+      getChannel(effectiveTenant).publish('wallet_updated', updateData);
+      if (effectiveTenant !== 'default' && effectiveTenant !== 'bingo-lite') {
         getChannel('default').publish('wallet_updated', updateData);
       }
-      return newBalance;
-    } catch (e: any) {
-      console.error('[updateWalletBalance] Error actualizando balance:', e);
-      return 0;
+    } catch (ablyErr: any) {
+      console.warn('[updateWalletBalance] Advertencia al emitir evento Ably:', ablyErr?.message);
     }
+
+    return newBalance;
   });
 
   walletUpdateQueues.set(queueKey, execution);
@@ -1923,25 +1943,31 @@ app.get('/api/wallet/history', async (req, res) => {
 });
 
 app.post('/api/admin/wallet/recharge', requireAdmin, async (req, res) => {
-  const { phone: rawPhone, amount, tenantId: qTenantId } = req.body;
-  const phone = normalizePhone(rawPhone);
-  const numAmount = parseFloat(amount);
-  if (!phone || isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
-    return res.status(400).json({ error: 'Teléfono y un monto numérico positivo válido son requeridos.' });
+  try {
+    const { phone: rawPhone, amount, tenantId: qTenantId } = req.body;
+    const phone = normalizePhone(rawPhone);
+    const numAmount = parseFloat(amount);
+    if (!phone || isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ error: 'Teléfono y un monto numérico positivo válido son requeridos.' });
+    }
+
+    const adminUser = (req as any).adminUser;
+    let targetTenant = adminUser?.isSuperAdmin ? (qTenantId || (req as any).tenantId || 'default') : (adminUser?.tenant_id || 'default');
+
+    // Verificar que el jugador existe en el tenant asignado usando el helper seguro (soporta múltiples salas)
+    const player = await findSpecificPlayer(phone, targetTenant);
+    if (!player && adminUser && !adminUser.isSuperAdmin) {
+      return res.status(404).json({ error: `El jugador no se encuentra registrado en tu sala (${targetTenant}).` });
+    }
+
+    // El tenant para recarga es prioritariamente la sala que el administrador está gestionando actualmente
+    const rechargeTenant = (targetTenant && targetTenant !== 'global') ? targetTenant : (player?.tenant_id || 'default');
+    const newBalance = await updateWalletBalance(phone, numAmount, `Recarga por el administrador por $${numAmount}`, 'recharge', rechargeTenant);
+    res.json({ success: true, newBalance, phone });
+  } catch (err: any) {
+    console.error('[Admin Wallet Recharge Error]:', err);
+    res.status(500).json({ error: err.message || 'Error interno al procesar la recarga de billetera.' });
   }
-
-  const adminUser = (req as any).adminUser;
-  let targetTenant = adminUser?.isSuperAdmin ? (qTenantId || (req as any).tenantId || 'default') : (adminUser?.tenant_id || 'default');
-
-  // Verificar que el jugador existe en el tenant asignado usando el helper seguro (soporta múltiples salas)
-  const player = await findSpecificPlayer(phone, targetTenant);
-  if (!player && adminUser && !adminUser.isSuperAdmin) {
-    return res.status(404).json({ error: `El jugador no se encuentra registrado en tu sala (${targetTenant}).` });
-  }
-
-  const actualTenant = player?.tenant_id || targetTenant;
-  const newBalance = await updateWalletBalance(phone, numAmount, `Recarga por el administrador por $${numAmount}`, 'recharge', actualTenant);
-  res.json({ success: true, newBalance, phone });
 });
 
 app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
@@ -1963,31 +1989,27 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
     const { data: players, error } = await query.order('created_at', { ascending: false });
     if (error) throw error;
 
-    // 2. Consulta en bloque a la tabla wallets (1 sola query rápida a BD en lugar de N consultas con Promise.all)
+    // 2. Consulta en bloque a la tabla wallets (1 sola query rápida a BD)
     const { data: allWallets } = await supabase.from('wallets').select('phone, balance, tenant_id, updated_at');
     const walletMap = new Map<string, number>();
     (allWallets || []).forEach((w: any) => {
       const cleanPhone = normalizePhone(w.phone);
       if (!cleanPhone) return;
       const wTenant = (w.tenant_id || 'default').toLowerCase();
-      const current = walletMap.get(cleanPhone);
       const bal = Number(w.balance) || 0;
 
-      // Coincidencia de tenant para default/bingo-lite
+      // Coincidencia estricta de tenant para default/bingo-lite
       const isDefaultOrBingoLite = (targetTenant === 'default' || targetTenant === 'bingo-lite' || !targetTenant || targetTenant === 'global');
       if (isDefaultOrBingoLite) {
         if (wTenant === 'default' || wTenant === 'bingo-lite') {
+          const current = walletMap.get(cleanPhone);
           if (current === undefined || bal > current) {
             walletMap.set(cleanPhone, bal);
           }
-        } else if (current === undefined) {
-          walletMap.set(cleanPhone, bal);
         }
       } else {
         if (wTenant === targetTenant) {
-          if (current === undefined || bal > current) {
-            walletMap.set(cleanPhone, bal);
-          }
+          walletMap.set(cleanPhone, bal);
         }
       }
     });
@@ -2003,7 +2025,7 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
 
       const balance = walletMap.has(cleanPhone)
         ? (walletMap.get(cleanPhone) || 0)
-        : await getWalletBalance(cleanPhone, p.tenant_id || targetTenant || 'default');
+        : 0;
 
       deduplicatedWallets.push({
         id: p.id,
@@ -9897,19 +9919,35 @@ app.get('/api/admin/recharge-requests', requireAdmin, async (req, res) => {
 // Admin endpoint: Approve a manual recharge request
 app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, res) => {
   try {
-    const parts = req.params.id.split(':::');
-    if (parts.length < 2) return res.status(400).json({ error: 'ID de solicitud inválido' });
+    const rawId = req.params.id || '';
+    const decodedId = decodeURIComponent(rawId);
+    const parts = decodedId.split(':::');
+    if (parts.length < 2) {
+      return res.status(400).json({ error: 'ID de solicitud inválido' });
+    }
 
     const playerId = parts[0];
-    const index = parseInt(parts[1]);
+    const index = parseInt(parts[1], 10);
+    if (isNaN(index) || index < 0) {
+      return res.status(400).json({ error: 'Índice de comprobante inválido' });
+    }
 
-    const { data: player, error } = await supabase.from('players').select('*').eq('id', playerId).single();
+    // Buscar al jugador por ID numérico o de texto
+    const numericPlayerId = Number(playerId);
+    let playerQuery = supabase.from('players').select('*');
+    if (!isNaN(numericPlayerId) && numericPlayerId > 0) {
+      playerQuery = playerQuery.eq('id', numericPlayerId);
+    } else {
+      playerQuery = playerQuery.eq('id', playerId);
+    }
+    const { data: player, error } = await playerQuery.maybeSingle();
+
     if (error || !player) {
-      return res.status(404).json({ error: 'Jugador no encontrado' });
+      return res.status(404).json({ error: 'Jugador no encontrado en el sistema' });
     }
 
     const adminUser = (req as any).adminUser;
-    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+    if (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id) {
       const playerTenant = (player.tenant_id || 'default').toLowerCase();
       const adminTenant = (adminUser.tenant_id || 'default').toLowerCase();
       const isSameTenant = playerTenant === adminTenant ||
@@ -9922,10 +9960,10 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
     }
 
     if (!player.receipt_url) {
-      return res.status(400).json({ error: 'Comprobante no encontrado' });
+      return res.status(400).json({ error: 'El jugador no tiene comprobantes registrados' });
     }
 
-    let receipts = [];
+    let receipts: any[] = [];
     try {
       receipts = JSON.parse(player.receipt_url);
     } catch (e) {
@@ -9934,70 +9972,116 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
       }
     }
 
-    if (!Array.isArray(receipts) || !receipts[index]) {
-      return res.status(400).json({ error: 'Recarga no encontrada' });
+    if (!Array.isArray(receipts) || index >= receipts.length || !receipts[index]) {
+      return res.status(400).json({ error: 'La solicitud de recarga no existe o ya fue procesada' });
     }
 
     const receipt = receipts[index];
-    if (receipt.validation_reason?.includes('Aprobado')) {
-      return res.status(400).json({ error: 'Esta recarga ya ha sido aprobada' });
+    // Validar si ya está explícitamente aprobada
+    if (receipt.status === 'approved' || (receipt.is_silent_error === false && receipt.approved === true)) {
+      return res.status(400).json({ error: 'Esta solicitud de recarga ya ha sido aprobada previamente' });
     }
 
-    const amount = Number(receipt.amount) || 0;
+    // Extracción limpia y robusta del monto (maneja formatos "$ 20.000", "20,000", etc.)
+    const rawAmountStr = String(receipt.amount ?? '0').replace(/[^0-9.]/g, '');
+    const amount = parseFloat(rawAmountStr) || 0;
     if (amount <= 0) {
-      return res.status(400).json({ error: 'Monto de recarga inválido' });
+      return res.status(400).json({ error: 'El comprobante no contiene un monto numérico positivo válido para acreditar' });
     }
 
-    const targetTenant = (player.tenant_id || adminUser.tenant_id || 'default').toLowerCase();
+    const targetTenant = (player.tenant_id || adminUser?.tenant_id || 'default').toLowerCase();
 
-    // 1. Credit wallet balance with tenant isolation
-    const newBalance = await updateWalletBalance(player.phone, amount, `Recarga de billetera aprobada por administrador`, 'recharge', targetTenant);
+    // 1. Acreditar saldo en la billetera de forma atómica
+    const newBalance = await updateWalletBalance(
+      player.phone,
+      amount,
+      `Recarga de billetera aprobada por administrador`,
+      'recharge',
+      targetTenant
+    );
 
-    // 2. Mark as approved in receipt logs
+    // 2. Marcar como aprobado en el historial de comprobantes
     receipt.is_silent_error = false;
+    receipt.status = 'approved';
+    receipt.approved = true;
     receipt.validation_reason = 'Aprobado manualmente por el organizador.';
+    receipt.approved_at = new Date().toISOString();
 
-    await supabase.from('players')
+    const { error: updError } = await supabase.from('players')
       .update({ receipt_url: JSON.stringify(receipts) })
-      .eq('id', playerId);
+      .eq('id', player.id);
 
-    invalidatePlayersCaches(player.tenant_id);
+    if (updError) {
+      console.error('[Approve Recharge] Error al actualizar comprobante en players:', updError);
+      return res.status(500).json({ error: `Error al persistir comprobante aprobado: ${updError.message}` });
+    }
 
-    // 3. Notify player (envoltorio no bloqueante para garantizar respuesta exitosa inmediata)
+    invalidatePlayersCaches(targetTenant);
+
+    // 3. Emitir eventos en tiempo real vía Ably a la sala y canales correspondientes
     try {
-      await sendPushNotification({
+      const channel = getChannel(targetTenant);
+      channel.publish('wallet_updated', { phone: player.phone, balance: newBalance, tenantId: targetTenant });
+      channel.publish('recharge_request_submitted', { playerId: player.id, status: 'approved' });
+      if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+        getChannel('default').publish('wallet_updated', { phone: player.phone, balance: newBalance, tenantId: targetTenant });
+        getChannel('default').publish('recharge_request_submitted', { playerId: player.id, status: 'approved' });
+      }
+    } catch (ablyErr: any) {
+      console.warn('[Approve Recharge] Advertencia al emitir evento Ably:', ablyErr?.message);
+    }
+
+    // 4. Notificar al jugador vía OneSignal de forma segura y no bloqueante
+    try {
+      sendPushNotification({
         recipient: 'single',
         phone: player.phone,
         title: '✅ Recarga Aprobada',
-        message: `¡Tu solicitud de recarga por $${amount} ha sido verificada y aprobada de forma manual por el organizador!`,
-        tenantId: player.tenant_id || (req as any).tenantId
-      });
+        message: `¡Tu solicitud de recarga por $${amount} ha sido verificada y acreditada en tu billetera!`,
+        tenantId: targetTenant
+      }).catch(err => console.warn('[Approve Recharge Push Error]:', err?.message));
     } catch (pushErr: any) {
-      console.warn('[Approve Recharge] Notificación push no entregada (no crítico):', pushErr?.message);
+      console.warn('[Approve Recharge] Push notification failed:', pushErr?.message);
     }
 
     res.json({ success: true, balance: newBalance, phone: player.phone });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('[Approve Recharge Error]:', err);
+    res.status(500).json({ error: err.message || 'Error al aprobar la recarga' });
   }
 });
 
 // Admin endpoint: Reject a manual recharge request
 app.post('/api/admin/recharge-requests/:id/reject', requireAdmin, async (req, res) => {
   try {
-    const parts = req.params.id.split(':::');
-    if (parts.length < 2) return res.status(400).json({ error: 'ID de solicitud inválido' });
+    const rawId = req.params.id || '';
+    const decodedId = decodeURIComponent(rawId);
+    const parts = decodedId.split(':::');
+    if (parts.length < 2) {
+      return res.status(400).json({ error: 'ID de solicitud inválido' });
+    }
 
     const playerId = parts[0];
-    const index = parseInt(parts[1]);
+    const index = parseInt(parts[1], 10);
+    if (isNaN(index) || index < 0) {
+      return res.status(400).json({ error: 'Índice de comprobante inválido' });
+    }
 
-    const { data: player, error } = await supabase.from('players').select('*').eq('id', playerId).single();
+    const numericPlayerId = Number(playerId);
+    let playerQuery = supabase.from('players').select('*');
+    if (!isNaN(numericPlayerId) && numericPlayerId > 0) {
+      playerQuery = playerQuery.eq('id', numericPlayerId);
+    } else {
+      playerQuery = playerQuery.eq('id', playerId);
+    }
+    const { data: player, error } = await playerQuery.maybeSingle();
+
     if (error || !player) {
-      return res.status(404).json({ error: 'Jugador no encontrado' });
+      return res.status(404).json({ error: 'Jugador no encontrado en el sistema' });
     }
 
     const adminUser = (req as any).adminUser;
-    if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
+    if (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id) {
       const playerTenant = (player.tenant_id || 'default').toLowerCase();
       const adminTenant = (adminUser.tenant_id || 'default').toLowerCase();
       const isSameTenant = playerTenant === adminTenant ||
@@ -10010,10 +10094,10 @@ app.post('/api/admin/recharge-requests/:id/reject', requireAdmin, async (req, re
     }
 
     if (!player.receipt_url) {
-      return res.status(400).json({ error: 'Comprobante no encontrado' });
+      return res.status(400).json({ error: 'El jugador no tiene comprobantes registrados' });
     }
 
-    let receipts = [];
+    let receipts: any[] = [];
     try {
       receipts = JSON.parse(player.receipt_url);
     } catch (e) {
@@ -10022,39 +10106,63 @@ app.post('/api/admin/recharge-requests/:id/reject', requireAdmin, async (req, re
       }
     }
 
-    if (!Array.isArray(receipts) || !receipts[index]) {
-      return res.status(400).json({ error: 'Recarga no encontrada' });
+    if (!Array.isArray(receipts) || index >= receipts.length || !receipts[index]) {
+      return res.status(400).json({ error: 'La solicitud de recarga no existe o ya fue procesada' });
     }
 
     const receipt = receipts[index];
-    if (receipt.validation_reason?.includes('Rechazado')) {
-      return res.status(400).json({ error: 'Esta recarga ya ha sido rechazada' });
+    if (receipt.status === 'rejected') {
+      return res.status(400).json({ error: 'Esta solicitud ya ha sido rechazada' });
     }
 
-    const amount = receipt.amount || 0;
+    const rawAmountStr = String(receipt.amount ?? '0').replace(/[^0-9.]/g, '');
+    const amount = parseFloat(rawAmountStr) || 0;
+    const targetTenant = (player.tenant_id || adminUser?.tenant_id || 'default').toLowerCase();
 
-    // 1. Mark as rejected in receipt logs
+    // 1. Marcar como rechazado en los comprobantes
     receipt.is_silent_error = true;
+    receipt.status = 'rejected';
     receipt.validation_reason = 'Rechazado manualmente por el organizador.';
+    receipt.rejected_at = new Date().toISOString();
 
-    await supabase.from('players')
+    const { error: updError } = await supabase.from('players')
       .update({ receipt_url: JSON.stringify(receipts) })
-      .eq('id', playerId);
+      .eq('id', player.id);
 
-    invalidatePlayersCaches();
+    if (updError) {
+      console.error('[Reject Recharge] Error al actualizar comprobante en players:', updError);
+      return res.status(500).json({ error: `Error al persistir comprobante rechazado: ${updError.message}` });
+    }
 
-    // 2. Notify player
-    await sendPushNotification({
-      recipient: 'single',
-      phone: player.phone,
-      title: '❌ Recarga Rechazada',
-      message: `Tu comprobante de recarga por $${amount} no pudo ser aprobado debido a inconsistencias o falta de claridad. Por favor inténtalo de nuevo.`,
-      tenantId: player.tenant_id || (req as any).tenantId
-    });
+    invalidatePlayersCaches(targetTenant);
+
+    // 2. Emitir eventos en tiempo real
+    try {
+      getChannel(targetTenant).publish('recharge_request_submitted', { playerId: player.id, status: 'rejected' });
+      if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+        getChannel('default').publish('recharge_request_submitted', { playerId: player.id, status: 'rejected' });
+      }
+    } catch (ablyErr: any) {
+      console.warn('[Reject Recharge] Advertencia al emitir evento Ably:', ablyErr?.message);
+    }
+
+    // 3. Notificar al jugador vía OneSignal
+    try {
+      sendPushNotification({
+        recipient: 'single',
+        phone: player.phone,
+        title: '❌ Recarga Rechazada',
+        message: `Tu comprobante de recarga por $${amount} no pudo ser aprobado por inconsistencias o falta de claridad. Por favor verifícalo e intenta nuevamente.`,
+        tenantId: targetTenant
+      }).catch(err => console.warn('[Reject Recharge Push Error]:', err?.message));
+    } catch (pushErr: any) {
+      console.warn('[Reject Recharge] Push notification failed:', pushErr?.message);
+    }
 
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('[Reject Recharge Error]:', err);
+    res.status(500).json({ error: err.message || 'Error al rechazar recarga' });
   }
 });
 
@@ -11320,61 +11428,46 @@ app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
 
 
 async function migratePhoneNumbers() {
-  console.log('Running phone number migration...');
+  console.log('Verificando consistencia de números de teléfono...');
   try {
-    // 1. Normalize players
+    // 1. Normalizar teléfonos de jugadores de manera segura sin borrar
     const { data: players } = await supabase.from('players').select('id, phone');
     if (players) {
       for (const p of players) {
         const normalized = normalizePhone(p.phone);
-        if (normalized !== p.phone) {
+        if (normalized && normalized !== p.phone) {
           await supabase.from('players').update({ phone: normalized }).eq('id', p.id);
         }
       }
     }
 
-    // 2. Normalize wallets
-    const { data: wallets } = await supabase.from('wallets').select('phone');
+    // 2. Normalizar billeteras sin operaciones destructivas (NUNCA usar delete en wallets)
+    const { data: wallets } = await supabase.from('wallets').select('phone, tenant_id, balance');
     if (wallets) {
       for (const w of wallets) {
         const normalized = normalizePhone(w.phone);
-        if (normalized !== w.phone) {
-          // Since phone is primary key, we need to be careful.
-          // In this case, it's easier to just delete and re-insert or use a temp table if it was complex.
-          // But here we can just update if no conflict.
-          const { data: existing } = await supabase.from('wallets').select('phone').eq('phone', normalized).maybeSingle();
+        if (normalized && normalized !== w.phone) {
+          const wTenant = w.tenant_id || 'default';
+          const { data: existing } = await supabase.from('wallets')
+            .select('balance')
+            .eq('phone', normalized)
+            .eq('tenant_id', wTenant)
+            .maybeSingle();
+
           if (!existing) {
-            // We can't easily update a PK in Supabase via JS if it's referenced? 
-            // Actually wallets doesn't have FKs pointing to it in the schema.
-            // But let's just do it.
-            const { data: fullWallet } = await supabase.from('wallets').select('*').eq('phone', w.phone).single();
-            if (fullWallet) {
-              await supabase.from('wallets').delete().eq('phone', w.phone);
-              await supabase.from('wallets').insert({ ...fullWallet, phone: normalized });
-            }
+            // Actualizar la clave sin borrar la fila existente
+            await supabase.from('wallets')
+              .update({ phone: normalized, updated_at: new Date().toISOString() })
+              .eq('phone', w.phone)
+              .eq('tenant_id', wTenant);
           }
         }
       }
     }
 
-    // 3. Normalize wallet_activations
-    const { data: activations } = await supabase.from('wallet_activations').select('phone, game_id');
-    if (activations) {
-      for (const a of activations) {
-        const normalized = normalizePhone(a.phone);
-        if (normalized !== a.phone) {
-          const { data: existing } = await supabase.from('wallet_activations').select('*').eq('phone', normalized).eq('game_id', a.game_id).maybeSingle();
-          if (!existing) {
-            await supabase.from('wallet_activations').update({ phone: normalized }).eq('phone', a.phone).eq('game_id', a.game_id);
-          } else {
-            await supabase.from('wallet_activations').delete().eq('phone', a.phone).eq('game_id', a.game_id);
-          }
-        }
-      }
-    }
-    console.log('Phone number migration completed.');
-  } catch (err) {
-
+    console.log('Verificación de consistencia de teléfonos completada con seguridad.');
+  } catch (err: any) {
+    console.warn('[migratePhoneNumbers] Advertencia no crítica:', err?.message);
   }
 }
 

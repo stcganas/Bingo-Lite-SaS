@@ -1216,7 +1216,8 @@ export default function AdminDashboard() {
     }
     try {
       const timestamp = Date.now();
-      const res = await apiFetch(`/api/admin/recharge-requests?_t=${timestamp}`);
+      const tenantParam = currentTenant ? `&tenantId=${encodeURIComponent(currentTenant)}` : '';
+      const res = await apiFetch(`/api/admin/recharge-requests?_t=${timestamp}${tenantParam}`);
       if (res.ok) {
         const data = await res.json();
         setRechargeRequests(data);
@@ -4556,23 +4557,11 @@ export default function AdminDashboard() {
                             <button 
                               onClick={() => rejectPlayer(player.id)}
                               className="px-4 py-2 bg-red-50 text-red-600 hover:bg-red-100 text-sm font-bold rounded-xl flex items-center gap-1 transition border border-red-200 shadow-xs active:scale-95"
-                              title="Rechazar compra y eliminar cartones asignados"
+                              title="Rechazar compra y retirar de la partida actual"
                             >
                               <XCircle size={16} /> Rechazar y Quitar Cartones
                             </button>
                           )}
-
-                          <button 
-                            onClick={() => {
-                              if (confirm(`¿Deseas eliminar completamente el registro de compra de ${player.name}?`)) {
-                                deleteUser(player.id);
-                              }
-                            }}
-                            className="p-2 bg-slate-100 hover:bg-red-50 text-slate-400 hover:text-red-500 rounded-xl transition"
-                            title="Eliminar registro completamente"
-                          >
-                            <Trash2 size={16} />
-                          </button>
                         </div>
                       </div>
                       
