@@ -257,3 +257,72 @@
 - **Prueba Supabase Storage:** Subida y borrado de comprobante en bucket `receipts` ejecutada con éxito (`error: null`).
 - **Prueba Persistencia Billetera:** Actualización directa y verificación en tabla `wallets` ejecutada con éxito (`error: null`).
 
+---
+
+## 9. Aislamiento Multi-Tenant de Presencia y Asignación de Cartones Gratuitos (2026-10-21)
+
+### 🐛 Problemas Identificados y Resueltos:
+1. **Filtro cruzado de presencia entre salas:**
+   - **Problema:** Un jugador registrado en `sala/demo` aparecía como "en línea" al consultar estadísticas en `bingo-lite`.
+   - **Causa Raíz:** El mapa `onlinePlayers` en memoria de `server.ts` indexaba a los jugadores únicamente por su teléfono normalizado (`phone`), mezclando la presencia entre diferentes salas.
+   - **Corrección:** Se modificó la clave de presencia a `${cleanTenant}:${normalizedPhone}` y se filtraron las consultas activas por sala (`tenant_id`), aislando por completo la actividad en tiempo real entre salas.
+
+2. **Carga y asignación de cartones en juegos gratuitos (2 cartones automáticos):**
+   - **Problema:** En salas independientes, tras aprobar jugadores o en juegos gratuitos, los cartones no se reflejaban de inmediato en el tablero del jugador.
+   - **Corrección:** Se aseguró la asignación automática y segura de la cuota de cartones gratuitos (2 por defecto) vinculándolos explícitamente al `tenant_id` del jugador y de la sala actual, invalidando la caché de cartones en memoria para que aparezcan en tiempo real.
+
+### 📁 Archivos Relacionados:
+- `server.ts`: Corrección de `touchPlayerPresence` y consultas de presencia por `tenant_id`.
+- `migration_fix_cards_and_presence_multitenant.sql`: Script de verificación y compatibilidad de índices y tenant_id en `cards`.
+
+---
+
+## 10. Módulo de Reinicio a $0 y Cuadro de Honor Histórico para el "Torneo de Juegos Gratuitos" ($300k COP) (2026-10-21)
+
+### 🎯 Requerimiento:
+Permitir a los administradores reiniciar a $0 el módulo que organiza a los ganadores del **"Torneo de Juegos Gratuitos"** (meta de los $300.000 COP) cada vez que un jugador alcance la meta, archivando el podio y comenzando un nuevo ciclo sin afectar a otras salas.
+
+### 🛠️ Implementación Técnica:
+
+1. **Nuevo Endpoint Administrativo (`POST /api/admin/free-games/reset-tournament`):**
+   - **Seguridad:** Protegido con middleware `requireAdmin` y comprobación estricta de sala (`tenant_id`). Un administrador solo puede reiniciar el torneo de su sala autorizada.
+   - **Archivado Automático (Snapshot de Temporada):** Antes del reinicio, recopila y archiva la información de la temporada saliente:
+     - Ganador de la Meta #1 (nombre, teléfono, monto acumulado y si alcanzó la meta).
+     - Segundo y Tercer Puesto del podio.
+     - Monto total distribuido y cantidad de jugadores participantes.
+     - Fechas de inicio y cierre, autor del cierre y motivo ingresado por el administrador.
+     - Se guarda en el arreglo `tournament_history` dentro de `roomSettings` de la sala.
+   - **Reinicio de Parámetros:**
+     - Actualiza `tournament_reset_at` con la fecha y hora actual (`ISO`).
+     - Vacía premios manuales: `custom_free_game_prizes = []`.
+     - Reinicia el contador de partidas pagas: `paid_game_participations = {}`.
+   - **Limpieza en BD:** Elimina de manera preventiva registros de `free_game_prizes` y `player_paid_game_participations` exclusivos de la sala actual.
+   - **Tiempo Real:** Notifica a través de Ably en el canal de la sala (`bingo-tenant-[slug]`) con el evento `tournament_reset`.
+
+2. **Actualización de `GET /api/free-games/leaderboard`:**
+   - Detecta `roomSettings.tournament_reset_at`.
+   - Aplica filtros condicionales `.gt('won_at', tournament_reset_at)` y `.gt('created_at', tournament_reset_at)` en las tablas `game_patterns`, `free_game_prizes`, `cards` y `player_paid_game_participations`.
+   - Garantiza que tras el reseteo la tabla comience inmediatamente en **$0 COP** para la nueva temporada.
+   - Incluye `tournament_reset_at` y `tournament_history` en la respuesta JSON.
+
+3. **Interfaz de Usuario ([`src/components/FreeGamesLeaderboard.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/components/FreeGamesLeaderboard.tsx)):**
+   - **Banner de Celebración de Meta:** Cuando `data.has_goal_winner === true` (jugador alcanza los $300.000 COP), se muestra un banner llamativo que anuncia al ganador y ofrece el botón directo *"Reiniciar a $0 Ahora"*.
+   - **Botón "Reiniciar a $0":** Integrado en el banner principal para usuarios con rol de administrador.
+   - **Modal de Confirmación de Reseteo:**
+     - Muestra el resumen del podio y el total repartido que será archivado.
+     - Explica con claridad que los acumulados y el contador de 30 partidas volverán a 0 para el nuevo ciclo.
+     - Campo de notas/motivo del cierre.
+     - Checkbox de seguridad obligatorio para evitar clics accidentales.
+   - **Botón y Modal "Historial de Temporadas":**
+     - Despliega el Cuadro de Honor con las temporadas archivadas, ganadores del 1°, 2° y 3° puesto, montos ganados y fechas de cierre.
+
+### 📁 Archivos Modificados:
+- [`server.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/server.ts): Endpoint `POST /api/admin/free-games/reset-tournament`, filtros en `GET /api/free-games/leaderboard`, archivado en `roomSettings` y broadcast en Ably.
+- [`src/components/FreeGamesLeaderboard.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/components/FreeGamesLeaderboard.tsx): Banner de meta completada, botón y modal de reinicio a $0, modal de historial de temporadas y actualización de tipos.
+
+### ⚙️ Verificaciones Técnicas Ejecutadas:
+- **TypeScript:** `npx tsc --noEmit` completado con **0 errores** (código de salida 0).
+- **Vite Build:** `npm run build` completado exitosamente en modo producción (código de salida 0).
+- **Aislamiento Multi-Tenant:** Confirmada la segregación estricta por `tenant_id`.
+
+
