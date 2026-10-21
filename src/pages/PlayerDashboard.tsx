@@ -285,10 +285,10 @@ ${refUrl}
 
   const lastDrawnBall = currentDrawnBalls.length > 0 ? currentDrawnBalls[currentDrawnBalls.length - 1] : null;
 
-  // Las 4 últimas balotas salientes para visualización compacta y móvil (más reciente primero)
+  // Las 4 últimas balotas salientes en orden cronológico (de izquierda a derecha: anteriores -> más reciente)
   const last4DrawnBalls = useMemo(() => {
     if (!currentDrawnBalls.length) return [];
-    return currentDrawnBalls.slice(-4).reverse();
+    return currentDrawnBalls.slice(-4);
   }, [currentDrawnBalls]);
   const recentDrawnBalls = last4DrawnBalls;
 
@@ -634,6 +634,10 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
   const gameStateRef = React.useRef(gameState);
 
   useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
+
+  useEffect(() => {
     if (!isStreamActive && isLiveOpen) {
       setIsLiveOpen(false);
     }
@@ -786,10 +790,22 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       }
 
       const data = await res.json();
-      if (data) {
-        data.drawn_balls = normalizeBalls(data.drawn_balls);
-      }
-      setGameState(data);
+      if (!data) return;
+      const incomingBalls = normalizeBalls(data.drawn_balls);
+      setGameState((prev: any) => {
+        if (!prev || prev.id !== data.id) {
+          data.drawn_balls = incomingBalls;
+          return data;
+        }
+        const prevBalls = normalizeBalls(prev.drawn_balls);
+        const isReset = prev.status !== 'waiting' && data.status === 'waiting' && incomingBalls.length === 0;
+        const safeBalls = isReset ? [] : (incomingBalls.length >= prevBalls.length ? incomingBalls : prevBalls);
+        return {
+          ...prev,
+          ...data,
+          drawn_balls: safeBalls
+        };
+      });
 
       // Initialize winning cards from patterns
       if (data?.patterns) {
@@ -1069,16 +1085,21 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
         const serverBalls = normalizeBalls(freshGame.drawn_balls);
         const currentBalls = normalizeBalls(gameStateRef.current?.drawn_balls);
 
-        // Si el servidor tiene más balotas o el estado de juego cambió, actualiza de inmediato
-        if (serverBalls.length !== currentBalls.length || freshGame.status !== gameStateRef.current?.status) {
+        // Si el servidor tiene más balotas o el estado de juego cambió
+        if (serverBalls.length > currentBalls.length || freshGame.status !== gameStateRef.current?.status) {
           console.log(`[Reconcile] Desincronización resuelta: local (${currentBalls.length}) vs servidor (${serverBalls.length})`);
           freshGame.drawn_balls = serverBalls;
           const safePatterns = (freshGame.patterns && freshGame.patterns.length > 0) ? freshGame.patterns : (gameStateRef.current?.patterns || []);
-          setGameState((prev: any) => ({
-            ...prev,
-            ...freshGame,
-            patterns: safePatterns
-          }));
+          setGameState((prev: any) => {
+            const prevBalls = normalizeBalls(prev?.drawn_balls);
+            const safeBalls = serverBalls.length >= prevBalls.length ? serverBalls : prevBalls;
+            return {
+              ...prev,
+              ...freshGame,
+              drawn_balls: safeBalls,
+              patterns: safePatterns
+            };
+          });
         }
       } catch (err) {
         // Silencioso
@@ -1130,12 +1151,18 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     if (!channel) return;
     const onGameUpdate = (msg: any) => {
       const game = msg.data;
-      if (game && typeof game.drawn_balls === 'string') {
+      if (!game) return;
+      if (typeof game.drawn_balls === 'string') {
         try { game.drawn_balls = JSON.parse(game.drawn_balls); } catch(e) { game.drawn_balls = []; }
       }
       const prev = gameStateRef.current;
+      const incomingBalls = normalizeBalls(game.drawn_balls);
+      const prevBalls = normalizeBalls(prev?.drawn_balls);
+
+      const isSameGame = prev && prev.id === game.id;
+      const isReset = isSameGame && prevBalls.length > 0 && incomingBalls.length === 0 && game.status === 'waiting';
       
-      if (prev && prev.id === game.id && prev.drawn_balls.length > 0 && game.drawn_balls.length === 0) {
+      if (isReset) {
         setMarkedCells({});
         setWinner(null);
         setWinningCards(new Set());
@@ -1143,7 +1170,6 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       }
 
       // Detect status change to 'playing'
-      
       if (prev && player && prev.lottery_confirmed !== game.lottery_confirmed) {
         fetchSavedLotteryNumbers(player.id, game.id);
       }
@@ -1151,11 +1177,16 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       // Shield: preserve patterns if incoming broadcast is missing them
       const safePatterns = (game.patterns && game.patterns.length > 0) ? game.patterns : (prev?.patterns || []);
       
-      setGameState((prevState: any) => ({
-        ...prevState,
-        ...game,
-        patterns: safePatterns
-      }));
+      setGameState((prevState: any) => {
+        const currentBalls = normalizeBalls(prevState?.drawn_balls);
+        const safeBalls = isReset ? [] : (incomingBalls.length >= currentBalls.length ? incomingBalls : currentBalls);
+        return {
+          ...prevState,
+          ...game,
+          drawn_balls: safeBalls,
+          patterns: safePatterns
+        };
+      });
 
       if (safePatterns && safePatterns.length > 0) {
         const winners = new Set<string>();
@@ -2477,23 +2508,23 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                     {/* Fila principal: Las 4 últimas balotas cantadas + Contador de balotas restantes */}
                     <div className="pt-2.5 pb-2 flex items-center justify-between gap-2 relative z-10">
                       
-                      {/* Las 4 últimas balotas (mostrando la más reciente destacada a la izquierda) */}
+                      {/* Las 4 últimas balotas en fila cronológica (anteriores -> más reciente a la derecha) */}
                       <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1 overflow-x-auto no-scrollbar py-0.5">
                         {last4DrawnBalls.length > 0 ? (
                           <>
                             {last4DrawnBalls.map((ball, idx) => {
                               const theme = getBallVisualTheme(ball);
-                              const isLatest = idx === 0;
+                              const isLatest = idx === last4DrawnBalls.length - 1;
                               return (
                                 <motion.div
-                                  key={`${ball}-${idx}`}
-                                  initial={isLatest ? { scale: 0.6, y: -4, opacity: 0 } : false}
+                                  key={`ball-slot-${ball}-${idx}`}
+                                  initial={isLatest ? { scale: 0.7, y: -4, opacity: 0 } : false}
                                   animate={{ scale: 1, y: 0, opacity: 1 }}
                                   transition={{ type: "spring", stiffness: 400, damping: 25 }}
                                   className={clsx(
                                     "relative rounded-full shrink-0 flex items-center justify-center transition-all duration-300 shadow-md",
                                     isLatest
-                                      ? "w-11 h-11 sm:w-12 sm:h-12 ring-2 ring-amber-400/90 bg-gradient-to-br " + theme.gradient + " " + theme.glow
+                                      ? "w-11 h-11 sm:w-12 sm:h-12 ring-2 ring-amber-400 bg-gradient-to-br " + theme.gradient + " " + theme.glow
                                       : "w-9 h-9 sm:w-10 sm:h-10 bg-slate-800/90 border-2 " + theme.border
                                   )}
                                   title={isLatest ? `Última balota cantada: ${theme.letter}-${ball}` : `Balota previa: ${theme.letter}-${ball}`}
