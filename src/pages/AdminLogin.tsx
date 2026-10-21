@@ -26,7 +26,7 @@ export default function AdminLogin() {
         }
       } else {
         if (user.isSuperAdmin) {
-          navigate('/admin');
+          navigate('/superadmin');
         } else if (user.tenant_id) {
           navigate(`/sala/${user.tenant_id}/admin`);
         }
@@ -47,7 +47,7 @@ export default function AdminLogin() {
         if (slug) {
           navigate(`/sala/${slug}/admin`);
         } else if (tenantRes.user.isSuperAdmin) {
-          navigate('/admin');
+          navigate('/superadmin');
         } else if (tenantRes.user.tenant_id && tenantRes.user.tenant_id !== 'global') {
           navigate(`/sala/${tenantRes.user.tenant_id}/admin`);
         } else {
@@ -62,7 +62,7 @@ export default function AdminLogin() {
         if (cleanEmail === 'comamosexpress@gmail.com' || cleanEmail === 'stcganas@gmail.com') {
           const { success: legacySuccess, error: legacyError } = await loginAdmin(email, password);
           if (legacySuccess) {
-            navigate('/admin');
+            navigate('/superadmin');
             return;
           }
           setError(legacyError || 'Contraseña de Super Administrador incorrecta.');

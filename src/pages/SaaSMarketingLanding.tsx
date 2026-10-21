@@ -399,10 +399,14 @@ export default function SaaSMarketingLanding() {
           <p className="font-bold text-slate-400">
             Bingo Lite &copy; {new Date().getFullYear()} — Plataforma de Bingo Virtual Multi-tenant. Todos los derechos reservados.
           </p>
-          <div className="flex justify-center gap-6 font-medium">
+          <div className="flex justify-center items-center flex-wrap gap-4 sm:gap-6 font-medium">
             <Link to="/sala/bingo-lite" className="hover:text-blue-400 transition">Sala Oficial</Link>
             <Link to="/admin/login" className="hover:text-blue-400 transition">Acceso Administrador</Link>
             <Link to="/seller" className="hover:text-blue-400 transition">Portal Revendedores</Link>
+            <span className="text-slate-800 hidden sm:inline">•</span>
+            <Link to="/superadmin" className="text-indigo-400 hover:text-indigo-300 font-bold transition inline-flex items-center gap-1.5 bg-indigo-950/60 border border-indigo-900/80 px-3 py-1 rounded-full">
+              <Lock size={12} /> Super Admin
+            </Link>
           </div>
         </div>
       </footer>

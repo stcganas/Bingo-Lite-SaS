@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../utils/api';
 import { toast } from 'react-hot-toast';
 import { useAuth } from '../AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 const Icon = ({ path, cls = 'w-5 h-5' }: { path: string; cls?: string }) => (
@@ -475,6 +475,9 @@ export default function SuperAdminDashboard() {
             Bingo Live Control Center
           </div>
           <div className="sa-header-right">
+            <Link to="/admin" className="sa-btn sa-btn-ghost" style={{ fontSize: '0.78rem', padding: '6px 12px' }}>
+              <Icon path={ICONS.play} cls="w-4 h-4" /> Sala Oficial
+            </Link>
             <span className="sa-user-chip">
               {user?.email || user?.name || 'Super Admin'}
             </span>

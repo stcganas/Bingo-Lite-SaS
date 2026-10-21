@@ -2708,8 +2708,8 @@ export default function AdminDashboard() {
           <div className="flex items-center gap-3">
             {user?.isSuperAdmin && (
               <Link 
-                to="/super-admin"
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black text-sm uppercase tracking-widest shadow-lg shadow-blue-500/20 transition transform hover:scale-105 active:scale-95"
+                to="/superadmin"
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-black text-sm uppercase tracking-widest shadow-lg shadow-indigo-500/20 transition transform hover:scale-105 active:scale-95"
               >
                 <Shield size={20} />
                 <span>Super Admin</span>

@@ -715,6 +715,7 @@ export default function App() {
                   <SuperAdminDashboard />
                 </SuperAdminProtectedRoute>
               } />
+              <Route path="/super-admin" element={<Navigate to="/superadmin" replace />} />
               <Route path="/dynamics" element={<DynamicsInfo />} />
               <Route path="/free-games" element={<FreeGames />} />
                             <Route path="/seller" element={
