@@ -6570,10 +6570,33 @@ app.post('/api/game/status', requireAdmin, async (req, res) => {
   if (Object.keys(updates).length > 0) {
     await supabase.from('game').update(updates).eq('id', game.id);
 
-    // If manually unpausing/starting, clear any celebration pause
-    if (status === 'playing' || status === 'waiting') {
-      serverAutoplay.isPausedForWinner = false;
-      serverAutoplay.winnerPauseUntil = 0;
+    const gameTenant = normalizeRoomTenant(game.tenant_id || targetTenant);
+    const roomAutoplay = getRoomAutoplay(gameTenant);
+
+    if (status === 'paused') {
+      roomAutoplay.isRunning = false;
+      roomAutoplay.isPausedForWinner = false;
+      roomAutoplay.winnerPauseUntil = 0;
+      roomAutoplay.isDrawing = false;
+      await getChannel(gameTenant).publish('server_autoplay_updated', {
+        isRunning: false,
+        gameId: game.id,
+        interval: (roomAutoplay.intervalMs || 8000) / 1000
+      }).catch(err => console.error('Error publishing server_autoplay_updated on pause:', err));
+      console.log(`[GameStatus] Game ${game.id} status set to PAUSED in room "${gameTenant}". Autoplay stopped immediately.`);
+    } else if (status === 'playing' || status === 'waiting') {
+      roomAutoplay.isPausedForWinner = false;
+      roomAutoplay.winnerPauseUntil = 0;
+    } else if (status === 'ended' || status === 'finished') {
+      roomAutoplay.isRunning = false;
+      roomAutoplay.gameId = null;
+      roomAutoplay.isPausedForWinner = false;
+      roomAutoplay.winnerPauseUntil = 0;
+      await getChannel(gameTenant).publish('server_autoplay_updated', {
+        isRunning: false,
+        gameId: null,
+        interval: 8
+      }).catch(err => console.error('Error publishing server_autoplay_updated on finish:', err));
     }
   }
 
@@ -6765,8 +6788,16 @@ interface RoomAutoplayState {
 }
 const roomAutoplays = new Map<string, RoomAutoplayState>();
 
+function normalizeRoomTenant(tenantId?: string): string {
+  let norm = (tenantId || 'bingo-lite').trim().toLowerCase();
+  if (!norm || norm === 'default' || norm === 'global' || norm === 'null' || norm === 'undefined') {
+    return 'bingo-lite';
+  }
+  return norm;
+}
+
 function getRoomAutoplay(tenantId?: string): RoomAutoplayState {
-  const norm = (tenantId || 'bingo-lite').trim().toLowerCase();
+  const norm = normalizeRoomTenant(tenantId);
   let state = roomAutoplays.get(norm);
   if (!state) {
     state = {
@@ -6876,13 +6907,16 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
     const primaryCardNumber = winners[0]?.card?.card_number || null;
 
     // 1. IMMEDIATELY pause server autoplay strictly for this room and set timestamps (0ms delay!)
-    const roomAutoplay = getRoomAutoplay(game.tenant_id);
+    const roomTenant = normalizeRoomTenant(game.tenant_id);
+    const roomAutoplay = getRoomAutoplay(roomTenant);
     roomAutoplay.isPausedForWinner = true;
     const pauseDurationMs = 22000;
     roomAutoplay.winnerPauseUntil = Date.now() + pauseDurationMs;
     roomAutoplay.lastAnnouncementTime = Date.now();
     const currentInterval = Math.max(8000, roomAutoplay.intervalMs || 8000);
-    roomAutoplay.lastDrawTime = Date.now() + pauseDurationMs - currentInterval;
+    const resumeDrawTime = Date.now() + pauseDurationMs - currentInterval;
+    roomAutoplay.lastDrawTime = resumeDrawTime;
+    lastBallDrawTimeByGame.set(game.id, resumeDrawTime);
 
     const originalPrizeStr = String(gp.prize || '');
     const originalNumericPrize = parseInt(originalPrizeStr.replace(/[^0-9]/g, '')) || 0;
@@ -6961,10 +6995,10 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
     }
 
     // Invalidate game cache so fullState reflects the new winner immediately
-    invalidateGameCaches(game.id);
+    invalidateGameCaches(game.id, roomTenant);
 
     // 3. Publish Bingo Event IMMEDIATELY ONLY to players of this specific room (0ms delay!)
-    getChannel(game.tenant_id).publish('bingo_called', {
+    getChannel(roomTenant).publish('bingo_called', {
       game_pattern_id: gp.id,
       winners: winnersData,
       pattern_name: pData?.name || 'Patrón',
@@ -6984,7 +7018,7 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
 
     // Trigger celebratory voice announcement delayed by 7.5 seconds strictly in this room
     setTimeout(() => {
-      broadcastVoiceAnnouncement(`¡Atención a todos los participantes! ¡Tenemos Bingo ganador! Felicitaciones a ${winnerNames} por ganar la figura ${pData?.name || 'del bingo'} y llevarse ${prizeAnnouncement}!`, 'Kore', game.tenant_id);
+      broadcastVoiceAnnouncement(`¡Atención a todos los participantes! ¡Tenemos Bingo ganador! Felicitaciones a ${winnerNames} por ganar la figura ${pData?.name || 'del bingo'} y llevarse ${prizeAnnouncement}!`, 'Kore', roomTenant);
     }, 7500);
 
     // 4. Wallet crediting and notifications asynchronously in background
@@ -7195,7 +7229,7 @@ const MIN_DRAW_INTERVAL_MS = 8000;
 // Function to draw the next ball automatically (aislado por juego y sala)
 async function drawNextBall(game: any, isManual: boolean = false) {
   const gameId = Number(game.id);
-  const roomTenant = (game.tenant_id || '').toLowerCase();
+  const roomTenant = normalizeRoomTenant(game.tenant_id);
   const roomAutoplay = getRoomAutoplay(roomTenant);
   const now = Date.now();
   const lastDrawForGame = lastBallDrawTimeByGame.get(gameId) || 0;
@@ -7226,6 +7260,16 @@ async function drawNextBall(game: any, isManual: boolean = false) {
     if (fetchError || !freshGame) {
       console.error('[drawNextBall] Error fetching fresh game state:', fetchError);
       return { error: 'Error al obtener estado del juego' };
+    }
+
+    if (freshGame.status === 'paused') {
+      console.log(`[drawNextBall] Game ${game.id} is paused. Draw cancelled.`);
+      return { error: 'El juego está pausado' };
+    }
+
+    if (freshGame.status === 'finished') {
+      console.log(`[drawNextBall] Game ${game.id} is finished. Draw cancelled.`);
+      return { error: 'El juego ha finalizado' };
     }
 
     invalidateAutoplayCache();
@@ -7271,9 +7315,11 @@ async function drawNextBall(game: any, isManual: boolean = false) {
       return { error: 'Autoplay stopped' };
     }
 
+    const nextStatus = (freshGame.status === 'waiting' || freshGame.status === 'scheduled') ? 'playing' : freshGame.status;
+
     const { error: updateError } = await supabase.from('game').update({
       drawn_balls: drawnBalls,
-      status: 'playing'
+      status: nextStatus
     }).eq('id', game.id);
 
     if (updateError) {
@@ -7287,11 +7333,11 @@ async function drawNextBall(game: any, isManual: boolean = false) {
     const fullState = await getGameFullState(game.id);
     if (fullState) {
       fullState.drawn_balls = drawnBalls;
-      fullState.status = 'playing';
+      fullState.status = nextStatus;
       await broadcastGameUpdate(game.id, fullState);
     } else {
       freshGame.drawn_balls = drawnBalls;
-      freshGame.status = 'playing';
+      freshGame.status = nextStatus;
       await broadcastGameUpdate(game.id, freshGame);
     }
     console.log(`Ball drawn and broadcasted: ${newBall} for game ${game.id} (room: ${freshGame.tenant_id || 'default'})`);
@@ -7304,93 +7350,92 @@ async function drawNextBall(game: any, isManual: boolean = false) {
       roomAutoplay.lastDrawTime = finalNow;
     }
 
-    // 3. Perform winner checking asynchronously so drawNextBall returns IMMEDIATELY
-    // and never delays the 8s ball interval or causes queue backlogs
-    (async () => {
-      try {
-        const { data: gamePatterns } = await supabase.from('game_patterns')
-          .select('*, patterns(grid, name)')
-          .eq('game_id', game.id)
-          .is('winner_player_id', null)
-          .order('id', { ascending: true });
+    // 3. Perform winner checking synchronously so winner detection halts ball drawing IMMEDIATELY
+    let patternWonOnThisBall = false;
+    try {
+      const { data: gamePatterns } = await supabase.from('game_patterns')
+        .select('*, patterns(grid, name)')
+        .eq('game_id', game.id)
+        .is('winner_player_id', null)
+        .order('id', { ascending: true });
 
-        if (gamePatterns && gamePatterns.length > 0) {
-          // Motor de Alta Escala: Carga paginada en RAM que rompe el límite de 1.000 filas
-          const gameCards = await getOrFetchAllGameCards(game.id);
+      if (gamePatterns && gamePatterns.length > 0) {
+        // Motor de Alta Escala: Carga paginada en RAM que rompe el límite de 1.000 filas
+        const gameCards = await getOrFetchAllGameCards(game.id);
 
-          if (gameCards && gameCards.length > 0) {
-            const drawnSet = new Set<number>(drawnBalls.map(Number));
-            const t0 = Date.now();
+        if (gameCards && gameCards.length > 0) {
+          const drawnSet = new Set<number>(drawnBalls.map(Number));
+          const t0 = Date.now();
 
-            for (const gp of gamePatterns) {
-              if (gp.winner_player_id) continue;
+          for (const gp of gamePatterns) {
+            if (gp.winner_player_id) continue;
 
-              let pGrid = gp.patterns?.grid;
-              let pName = gp.patterns?.name;
-              if (Array.isArray(gp.patterns) && gp.patterns.length > 0) {
-                pGrid = gp.patterns[0].grid;
-                pName = gp.patterns[0].name;
-              }
+            let pGrid = gp.patterns?.grid;
+            let pName = gp.patterns?.name;
+            if (Array.isArray(gp.patterns) && gp.patterns.length > 0) {
+              pGrid = gp.patterns[0].grid;
+              pName = gp.patterns[0].name;
+            }
 
-              if (!pGrid) {
-                console.warn(`No grid found for pattern ${pName || gp.id}, skipping.`);
-                continue;
-              }
+            if (!pGrid) {
+              console.warn(`No grid found for pattern ${pName || gp.id}, skipping.`);
+              continue;
+            }
 
-              const safePGrid = getSafePatternGrid(pGrid);
-              const winnersForGP: any[] = [];
+            const safePGrid = getSafePatternGrid(pGrid);
+            const winnersForGP: any[] = [];
 
-              for (const card of gameCards) {
-                const winResult = checkCardPatternFast(card, safePGrid, drawnSet);
-                if (winResult.won) {
-                  console.log(`[Bingo HighScale] Bingo detectado para cartón #${card.card_number} (Jugador: ${card.player?.name}) en patrón ${pName || gp.id}`);
-                  winnersForGP.push({ card, player: card.player, winResult });
-                }
-              }
-
-              const evalDuration = Date.now() - t0;
-              if (evalDuration > 25) {
-                console.log(`[HighScaleEngine] Evaluación de ${gameCards.length} cartones completada en ${evalDuration}ms.`);
-              }
-
-              if (winnersForGP.length > 0) {
-                try {
-                  const won = await processBingoWin(game, gp, winnersForGP);
-                  if (won) {
-                    console.log(`[HighScaleEngine] Patrón ${gp.id} procesado con éxito. Pausando sorteo para celebración.`);
-                    break; // Stop evaluating further patterns on this ball: celebrate this figure first!
-                  }
-                } catch (winErr) {
-                  console.error('Error processing bingo win:', winErr);
-                }
+            for (const card of gameCards) {
+              const winResult = checkCardPatternFast(card, safePGrid, drawnSet);
+              if (winResult.won) {
+                console.log(`[Bingo HighScale] Bingo detectado para cartón #${card.card_number} (Jugador: ${card.player?.name}) en patrón ${pName || gp.id}`);
+                winnersForGP.push({ card, player: card.player, winResult });
               }
             }
 
-            // Check if all patterns for this game have been won
-            const { data: allGamePatterns } = await supabase.from('game_patterns')
-              .select('id, winner_player_id')
-              .eq('game_id', game.id);
+            const evalDuration = Date.now() - t0;
+            if (evalDuration > 25) {
+              console.log(`[HighScaleEngine] Evaluación de ${gameCards.length} cartones completada en ${evalDuration}ms.`);
+            }
 
-            if (allGamePatterns && allGamePatterns.length > 0) {
-              const unwonPatterns = allGamePatterns.filter(p => !p.winner_player_id);
-              if (unwonPatterns.length === 0) {
-                console.log(`All ${allGamePatterns.length} patterns won for game ${game.id}. Completing game after full celebration pause.`);
-                if (!serverAutoplay.isRunning) {
-                  // In manual mode, wait 22 seconds before ending game so winner locution is fully respected
-                  setTimeout(async () => {
-                    await endGameCleanup(game.id, game.final_note || "");
-                  }, 22000);
+            if (winnersForGP.length > 0) {
+              try {
+                const won = await processBingoWin(game, gp, winnersForGP);
+                if (won) {
+                  console.log(`[HighScaleEngine] Patrón ${gp.id} (${pName}) procesado con éxito. Pausando sorteo para celebración.`);
+                  patternWonOnThisBall = true;
+                  break; // Stop evaluating further patterns on this ball: celebrate this figure first!
                 }
+              } catch (winErr) {
+                console.error('Error processing bingo win:', winErr);
+              }
+            }
+          }
+
+          // Check if all patterns for this game have been won
+          const { data: allGamePatterns } = await supabase.from('game_patterns')
+            .select('id, winner_player_id')
+            .eq('game_id', game.id);
+
+          if (allGamePatterns && allGamePatterns.length > 0) {
+            const unwonPatterns = allGamePatterns.filter(p => !p.winner_player_id);
+            if (unwonPatterns.length === 0) {
+              console.log(`All ${allGamePatterns.length} patterns won for game ${game.id}. Completing game after full celebration pause.`);
+              if (!roomAutoplay.isRunning) {
+                // In manual mode, wait 22 seconds before ending game so winner locution is fully respected
+                setTimeout(async () => {
+                  await endGameCleanup(game.id, game.final_note || "");
+                }, 22000);
               }
             }
           }
         }
-      } catch (checkErr) {
-        console.error('[drawNextBall] Async winner check notice:', checkErr);
       }
-    })();
+    } catch (checkErr) {
+      console.error('[drawNextBall] Winner check notice:', checkErr);
+    }
 
-    return { ball: newBall };
+    return { ball: newBall, won: patternWonOnThisBall };
   } finally {
     isDrawingBallByGame.delete(gameId);
   }
@@ -7408,10 +7453,15 @@ app.post('/api/game/draw', requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'No hay juego activo para sortear en esta sala' });
     }
 
-    const roomAutoplay = getRoomAutoplay(targetTenant);
+    const roomTenant = normalizeRoomTenant(game.tenant_id || targetTenant);
+    const roomAutoplay = getRoomAutoplay(roomTenant);
     if (roomAutoplay.isPausedForWinner && Date.now() < roomAutoplay.winnerPauseUntil) {
       const remaining = Math.ceil((roomAutoplay.winnerPauseUntil - Date.now()) / 1000);
       return res.status(400).json({ error: `Celebración de ganador en curso. Por favor espera ${remaining} segundos para continuar.` });
+    }
+
+    if (game.status === 'paused') {
+      return res.status(400).json({ error: 'El juego está pausado. Haz clic en "Iniciar" para reanudar antes de sortear balotas.' });
     }
 
     const drawResult = await drawNextBall(game, true);
@@ -7420,9 +7470,9 @@ app.post('/api/game/draw', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: drawResult.error });
     }
 
-    console.log(`[Draw] SUCCESS: Ball ${drawResult.ball} in room "${targetTenant || 'default'}"`);
-    invalidateGameCaches();
-    res.json({ ball: drawResult.ball });
+    console.log(`[Draw] SUCCESS: Ball ${drawResult.ball} in room "${roomTenant}"`);
+    invalidateGameCaches(game.id, roomTenant);
+    res.json({ ball: drawResult.ball, won: drawResult.won });
   } catch (err: any) {
     console.log('[Draw] SERVER EXCEPTION:', err);
     res.status(500).json({ error: 'Error del servidor al sortear. Reportado el incidente.' });
@@ -12007,7 +12057,6 @@ app.post('/api/admin/game/autoplay/start', requireAdmin, async (req, res) => {
   try {
     const { interval, gameId } = req.body;
     const targetTenant = getTenantIdFromRequest(req);
-    const roomAutoplay = getRoomAutoplay(targetTenant);
 
     let game: any = null;
     if (gameId) {
@@ -12040,6 +12089,9 @@ app.post('/api/admin/game/autoplay/start', requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'No hay juego activo en esta sala para iniciar autoplay' });
     }
 
+    const roomTenant = normalizeRoomTenant(game.tenant_id || targetTenant);
+    const roomAutoplay = getRoomAutoplay(roomTenant);
+
     const prevStatus = game.status;
     if (game.status === 'waiting' || game.status === 'scheduled' || game.status === 'paused') {
       const { data: updatedRows, error: updateError } = await supabase.from('game')
@@ -12063,16 +12115,16 @@ app.post('/api/admin/game/autoplay/start', requireAdmin, async (req, res) => {
 
         if (isResumingGame) {
           const lastResumeKey = `resume_announcement_${game.id}`;
-          const lastResumeSent = recentBroadcastTexts.get(`${targetTenant}:${lastResumeKey}`) || 0;
+          const lastResumeSent = recentBroadcastTexts.get(`${roomTenant}:${lastResumeKey}`) || 0;
           if (nowTime - lastResumeSent > 15000) {
-            recentBroadcastTexts.set(`${targetTenant}:${lastResumeKey}`, nowTime);
-            broadcastVoiceAnnouncement(RESUME_ANNOUNCEMENT_TEXT, 'Kore', targetTenant);
+            recentBroadcastTexts.set(`${roomTenant}:${lastResumeKey}`, nowTime);
+            broadcastVoiceAnnouncement(RESUME_ANNOUNCEMENT_TEXT, 'Kore', roomTenant);
             roomAutoplay.lastAnnouncementTime = nowTime;
           } else {
             console.log(`[Autoplay] Resume announcement skipped (already announced within 15s for game ${game.id})`);
           }
         } else {
-          await broadcastGameStartAnnouncement(Number(game.id), targetTenant);
+          await broadcastGameStartAnnouncement(Number(game.id), roomTenant);
         }
       } else {
         // Just sync our local variable but don't re-trigger announcements
@@ -12082,7 +12134,7 @@ app.post('/api/admin/game/autoplay/start', requireAdmin, async (req, res) => {
 
     // If autoplay is already actively running for this game in this room, do not reset timers or interrupt ongoing balls
     if (roomAutoplay.isRunning && roomAutoplay.gameId === game.id) {
-      console.log(`[Autoplay] Already actively running for game ${game.id} in room ${targetTenant}`);
+      console.log(`[Autoplay] Already actively running for game ${game.id} in room ${roomTenant}`);
       return res.json({ success: true, isRunning: true, interval: roomAutoplay.intervalMs / 1000 });
     }
 
@@ -12098,27 +12150,27 @@ app.post('/api/admin/game/autoplay/start', requireAdmin, async (req, res) => {
 
     if (isResuming) {
       const lastResumeKey = `resume_announcement_${game.id}`;
-      const lastResumeSent = recentBroadcastTexts.get(`${targetTenant}:${lastResumeKey}`) || 0;
+      const lastResumeSent = recentBroadcastTexts.get(`${roomTenant}:${lastResumeKey}`) || 0;
       if (Date.now() - lastResumeSent > 15000) {
-        recentBroadcastTexts.set(`${targetTenant}:${lastResumeKey}`, Date.now());
-        broadcastVoiceAnnouncement(RESUME_ANNOUNCEMENT_TEXT, 'Kore', targetTenant);
+        recentBroadcastTexts.set(`${roomTenant}:${lastResumeKey}`, Date.now());
+        broadcastVoiceAnnouncement(RESUME_ANNOUNCEMENT_TEXT, 'Kore', roomTenant);
         roomAutoplay.lastAnnouncementTime = Date.now();
       }
 
       roomAutoplay.lastDrawTime = Date.now() + 5000 - finalInterval;
-      console.log(`[Autoplay] Resumed for game ${game.id} in room ${targetTenant}. Next ball scheduled in exactly 5 seconds.`);
+      console.log(`[Autoplay] Resumed for game ${game.id} in room ${roomTenant}. Next ball scheduled in exactly 5 seconds.`);
     } else {
       roomAutoplay.lastDrawTime = Date.now() + 37000 - finalInterval;
-      console.log(`[Autoplay] Brand new start for game ${game.id} in room ${targetTenant}. Next ball scheduled in 37s (after intro).`);
+      console.log(`[Autoplay] Brand new start for game ${game.id} in room ${roomTenant}. Next ball scheduled in 37s (after intro).`);
     }
 
-    await getChannel(targetTenant).publish('server_autoplay_updated', {
+    await getChannel(roomTenant).publish('server_autoplay_updated', {
       isRunning: true,
       gameId: game.id,
       interval: finalInterval / 1000
     });
 
-    console.log(`[Autoplay] Started on server for game ${game.id} (room: ${targetTenant}) with interval ${roomAutoplay.intervalMs}ms`);
+    console.log(`[Autoplay] Started on server for game ${game.id} (room: ${roomTenant}) with interval ${roomAutoplay.intervalMs}ms`);
     res.json({ success: true, isRunning: true, interval: roomAutoplay.intervalMs / 1000 });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -12127,17 +12179,27 @@ app.post('/api/admin/game/autoplay/start', requireAdmin, async (req, res) => {
 
 app.post('/api/admin/game/autoplay/stop', requireAdmin, async (req, res) => {
   try {
+    const { gameId } = req.body || {};
     const targetTenant = getTenantIdFromRequest(req);
-    const roomAutoplay = getRoomAutoplay(targetTenant);
+
+    let targetGame: any = null;
+    if (gameId) {
+      const { data } = await supabase.from('game').select('*').eq('id', Number(gameId)).maybeSingle();
+      targetGame = data;
+    }
+    if (!targetGame) {
+      targetGame = await getActiveGame(targetTenant);
+    }
+
+    const roomTenant = normalizeRoomTenant(targetGame?.tenant_id || targetTenant);
+    const roomAutoplay = getRoomAutoplay(roomTenant);
 
     roomAutoplay.isRunning = false;
     roomAutoplay.isPausedForWinner = false;
+    roomAutoplay.winnerPauseUntil = 0;
+    roomAutoplay.isDrawing = false;
 
-    let targetGameId = roomAutoplay.gameId;
-    if (!targetGameId) {
-      const activeGame = await getActiveGame(targetTenant);
-      if (activeGame) targetGameId = activeGame.id;
-    }
+    const targetGameId = targetGame?.id || roomAutoplay.gameId;
 
     if (targetGameId) {
       await supabase.from('game').update({ status: 'paused' }).eq('id', targetGameId);
@@ -12145,15 +12207,15 @@ app.post('/api/admin/game/autoplay/stop', requireAdmin, async (req, res) => {
     }
 
     invalidateAutoplayCache();
-    invalidateGameCaches();
+    invalidateGameCaches(targetGameId, roomTenant);
 
-    await getChannel(targetTenant).publish('server_autoplay_updated', {
+    await getChannel(roomTenant).publish('server_autoplay_updated', {
       isRunning: false,
       gameId: targetGameId,
-      interval: roomAutoplay.intervalMs / 1000
+      interval: (roomAutoplay.intervalMs || 8000) / 1000
     });
 
-    console.log(`[Autoplay] Stopped on server for room ${targetTenant} and game ${targetGameId} set to paused.`);
+    console.log(`[Autoplay] Stopped on server for room ${roomTenant} and game ${targetGameId} set to paused.`);
     res.json({ success: true, isRunning: false, gameId: targetGameId });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -12161,7 +12223,7 @@ app.post('/api/admin/game/autoplay/stop', requireAdmin, async (req, res) => {
 });
 
 app.get('/api/admin/game/autoplay/status', (req, res) => {
-  const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+  const targetTenant = normalizeRoomTenant((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req));
   const roomAutoplay = getRoomAutoplay(targetTenant);
   res.json({
     isRunning: roomAutoplay.isRunning,
@@ -12484,9 +12546,24 @@ async function startBackgroundGameLoop() {
           if (now < roomAutoplay.winnerPauseUntil) {
             continue;
           } else {
-            // Celebration pause finished for this room! Resume autonomous ball drawing
+            // Celebration pause finished for this room!
             roomAutoplay.isPausedForWinner = false;
-            console.log(`[AutoEngine] Winner celebration completed in room "${roomTenant}". Resuming autonomous ball drawing for game ${game.id}...`);
+            roomAutoplay.winnerPauseUntil = 0;
+
+            // BLINDAJE: Check if admin stopped autoplay or paused game during celebration
+            if (!roomAutoplay.isRunning) {
+              console.log(`[AutoEngine] Autoplay was stopped during winner celebration in room "${roomTenant}". Halting draws.`);
+              continue;
+            }
+
+            const { data: dbCheck } = await supabase.from('game').select('status').eq('id', game.id).maybeSingle();
+            if (dbCheck && (dbCheck.status === 'paused' || dbCheck.status === 'finished')) {
+              console.log(`[AutoEngine] Game status is "${dbCheck.status}" in room "${roomTenant}". Halting autonomous draws.`);
+              roomAutoplay.isRunning = false;
+              continue;
+            }
+
+            console.log(`[AutoEngine] Winner celebration completed in room "${roomTenant}". Checking patterns for game ${game.id}...`);
 
             const { data: allPatterns } = await supabase.from('game_patterns')
               .select('id, winner_player_id')
@@ -12518,7 +12595,7 @@ async function startBackgroundGameLoop() {
 
             roomAutoplay.lastAnnouncementTime = Date.now();
 
-            // Force game status back to playing in DB and memory
+            // Resume game status to playing in DB and memory
             await supabase.from('game').update({ status: 'playing' }).eq('id', game.id);
             invalidateAutoplayCache();
             await broadcastGameUpdate(game.id);
@@ -12531,20 +12608,15 @@ async function startBackgroundGameLoop() {
           }
         }
 
-        // If game is paused in this room
-        if (game.status === 'paused' && !roomAutoplay.isPausedForWinner) {
-          const { data: dbCheck } = await supabase.from('game').select('status').eq('id', game.id).maybeSingle();
-          if (dbCheck && dbCheck.status === 'paused') {
-            roomAutoplay.isRunning = false;
-            await getChannel(roomTenant).publish('server_autoplay_updated', {
-              isRunning: false,
-              gameId: game.id,
-              interval: (roomAutoplay.intervalMs || 8000) / 1000
-            });
-            continue;
-          } else if (dbCheck && dbCheck.status === 'playing') {
-            game.status = 'playing';
-          }
+        // If game is paused in this room or autoplay was stopped, halt immediately
+        if (game.status === 'paused' || !roomAutoplay.isRunning) {
+          roomAutoplay.isRunning = false;
+          await getChannel(roomTenant).publish('server_autoplay_updated', {
+            isRunning: false,
+            gameId: game.id,
+            interval: (roomAutoplay.intervalMs || 8000) / 1000
+          });
+          continue;
         }
 
         // B. Check if it is time to draw the next ball for this room

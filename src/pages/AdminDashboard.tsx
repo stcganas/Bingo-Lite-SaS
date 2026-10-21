@@ -1850,7 +1850,11 @@ export default function AdminDashboard() {
   const handleStopAutoplayServer = async () => {
     setAutoplay(false);
     try {
-      const res = await apiFetch('/api/admin/game/autoplay/stop', { method: 'POST' });
+      const res = await apiFetch('/api/admin/game/autoplay/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gameId: gameState?.id })
+      });
       if (res.ok) {
         toast.success('Sorteo automático detenido');
       }
@@ -1880,7 +1884,11 @@ export default function AdminDashboard() {
           toast.error('Error al iniciar autoplay en el servidor');
         }
       } else {
-        const res = await apiFetch('/api/admin/game/autoplay/stop', { method: 'POST' });
+        const res = await apiFetch('/api/admin/game/autoplay/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gameId: gameState.id })
+        });
         if (res.ok) {
           toast.success('Autoplay detenido en Servidor');
         }

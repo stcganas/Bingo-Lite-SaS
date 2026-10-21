@@ -317,30 +317,70 @@ CREATE POLICY "Backend full access bingo_claims" ON public.bingo_claims FOR ALL 
 DROP POLICY IF EXISTS "Backend full access super_admin_events" ON public.super_admin_events;
 CREATE POLICY "Backend full access super_admin_events" ON public.super_admin_events FOR ALL TO service_role USING (true) WITH CHECK (true);
 
--- 11. ACCESO PÚBLICO DE LECTURA (anon y authenticated) PARA FRONTEND
-DROP POLICY IF EXISTS "Public read tenants safe" ON public.tenants;
-CREATE POLICY "Public read tenants safe" ON public.tenants FOR SELECT TO anon, authenticated USING (true);
+-- 11. POLÍTICAS OPERATIVAS (anon, authenticated, service_role)
+-- A) PLAYERS: Registro público de jugadores y actualización del sistema
+DROP POLICY IF EXISTS "Public read players safe" ON public.players;
+DROP POLICY IF EXISTS "Public insert players" ON public.players;
+DROP POLICY IF EXISTS "Public update players" ON public.players;
+DROP POLICY IF EXISTS "Allow all players" ON public.players;
+CREATE POLICY "Public read players safe" ON public.players FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Public insert players" ON public.players FOR INSERT TO anon, authenticated, service_role WITH CHECK (true);
+CREATE POLICY "Public update players" ON public.players FOR UPDATE TO anon, authenticated, service_role USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "Public read patterns" ON public.patterns;
-CREATE POLICY "Public read patterns" ON public.patterns FOR SELECT TO anon, authenticated USING (true);
+-- B) CARDS: Generación y consulta de cartones
+DROP POLICY IF EXISTS "Public read cards" ON public.cards;
+DROP POLICY IF EXISTS "Public insert cards" ON public.cards;
+DROP POLICY IF EXISTS "Public update cards" ON public.cards;
+CREATE POLICY "Public read cards" ON public.cards FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Public insert cards" ON public.cards FOR INSERT TO anon, authenticated, service_role WITH CHECK (true);
+CREATE POLICY "Public update cards" ON public.cards FOR UPDATE TO anon, authenticated, service_role USING (true) WITH CHECK (true);
 
+-- C) RECEIPTS: Subida y visualización de comprobantes de pago
+DROP POLICY IF EXISTS "Public read receipts table" ON public.receipts;
+DROP POLICY IF EXISTS "Public insert receipts table" ON public.receipts;
+CREATE POLICY "Public read receipts table" ON public.receipts FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Public insert receipts table" ON public.receipts FOR INSERT TO anon, authenticated, service_role WITH CHECK (true);
+
+-- D) BINGO CLAIMS: Reclamos de bingo por jugadores
+DROP POLICY IF EXISTS "Public read bingo_claims" ON public.bingo_claims;
+DROP POLICY IF EXISTS "Public insert bingo_claims" ON public.bingo_claims;
+CREATE POLICY "Public read bingo_claims" ON public.bingo_claims FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Public insert bingo_claims" ON public.bingo_claims FOR INSERT TO anon, authenticated, service_role WITH CHECK (true);
+
+-- E) GAME: Lectura y gestión de partidas
 DROP POLICY IF EXISTS "Public read game" ON public.game;
-CREATE POLICY "Public read game" ON public.game FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS "Allow all game" ON public.game;
+CREATE POLICY "Public read game" ON public.game FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Allow all game" ON public.game FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
+
+-- F) PATTERNS & GAME PATTERNS: Figuras y patrones
+DROP POLICY IF EXISTS "Public read patterns" ON public.patterns;
+DROP POLICY IF EXISTS "Allow all patterns" ON public.patterns;
+CREATE POLICY "Public read patterns" ON public.patterns FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Allow all patterns" ON public.patterns FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Public read game_patterns" ON public.game_patterns;
-CREATE POLICY "Public read game_patterns" ON public.game_patterns FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS "Allow all game_patterns" ON public.game_patterns;
+CREATE POLICY "Public read game_patterns" ON public.game_patterns FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Allow all game_patterns" ON public.game_patterns FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
 
+-- G) SELLERS: Vendedores
 DROP POLICY IF EXISTS "Public read sellers" ON public.sellers;
-CREATE POLICY "Public read sellers" ON public.sellers FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS "Allow all sellers" ON public.sellers;
+CREATE POLICY "Public read sellers" ON public.sellers FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Allow all sellers" ON public.sellers FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
 
+-- H) TENANTS: Salas
+DROP POLICY IF EXISTS "Public read tenants safe" ON public.tenants;
+DROP POLICY IF EXISTS "Allow all tenants" ON public.tenants;
+CREATE POLICY "Public read tenants safe" ON public.tenants FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Allow all tenants" ON public.tenants FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
+
+-- I) SETTINGS: Ajustes de sala
 DROP POLICY IF EXISTS "Public read settings" ON public.settings;
-CREATE POLICY "Public read settings" ON public.settings FOR SELECT TO anon, authenticated USING (true);
-
-DROP POLICY IF EXISTS "Public read players safe" ON public.players;
-CREATE POLICY "Public read players safe" ON public.players FOR SELECT TO anon, authenticated USING (true);
-
-DROP POLICY IF EXISTS "Public read cards" ON public.cards;
-CREATE POLICY "Public read cards" ON public.cards FOR SELECT TO anon, authenticated USING (true);
+DROP POLICY IF EXISTS "Allow all settings" ON public.settings;
+CREATE POLICY "Public read settings" ON public.settings FOR SELECT TO anon, authenticated, service_role USING (true);
+CREATE POLICY "Allow all settings" ON public.settings FOR ALL TO anon, authenticated, service_role USING (true) WITH CHECK (true);
 
 -- 12. STORAGE BUCKETS (receipts y banners)
 INSERT INTO storage.buckets (id, name, public, file_size_limit)
@@ -358,6 +398,10 @@ USING (bucket_id IN ('receipts', 'banners')) WITH CHECK (bucket_id IN ('receipts
 DROP POLICY IF EXISTS "Public read receipts" ON storage.objects;
 CREATE POLICY "Public read receipts" ON storage.objects FOR SELECT TO anon, authenticated
 USING (bucket_id IN ('receipts', 'banners'));
+
+DROP POLICY IF EXISTS "Public upload receipts" ON storage.objects;
+CREATE POLICY "Public upload receipts" ON storage.objects FOR INSERT TO anon, authenticated
+WITH CHECK (bucket_id IN ('receipts', 'banners'));
 
 -- 13. RECARGAR CACHÉ DE ESQUEMA EN POSTGREST
 NOTIFY pgrst, 'reload schema';

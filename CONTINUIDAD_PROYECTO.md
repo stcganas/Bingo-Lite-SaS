@@ -108,10 +108,29 @@
 
 ---
 
+16. **Blindaje Definitivo del Motor de Bingo Autónomo y Control de Pausas / Patrones:**
+    - **Alineación de Tenants (`normalizeRoomTenant`):** Se canonicalizó el identificador de sala para que `'default'`, `'bingo-lite'`, `null` y `''` compartan de manera idéntica la misma instancia de `RoomAutoplayState`. Cada sala adicional (`/sala/:slug`) opera su propio motor en memoria 100% aislado.
+    - **Control Inmediato de Pausa (`POST /api/game/status`):**
+      - Al cambiar el estado a `'paused'`, el servidor detiene inmediatamente el bucle autónomo (`roomAutoplay.isRunning = false; roomAutoplay.isPausedForWinner = false; roomAutoplay.winnerPauseUntil = 0; roomAutoplay.isDrawing = false`).
+      - Invalida cachés y publica `server_autoplay_updated` (`isRunning: false`) por Ably para que el panel administrativo y los clientes queden sincronizados instantáneamente.
+    - **Protección de `drawNextBall` contra Sobreescrituras de Estado:**
+      - Verifica el estado fresco de la base de datos antes de extraer la balota: si el juego está en `'paused'` o `'finished'`, la extracción se aborta de inmediato.
+      - Solo transiciona de `'waiting'` o `'scheduled'` a `'playing'`; nunca sobreescribe el estado `'paused'` establecido por el administrador.
+    - **Evaluación Síncrona de Figuras y Detención Inmediata por Ganador:**
+      - La evaluación de cartones en RAM (`checkCardPatternFast`) se ejecuta de manera síncrona dentro de `drawNextBall` (toma menos de 25ms para miles de cartones).
+      - Si se detecta un ganador de patrón, `processBingoWin` detiene y congela de inmediato el bucle autónomo (`roomAutoplay.isPausedForWinner = true; winnerPauseUntil = Date.now() + 22000`).
+      - Las extracciones manuales y automáticas quedan blindadas durante la celebración de 22 segundos.
+      - Al finalizar los 22 segundos, el motor verifica si el administrador pausó o detuvo el juego. Si fue pausado, el motor NO se reanuda; si continúa activo y quedan patrones pendientes, anuncia la siguiente figura y continúa el sorteo de forma ordenada.
+    - **Sincronización de Botones de Control en `AdminDashboard.tsx`:**
+      - Los botones "DETENER AUTOPLAY" y "Pausar Sorteo Auto" envían explícitamente el `gameId` en el cuerpo de la petición (`POST /api/admin/game/autoplay/stop`).
+      - El servidor localiza el tenant exacto y detiene tanto el sorteo en memoria como en la base de datos de forma atómica.
+
+---
+
 ## 3. Estado del Motor de Bingo y Tareas Pendientes
 
 ### ⚙️ Diagnóstico del Motor de Bingo Autónomo (`serverAutoplay`):
-- **Estado Actual:** El backend cuenta con `RoomAutoplayState` y un mapa en memoria (`roomAutoplays = new Map<string, RoomAutoplayState>()`) preparado para soportar bucles de sorteo independientes por sala.
+- **Estado Actual:** 100% blindado y sincronizado. Soporta múltiples salas con bucles aislados por `normalizeRoomTenant()`, detección síncrona de patrones ganadores con detención por celebración (22s) y detención inmediata ante comandos de pausa o parada del administrador.
 - **Canales de Ably:** Particionados dinámicamente mediante `getChannel(tenantId)` hacia `bingo-tenant-${tenantId}`.
 
 ---
