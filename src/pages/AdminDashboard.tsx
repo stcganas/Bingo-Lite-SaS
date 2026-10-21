@@ -5163,7 +5163,7 @@ export default function AdminDashboard() {
           {/* GANADORES Y METAS EN JUEGOS GRATIS TAB */}
           {activeTab === 'free_winners' && (
             <div className="space-y-6">
-              <FreeGamesLeaderboard isAdmin={true} />
+              <FreeGamesLeaderboard isAdmin={true} tenantId={currentTenant || undefined} />
             </div>
           )}
 

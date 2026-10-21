@@ -156,7 +156,7 @@ export default function FreeGames() {
       </div>
 
       {currentView === 'leaderboard' ? (
-        <FreeGamesLeaderboard isAdmin={false} />
+        <FreeGamesLeaderboard isAdmin={false} tenantId={tenantSlug || undefined} />
       ) : loading ? (
         <div className="text-center py-12 font-bold text-slate-500 flex items-center justify-center gap-2">
           <Loader2 className="animate-spin text-emerald-600" size={24} /> Cargando juegos...

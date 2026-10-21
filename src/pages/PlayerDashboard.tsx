@@ -1774,7 +1774,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
           <div className="space-y-6">
             {activeTab === 'free_winners' && (
               <div className="animate-in fade-in slide-in-from-bottom-4 duration-300">
-                <FreeGamesLeaderboard isAdmin={false} />
+                <FreeGamesLeaderboard isAdmin={false} tenantId={tenantSlug || undefined} />
               </div>
             )}
 

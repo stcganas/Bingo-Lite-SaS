@@ -63,15 +63,48 @@ interface LeaderboardData {
 
 interface FreeGamesLeaderboardProps {
   isAdmin?: boolean;
+  tenantId?: string;
   onClose?: () => void;
 }
 
-export default function FreeGamesLeaderboard({ isAdmin = false, onClose }: FreeGamesLeaderboardProps) {
+export default function FreeGamesLeaderboard({ isAdmin = false, tenantId, onClose }: FreeGamesLeaderboardProps) {
   const [data, setData] = useState<LeaderboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [expandedPlayerIds, setExpandedPlayerIds] = useState<Set<number>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   
+  // Resolve effective tenant for strict room isolation
+  const resolveTenant = (): string => {
+    if (tenantId && tenantId.trim() && tenantId !== 'global') {
+      return tenantId.trim().toLowerCase();
+    }
+    if (typeof window !== 'undefined') {
+      const match = window.location.pathname.match(/\/sala\/([a-zA-Z0-9_-]+)/i);
+      if (match && match[1]) {
+        return match[1].trim().toLowerCase();
+      }
+      try {
+        const adminSession = localStorage.getItem('bingo_admin_user');
+        if (adminSession) {
+          const parsed = JSON.parse(adminSession);
+          if (parsed.tenant_id && parsed.tenant_id !== 'global') {
+            return parsed.tenant_id.trim().toLowerCase();
+          }
+        }
+        const playerSession = localStorage.getItem('bingo_player');
+        if (playerSession) {
+          const parsed = JSON.parse(playerSession);
+          if (parsed.tenant_id && parsed.tenant_id !== 'global') {
+            return parsed.tenant_id.trim().toLowerCase();
+          }
+        }
+      } catch (e) {}
+    }
+    return 'default';
+  };
+
+  const currentTenant = resolveTenant();
+
   // Admin Modal for Manual Free Prize
   const [showAddModal, setShowAddModal] = useState(false);
   const [playerIdentifier, setPlayerIdentifier] = useState('');
@@ -91,7 +124,7 @@ export default function FreeGamesLeaderboard({ isAdmin = false, onClose }: FreeG
   const fetchLeaderboard = async () => {
     try {
       setLoading(true);
-      const res = await apiFetch(`/api/free-games/leaderboard?_t=${Date.now()}`);
+      const res = await apiFetch(`/api/free-games/leaderboard?tenantId=${encodeURIComponent(currentTenant)}&_t=${Date.now()}`);
       if (res.ok) {
         const json = await res.json();
         setData(json);
@@ -108,7 +141,7 @@ export default function FreeGamesLeaderboard({ isAdmin = false, onClose }: FreeG
 
   useEffect(() => {
     fetchLeaderboard();
-  }, []);
+  }, [currentTenant]);
 
   const toggleExpand = (playerId: number) => {
     setExpandedPlayerIds(prev => {
@@ -139,7 +172,8 @@ export default function FreeGamesLeaderboard({ isAdmin = false, onClose }: FreeG
           amount,
           game_name: gameName,
           pattern_name: patternName,
-          notes
+          notes,
+          tenantId: currentTenant
         })
       });
       const resData = await res.json();
@@ -162,7 +196,7 @@ export default function FreeGamesLeaderboard({ isAdmin = false, onClose }: FreeG
 
   const handleDeletePrize = async (prizeId: string) => {
     try {
-      const res = await apiFetch(`/api/admin/free-games/prize/${prizeId}`, {
+      const res = await apiFetch(`/api/admin/free-games/prize/${prizeId}?tenantId=${encodeURIComponent(currentTenant)}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -193,7 +227,8 @@ export default function FreeGamesLeaderboard({ isAdmin = false, onClose }: FreeG
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           player_id: adjustPlayerId,
-          count: adjustCount
+          count: adjustCount,
+          tenantId: currentTenant
         })
       });
       const resData = await res.json();

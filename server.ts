@@ -3475,10 +3475,12 @@ async function persistFreeGamePrize(prize: {
   notes?: string;
   source?: 'automatic' | 'manual';
   wonAt?: string;
+  tenantId?: string;
 }) {
   const wonIso = prize.wonAt || new Date().toISOString();
   const numAmt = Number(prize.prizeAmount) || 0;
   const formattedStr = prize.prizeFormatted || `$${numAmt.toLocaleString('es-CO')}`;
+  const normTenant = (prize.tenantId || 'default').toLowerCase();
 
   let phone = prize.playerPhone;
   let name = prize.playerName;
@@ -3492,15 +3494,21 @@ async function persistFreeGamePrize(prize: {
     } catch (e) { }
   }
 
-  // 1. Guardar en tabla permanente free_game_prizes
+  // 1. Guardar en tabla permanente free_game_prizes con tenant_id
   try {
     if (prize.gameId && prize.patternId) {
-      const { data: existing } = await supabase.from('free_game_prizes')
+      let q = supabase.from('free_game_prizes')
         .select('id')
         .eq('game_id', prize.gameId)
         .eq('pattern_id', prize.patternId)
-        .eq('player_id', prize.playerId)
-        .maybeSingle();
+        .eq('player_id', prize.playerId);
+
+      if (normTenant === 'default' || normTenant === 'bingo-lite') {
+        q = q.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        q = q.eq('tenant_id', normTenant);
+      }
+      const { data: existing } = await q.maybeSingle();
 
       if (existing) {
         await supabase.from('free_game_prizes').update({
@@ -3508,7 +3516,8 @@ async function persistFreeGamePrize(prize: {
           pattern_name: prize.patternName || 'Figura Ganadora',
           prize_amount: numAmt,
           prize_formatted: formattedStr,
-          player_phone: phone || null
+          player_phone: phone || null,
+          tenant_id: normTenant
         }).eq('id', existing.id);
       } else {
         await supabase.from('free_game_prizes').insert({
@@ -3522,7 +3531,8 @@ async function persistFreeGamePrize(prize: {
           prize_formatted: formattedStr,
           notes: prize.notes || 'Ganador en juego gratis',
           source: prize.source || 'automatic',
-          won_at: wonIso
+          won_at: wonIso,
+          tenant_id: normTenant
         });
       }
     } else {
@@ -3537,17 +3547,18 @@ async function persistFreeGamePrize(prize: {
         prize_formatted: formattedStr,
         notes: prize.notes || 'Ganador en juego gratis',
         source: prize.source || 'automatic',
-        won_at: wonIso
+        won_at: wonIso,
+        tenant_id: normTenant
       });
     }
   } catch (e) {
     console.error('[FreeGamePrizes] Error inserting/updating free_game_prizes:', e);
   }
 
-  // 2. Respaldo duradero e inmune a borrados en globalSettings
+  // 2. Respaldo duradero e inmune a borrados en settings de la sala específica (NUNCA en global de otras salas)
   try {
-    const globalSettings = await getGameSettings('global');
-    const existingPrizes = Array.isArray(globalSettings.custom_free_game_prizes) ? globalSettings.custom_free_game_prizes : [];
+    const roomSettings = await getGameSettings('global', normTenant);
+    const existingPrizes = Array.isArray(roomSettings.custom_free_game_prizes) ? roomSettings.custom_free_game_prizes : [];
     const autoId = `auto_${prize.gameId || 'g'}_${prize.patternId || 'p'}_${prize.playerId}`;
     const idx = existingPrizes.findIndex((item: any) => String(item.id) === autoId);
     const entry = {
@@ -3563,47 +3574,50 @@ async function persistFreeGamePrize(prize: {
       prize_str: formattedStr,
       notes: prize.notes || 'Ganador en juego gratis',
       source: prize.source || 'automatic',
-      won_at: wonIso
+      won_at: wonIso,
+      tenant_id: normTenant
     };
     if (idx >= 0) {
       existingPrizes[idx] = entry;
     } else {
       existingPrizes.push(entry);
     }
-    await saveGameSettings('global', { custom_free_game_prizes: existingPrizes });
+    await saveGameSettings('global', { custom_free_game_prizes: existingPrizes }, normTenant);
   } catch (e) {
-    console.error('[FreeGamePrizes] Error guardando respaldo en globalSettings:', e);
+    console.error('[FreeGamePrizes] Error guardando respaldo en roomSettings:', e);
   }
 }
 
 // Registrar participación en juego pago en la base de datos
-async function recordPaidGameParticipation(playerId: number, gameId: number) {
+async function recordPaidGameParticipation(playerId: number, gameId: number, tenantId?: string) {
   try {
-    const { data: g } = await supabase.from('game').select('id, card_value, is_free').eq('id', gameId).maybeSingle();
+    const { data: g } = await supabase.from('game').select('id, card_value, is_free, tenant_id').eq('id', gameId).maybeSingle();
     const gSettings = await getGameSettings(gameId);
     if (g && isGameFree(g, gSettings)) {
       return; // Solo cuentan los juegos pagos
     }
+    const targetTenant = (tenantId || g?.tenant_id || 'default').toLowerCase();
 
-    // 1. Intentar insertar en la tabla dedicada player_paid_game_participations
+    // 1. Intentar insertar en la tabla dedicada player_paid_game_participations con tenant_id
     try {
       await supabase.from('player_paid_game_participations').upsert({
         player_id: playerId,
         game_id: gameId,
+        tenant_id: targetTenant,
         participated_at: new Date().toISOString()
       }, { onConflict: 'player_id,game_id' });
     } catch (e) { }
 
-    // 2. Persistir en la configuración global para respaldo duradero e inmune a cascada de borrado
-    const globalSettings = await getGameSettings('global');
-    const existing = globalSettings.paid_game_participations || {};
+    // 2. Persistir en la configuración de la sala específica (NUNCA en global)
+    const roomSettings = await getGameSettings('global', targetTenant);
+    const existing = roomSettings.paid_game_participations || {};
     const playerKey = String(playerId);
     const gamesSet = new Set<number>((existing[playerKey] || []).map(Number));
     gamesSet.add(Number(gameId));
     existing[playerKey] = Array.from(gamesSet);
 
-    await saveGameSettings('global', { paid_game_participations: existing });
-    console.log(`[PaidGamesCounter] Participación de jugador ${playerId} en juego pago ${gameId} registrada. Total juegos pagos: ${gamesSet.size}`);
+    await saveGameSettings('global', { paid_game_participations: existing }, targetTenant);
+    console.log(`[PaidGamesCounter] Participación de jugador ${playerId} en juego pago ${gameId} (sala: ${targetTenant}) registrada. Total: ${gamesSet.size}`);
   } catch (err) {
     console.error('[PaidGamesCounter] Error al registrar participación en juego pago:', err);
   }
@@ -3611,10 +3625,21 @@ async function recordPaidGameParticipation(playerId: number, gameId: number) {
 
 app.get('/api/free-games/leaderboard', async (req, res) => {
   try {
-    // 1. Obtener juegos activos para detectar cuáles son gratis y pagos
-    const { data: gamesData } = await supabase
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    const targetTenant = ((req.query.tenantId as string) || (req.query.tenant as string) || (req.query.slug as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
+
+    // 1. Obtener juegos de esta sala específica para detectar cuáles son gratis y pagos
+    let gamesQuery = supabase
       .from('game')
-      .select('id, name, is_free, card_value, created_at, status');
+      .select('id, name, is_free, card_value, created_at, status, tenant_id');
+
+    if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+      gamesQuery = gamesQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+    } else {
+      gamesQuery = gamesQuery.eq('tenant_id', targetTenant);
+    }
+
+    const { data: gamesData } = await gamesQuery;
 
     const freeGameIds = new Set<number>();
     const paidGameIds = new Set<number>();
@@ -3623,7 +3648,7 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
     if (gamesData) {
       for (const g of gamesData) {
         gamesDict.set(Number(g.id), g);
-        const settings = await getGameSettings(Number(g.id));
+        const settings = await getGameSettings(Number(g.id), targetTenant);
         if (isGameFree(g, settings)) {
           freeGameIds.add(Number(g.id));
         } else {
@@ -3634,7 +3659,7 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
 
     const freeGameIdList = Array.from(freeGameIds);
 
-    // 2. Obtener patrones ganadores de juegos gratis activos en la tabla game_patterns
+    // 2. Obtener patrones ganadores de juegos gratis activos en la tabla game_patterns (estrictamente de esta sala)
     let freeWinningPatterns: any[] = [];
     if (freeGameIdList.length > 0) {
       const { data: wpData } = await supabase
@@ -3649,19 +3674,25 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
       }
     }
 
-    // 3. Obtener premios históricos de la tabla persistente free_game_prizes
+    // 3. Obtener premios históricos de la tabla persistente free_game_prizes filtrados por sala
     const dbFreePrizesList: any[] = [];
     try {
-      const { data: dbFreePrizes } = await supabase.from('free_game_prizes').select('*');
+      let fpQuery = supabase.from('free_game_prizes').select('*');
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        fpQuery = fpQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        fpQuery = fpQuery.eq('tenant_id', targetTenant);
+      }
+      const { data: dbFreePrizes } = await fpQuery;
       if (dbFreePrizes && Array.isArray(dbFreePrizes)) {
         dbFreePrizesList.push(...dbFreePrizes);
       }
     } catch (e) { }
 
-    // 4. Obtener premios de respaldo en globalSettings
-    const globalSettings = await getGameSettings('global');
-    const customPrizes: any[] = Array.isArray(globalSettings.custom_free_game_prizes)
-      ? [...globalSettings.custom_free_game_prizes]
+    // 4. Obtener premios de respaldo específicos de esta sala en roomSettings (NUNCA en globalSettings)
+    const roomSettings = await getGameSettings('global', targetTenant);
+    const customPrizes: any[] = Array.isArray(roomSettings.custom_free_game_prizes)
+      ? [...roomSettings.custom_free_game_prizes]
       : [];
 
     // Recolectar todos los IDs de jugadores y patrones para buscar sus nombres
@@ -3706,30 +3737,39 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
       }
     }
 
-    // 6. Contador de juegos pagos: Consultar cards, player_paid_game_participations y globalSettings
+    // 6. Contador de juegos pagos específico de esta sala
     const paidGamesPlayedMap = new Map<number, Set<number>>();
 
-    // 6a. De la tabla cards para juegos activos
-    const { data: allCardsData } = await supabase
-      .from('cards')
-      .select('player_id, game_id');
+    // 6a. De la tabla cards para los juegos pagos de esta sala
+    if (paidGameIds.size > 0) {
+      const { data: allCardsData } = await supabase
+        .from('cards')
+        .select('player_id, game_id')
+        .in('game_id', Array.from(paidGameIds));
 
-    if (allCardsData) {
-      allCardsData.forEach(c => {
-        const pid = Number(c.player_id);
-        const gid = Number(c.game_id);
-        if (pid && gid && paidGameIds.has(gid)) {
-          if (!paidGamesPlayedMap.has(pid)) {
-            paidGamesPlayedMap.set(pid, new Set());
+      if (allCardsData) {
+        allCardsData.forEach(c => {
+          const pid = Number(c.player_id);
+          const gid = Number(c.game_id);
+          if (pid && gid && paidGameIds.has(gid)) {
+            if (!paidGamesPlayedMap.has(pid)) {
+              paidGamesPlayedMap.set(pid, new Set());
+            }
+            paidGamesPlayedMap.get(pid)!.add(gid);
           }
-          paidGamesPlayedMap.get(pid)!.add(gid);
-        }
-      });
+        });
+      }
     }
 
-    // 6b. De la tabla player_paid_game_participations
+    // 6b. De la tabla player_paid_game_participations filtrada por esta sala
     try {
-      const { data: dbParts } = await supabase.from('player_paid_game_participations').select('player_id, game_id');
+      let partQ = supabase.from('player_paid_game_participations').select('player_id, game_id');
+      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
+        partQ = partQ.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      } else {
+        partQ = partQ.eq('tenant_id', targetTenant);
+      }
+      const { data: dbParts } = await partQ;
       if (dbParts && Array.isArray(dbParts)) {
         dbParts.forEach((dp: any) => {
           const pid = Number(dp.player_id);
@@ -3744,8 +3784,8 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
       }
     } catch (e) { }
 
-    // 6c. Del respaldo globalSettings.paid_game_participations (inmune a borrado de juegos)
-    const recordedParticipations = globalSettings.paid_game_participations || {};
+    // 6c. Del respaldo roomSettings.paid_game_participations (específico de esta sala)
+    const recordedParticipations = roomSettings.paid_game_participations || {};
     for (const [pKey, gList] of Object.entries(recordedParticipations)) {
       const pid = Number(pKey);
       if (pid && Array.isArray(gList)) {
@@ -3871,7 +3911,7 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
         stats.latest_win_at = item.won_at;
       }
 
-      // Auto-sincronizar de forma preventiva a free_game_prizes
+      // Auto-sincronizar de forma preventiva a free_game_prizes de esta sala
       persistFreeGamePrize({
         playerId: pid,
         gameId: item.game_id,
@@ -3880,7 +3920,8 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
         patternName: prizeEntry.pattern_name,
         prizeAmount: prizeNum,
         prizeFormatted: prizeEntry.prize_str,
-        wonAt: item.won_at
+        wonAt: item.won_at,
+        tenantId: targetTenant
       }).catch(() => { });
     });
 
@@ -4000,7 +4041,9 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
 // Endpoint para que el Administrador pueda ajustar o acreditar juegos pagos a un jugador
 app.post('/api/admin/free-games/adjust-paid-games', requireAdmin, async (req, res) => {
   try {
-    const { player_id, phone, count } = req.body;
+    const { player_id, phone, count, tenantId, tenant_id } = req.body;
+    const targetTenant = ((tenantId || tenant_id || (req as any).tenantId || getTenantIdFromRequest(req) || 'default') as string).toLowerCase();
+
     let resolvedPlayerId = player_id ? Number(player_id) : null;
     if (!resolvedPlayerId && phone) {
       const cleanPhone = String(phone).replace(/[^0-9]/g, '');
@@ -4010,8 +4053,8 @@ app.post('/api/admin/free-games/adjust-paid-games', requireAdmin, async (req, re
     if (!resolvedPlayerId) return res.status(404).json({ error: 'Jugador no encontrado' });
 
     const targetCount = Math.max(0, parseInt(String(count || '0'), 10));
-    const globalSettings = await getGameSettings('global');
-    const existing = globalSettings.paid_game_participations || {};
+    const roomSettings = await getGameSettings('global', targetTenant);
+    const existing = roomSettings.paid_game_participations || {};
     const playerKey = String(resolvedPlayerId);
 
     const list: number[] = [];
@@ -4020,8 +4063,8 @@ app.post('/api/admin/free-games/adjust-paid-games', requireAdmin, async (req, re
     }
     existing[playerKey] = list;
 
-    await saveGameSettings('global', { paid_game_participations: existing });
-    res.json({ success: true, player_id: resolvedPlayerId, paid_games_count: targetCount });
+    await saveGameSettings('global', { paid_game_participations: existing }, targetTenant);
+    res.json({ success: true, player_id: resolvedPlayerId, paid_games_count: targetCount, tenant_id: targetTenant });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -4030,7 +4073,9 @@ app.post('/api/admin/free-games/adjust-paid-games', requireAdmin, async (req, re
 // Registrar premio manual en juegos gratis (Administrador)
 app.post('/api/admin/free-games/record-prize', requireAdmin, async (req, res) => {
   try {
-    const { player_id, phone, amount, game_name, pattern_name, notes, won_at } = req.body;
+    const { player_id, phone, amount, game_name, pattern_name, notes, won_at, tenantId, tenant_id } = req.body;
+    const targetTenant = ((tenantId || tenant_id || (req as any).tenantId || getTenantIdFromRequest(req) || 'default') as string).toLowerCase();
+
     const numAmount = parseInt(String(amount || '0').replace(/[^0-9]/g, ''), 10);
     if (!numAmount || numAmount <= 0) {
       return res.status(400).json({ error: 'Monto de premio inválido' });
@@ -4062,16 +4107,17 @@ app.post('/api/admin/free-games/record-prize', requireAdmin, async (req, res) =>
       game_name: game_name || 'Juego Gratuito Especial',
       pattern_name: pattern_name || 'Premio de Juego Gratis',
       notes: notes || '',
-      won_at: won_at || new Date().toISOString()
+      won_at: won_at || new Date().toISOString(),
+      tenant_id: targetTenant
     };
 
-    const globalSettings = await getGameSettings('global');
-    const existingPrizes = Array.isArray(globalSettings.custom_free_game_prizes)
-      ? globalSettings.custom_free_game_prizes
+    const roomSettings = await getGameSettings('global', targetTenant);
+    const existingPrizes = Array.isArray(roomSettings.custom_free_game_prizes)
+      ? roomSettings.custom_free_game_prizes
       : [];
 
     existingPrizes.push(newPrize);
-    await saveGameSettings('global', { custom_free_game_prizes: existingPrizes });
+    await saveGameSettings('global', { custom_free_game_prizes: existingPrizes }, targetTenant);
 
     // Also try saving directly to free_game_prizes table if present
     try {
@@ -4084,7 +4130,8 @@ app.post('/api/admin/free-games/record-prize', requireAdmin, async (req, res) =>
         prize_formatted: `$${numAmount.toLocaleString('es-CO')}`,
         notes: notes || '',
         source: 'manual',
-        won_at: won_at || new Date().toISOString()
+        won_at: won_at || new Date().toISOString(),
+        tenant_id: targetTenant
       });
     } catch (e) { }
 
@@ -4098,22 +4145,27 @@ app.post('/api/admin/free-games/record-prize', requireAdmin, async (req, res) =>
 app.delete('/api/admin/free-games/prize/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+    const targetTenant = ((req.query.tenantId || req.query.tenant || req.query.slug || (req as any).tenantId || getTenantIdFromRequest(req) || 'default') as string).toLowerCase();
 
     // Si viene de la tabla free_game_prizes
     if (String(id).startsWith('db_')) {
       const realId = String(id).replace('db_', '');
       try {
-        await supabase.from('free_game_prizes').delete().eq('id', realId);
+        let q = supabase.from('free_game_prizes').delete().eq('id', realId);
+        if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+          q = q.eq('tenant_id', targetTenant);
+        }
+        await q;
       } catch (e) { }
     }
 
-    const globalSettings = await getGameSettings('global');
-    let existingPrizes = Array.isArray(globalSettings.custom_free_game_prizes)
-      ? globalSettings.custom_free_game_prizes
+    const roomSettings = await getGameSettings('global', targetTenant);
+    let existingPrizes = Array.isArray(roomSettings.custom_free_game_prizes)
+      ? roomSettings.custom_free_game_prizes
       : [];
 
     existingPrizes = existingPrizes.filter((p: any) => String(p.id) !== String(id));
-    await saveGameSettings('global', { custom_free_game_prizes: existingPrizes });
+    await saveGameSettings('global', { custom_free_game_prizes: existingPrizes }, targetTenant);
 
     res.json({ success: true });
   } catch (err: any) {
@@ -4481,7 +4533,8 @@ app.delete('/api/games/:id', requireAdmin, async (req, res) => {
           prizeFormatted: gp.prize || `$${prizeNum.toLocaleString('es-CO')}`,
           notes: `Histórico consolidado del juego #${gameId}`,
           source: 'automatic',
-          wonAt: gp.won_at || new Date().toISOString()
+          wonAt: gp.won_at || new Date().toISOString(),
+          tenantId: gameToDelete?.tenant_id || targetTenant
         });
       }
     }
@@ -4501,7 +4554,7 @@ app.delete('/api/games/:id', requireAdmin, async (req, res) => {
       if (cardsInGame && cardsInGame.length > 0) {
         const uniquePids = Array.from(new Set(cardsInGame.map(c => Number(c.player_id)).filter(Boolean)));
         for (const pid of uniquePids) {
-          await recordPaidGameParticipation(pid, gameId);
+          await recordPaidGameParticipation(pid, gameId, gameToDelete?.tenant_id || targetTenant);
         }
       }
     }
@@ -6757,7 +6810,8 @@ async function processBingoWin(game: any, gp: any, winners: { card: any, player:
               prizeFormatted: `$${wonAmount.toLocaleString('es-CO')}`,
               notes: `Ganador en vivo de ${pData?.name || 'figura'} en juego gratis #${game.id}`,
               source: 'automatic',
-              wonAt: new Date().toISOString()
+              wonAt: new Date().toISOString(),
+              tenantId: game.tenant_id || 'default'
             });
           }
         }
@@ -6889,7 +6943,8 @@ async function endGameCleanup(gameId: number, finalNote: string) {
             prizeFormatted: fp.prize || `$${pAmount.toLocaleString('es-CO')}`,
             notes: `Consolidación de fin de juego #${gameId}`,
             source: 'automatic',
-            wonAt: fp.won_at || new Date().toISOString()
+            wonAt: fp.won_at || new Date().toISOString(),
+            tenantId: gameInfo?.tenant_id || 'default'
           });
         }
       }
@@ -6899,7 +6954,7 @@ async function endGameCleanup(gameId: number, finalNote: string) {
       if (cardsInGame && cardsInGame.length > 0) {
         const uniquePids = Array.from(new Set(cardsInGame.map(c => Number(c.player_id)).filter(Boolean)));
         for (const pid of uniquePids) {
-          await recordPaidGameParticipation(pid, gameId);
+          await recordPaidGameParticipation(pid, gameId, gameInfo?.tenant_id || 'default');
         }
       }
     }
