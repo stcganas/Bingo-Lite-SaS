@@ -40,10 +40,28 @@ export default defineConfig(({ mode }) => {
           ...({ gcm_sender_id: "482941778795" } as any),
           icons: [
             {
+              src: '/favicon.png',
+              sizes: '64x64',
+              type: 'image/png',
+              purpose: 'any'
+            },
+            {
+              src: '/apple-touch-icon.png',
+              sizes: '180x180',
+              type: 'image/png',
+              purpose: 'any'
+            },
+            {
               src: '/pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any'
+            },
+            {
+              src: '/pwa-192x192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'maskable'
             },
             {
               src: '/pwa-512x512.png',

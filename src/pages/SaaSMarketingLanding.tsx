@@ -132,9 +132,11 @@ export default function SaaSMarketingLanding() {
       <header className="sticky top-0 z-40 backdrop-blur-xl bg-slate-950/80 border-b border-slate-800/80">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white font-black text-xl tracking-tighter">
-              B75
-            </div>
+            <img 
+              src="/logo.png" 
+              alt="Bingo Lite Logo" 
+              className="w-12 h-12 rounded-2xl object-cover shadow-lg shadow-blue-500/25 border-2 border-yellow-400/60 hover:scale-105 transition"
+            />
             <div>
               <span className="text-xl font-black tracking-tight text-white flex items-center gap-2">
                 Bingo Lite <span className="text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">SaaS Multi-tenant</span>

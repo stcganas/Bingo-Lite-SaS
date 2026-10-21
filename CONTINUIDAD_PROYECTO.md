@@ -325,4 +325,39 @@ Permitir a los administradores reiniciar a $0 el módulo que organiza a los gana
 - **Vite Build:** `npm run build` completado exitosamente en modo producción (código de salida 0).
 - **Aislamiento Multi-Tenant:** Confirmada la segregación estricta por `tenant_id`.
 
+---
+
+## 11. Integración de Logo Oficial e Iconos de Instalación PWA Multiplataforma (2026-10-21)
+
+### 🎯 Requerimiento:
+1. Usar el nuevo logotipo oficial de Bingo Lite (círculo azul marino con ribete dorado, corona de oro y tipografía 3D "Bingo Lite").
+2. Preparar los iconos de instalación PWA para PC de escritorio, dispositivos Android e iOS.
+3. Colocar el nuevo logo en la página principal (`/`), en la parte superior izquierda, sustituyendo el cuadro de texto "B75".
+
+### 🛠️ Implementación Técnica:
+1. **Generación y Optimización de Iconos con Jimp:**
+   - `public/logo.png`: 512x512 PNG en alta resolución para la app y branding.
+   - `public/images/logo.png`: 512x512 PNG como recurso estático de respaldo.
+   - `public/pwa-512x512.png`: 512x512 PNG optimizado para pantalla de bienvenida (splash screen) en Android y escritorio.
+   - `public/pwa-192x192.png`: 192x192 PNG para el icono principal en la pantalla de inicio de Android y navegadores.
+   - `public/apple-touch-icon.png`: 180x180 PNG optimizado para Safari en iOS (iPhone / iPad).
+   - `public/favicon.png`: 64x64 PNG para pestañas del navegador y accesos directos.
+
+2. **Configuración de Manifiesto y Metas:**
+   - **`index.html`:** Enlaces `<link rel="apple-touch-icon" sizes="180x180" ...>`, `<link rel="icon" type="image/png" ...>` para 64x64, 192x192 y 512x512, además de Open Graph y Twitter card apuntando a `/pwa-512x512.png`.
+   - **`public/manifest.webmanifest` & `vite.config.ts`:** Matriz completa de iconos con propósitos `any` y `maskable` (iconos adaptativos de Android) cubriendo todas las densidades de pantalla.
+
+3. **Reemplazo en la Página Principal ([`src/pages/SaaSMarketingLanding.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/pages/SaaSMarketingLanding.tsx)):**
+   - En la cabecera (navbar superior izquierdo), se retiró el contenedor provisional `B75` y se colocó el logo oficial con borde dorado sutil, sombra y animación hover interactiva.
+
+### 📁 Archivos Modificados:
+- `src/pages/SaaSMarketingLanding.tsx`: Reemplazo del bloque `B75` por el logotipo oficial.
+- `index.html`: Inclusión de metaetiquetas e iconos de alta definición para iOS, Android y navegadores.
+- `public/manifest.webmanifest` & `vite.config.ts`: Configuración completa de iconos PWA `any` y `maskable`.
+- `public/logo.png`, `public/pwa-512x512.png`, `public/pwa-192x192.png`, `public/apple-touch-icon.png`, `public/favicon.png`, `public/images/logo.png`: Nuevos assets generados.
+
+### ⚙️ Verificaciones Técnicas Ejecutadas:
+- **Generación de imágenes:** Redimensionadas y renderizadas correctamente mediante Jimp.
+- **Compilación Vite:** `npm run build` ejecutado exitosamente con empaquetado del Service Worker y precarga de los nuevos assets en `dist/`.
+
 
