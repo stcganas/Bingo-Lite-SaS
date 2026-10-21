@@ -181,17 +181,20 @@ function sanitizeUploadedFileMimeType(file: any) {
   }
 }
 
-// Store online players in memory
-const onlinePlayers = new Map<string, { timestamp: number, name: string, phone: string, tenant_id?: string }>();
+// Store online players in memory partitioned strictly by tenant to prevent cross-room leakage
+const onlinePlayers = new Map<string, { timestamp: number, name: string, phone: string, tenant_id: string }>();
 
 function touchPlayerPresence(phone: string, name?: string, tenantId?: string) {
   if (!phone) return;
   const normalized = normalizePhone(phone);
-  onlinePlayers.set(normalized, {
+  const rawTenant = (tenantId || '').trim().toLowerCase();
+  const cleanTenant = rawTenant === 'default' ? 'demo' : (rawTenant || 'bingo-lite');
+  const presenceKey = `${cleanTenant}:${normalized}`;
+  onlinePlayers.set(presenceKey, {
     timestamp: Date.now(),
     name: name || 'Jugador',
     phone: normalized,
-    tenant_id: tenantId ? tenantId.toLowerCase() : 'default'
+    tenant_id: cleanTenant
   });
 }
 
@@ -1888,7 +1891,7 @@ app.get('/api/wallet', async (req, res) => {
     const cleanTenant = rawTenantId === 'default' ? 'demo' : rawTenantId.toLowerCase();
 
     // Touch player presence
-    touchPlayerPresence(phone);
+    touchPlayerPresence(phone, undefined, cleanTenant);
 
     const activated = gameId ? await isWalletActivated(phone, parseInt(gameId as string)) : false;
 
@@ -7491,10 +7494,12 @@ app.post('/api/game/reset', requireAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
-async function generateCardsForPlayer(playerId: number, gameId: number, cardCount: number, isReserved: boolean = false, deleteExisting: boolean = true) {
+async function generateCardsForPlayer(playerId: number, gameId: number, cardCount: number, isReserved: boolean = false, deleteExisting: boolean = true, explicitTenantId?: string) {
   // SEGURIDAD CRÍTICA: Los administradores NO son jugadores y NUNCA deben recibir cartones
+  let playerCheck: any = null;
   try {
-    const { data: playerCheck } = await supabase.from('players').select('email, phone, name').eq('id', playerId).maybeSingle();
+    const { data: pData } = await supabase.from('players').select('id, email, phone, name, tenant_id').eq('id', playerId).maybeSingle();
+    playerCheck = pData;
     if (playerCheck) {
       const pEmail = (playerCheck.email || '').toLowerCase();
       const pPhone = normalizePhone(playerCheck.phone || '');
@@ -7508,6 +7513,22 @@ async function generateCardsForPlayer(playerId: number, gameId: number, cardCoun
     }
   } catch (chkErr) {}
 
+  // Resolver tenant para asignar a los cartones (requerido por foreign key cards_tenant_id_fkey)
+  let cardTenant: string = (explicitTenantId || '').trim().toLowerCase();
+  if (!cardTenant || cardTenant === 'default') {
+    try {
+      if (playerCheck?.tenant_id && playerCheck.tenant_id !== 'default') {
+        cardTenant = playerCheck.tenant_id.toLowerCase();
+      } else {
+        const { data: gTenantData } = await supabase.from('game').select('tenant_id').eq('id', gameId).maybeSingle();
+        if (gTenantData?.tenant_id && gTenantData.tenant_id !== 'default') {
+          cardTenant = gTenantData.tenant_id.toLowerCase();
+        }
+      }
+    } catch (e) {}
+  }
+  const cleanCardTenant = (cardTenant === 'default' || !cardTenant) ? 'bingo-lite' : cardTenant;
+
   // First, delete any existing cards for this player and game to prevent duplicates if called multiple times
   if (deleteExisting) {
     await supabase.from('cards').delete().eq('player_id', playerId).eq('game_id', gameId);
@@ -7518,6 +7539,7 @@ async function generateCardsForPlayer(playerId: number, gameId: number, cardCoun
 
   const { data: maxCard } = await supabase.from('cards')
     .select('card_number')
+    .eq('game_id', gameId)
     .order('card_number', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -7558,6 +7580,7 @@ async function generateCardsForPlayer(playerId: number, gameId: number, cardCoun
     const cardData: any = {
       player_id: playerId,
       game_id: gameId,
+      tenant_id: cleanCardTenant,
       card_number: cNum,
       lottery_code: lCode,
       status: lCode,
@@ -7573,6 +7596,7 @@ async function generateCardsForPlayer(playerId: number, gameId: number, cardCoun
       lotteryInPlayToInsert.push({
         player_id: playerId,
         game_id: gameId,
+        tenant_id: cleanCardTenant,
         lottery_code: lCode,
         card_number: cNum
       });
@@ -8699,15 +8723,16 @@ Devuelve ÚNICAMENTE un objeto JSON válido con la siguiente estructura:
 // Claim Free Cards Endpoint (Instant auto-approval and card assignment for free games)
 app.post('/api/players/claim-free-cards', async (req, res) => {
   try {
-    const { phone: rawPhone, name, gameId } = req.body;
+    const { phone: rawPhone, name, gameId, tenantId: bodyTenantId } = req.body;
     const phone = normalizePhone(rawPhone);
 
     if (!phone) {
       return res.status(400).json({ error: 'Número de WhatsApp requerido' });
     }
 
-    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
-    const roomSettings = await getGameSettings('global', targetTenant);
+    const rawTenant = (bodyTenantId || req.query.tenantId || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toString().toLowerCase();
+    const cleanTenant = rawTenant === 'default' ? 'demo' : rawTenant;
+    const roomSettings = await getGameSettings('global', cleanTenant);
     if (roomSettings.maintenance_mode) {
       if (phone !== '3145261451') {
         return res.status(503).json({
@@ -8721,13 +8746,14 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
     if (gameId) {
       game = await getGameFullState(parseInt(gameId));
     } else {
-      game = await getActiveGame(targetTenant);
+      game = await getActiveGame(cleanTenant);
     }
 
     if (!game) {
-      return res.status(400).json({ error: 'No se encontró el juego especificado.' });
+      return res.status(400).json({ error: 'No se encontró el juego especificado en esta sala.' });
     }
 
+    const finalGameTenant = (game.tenant_id ? (game.tenant_id === 'default' ? 'demo' : game.tenant_id) : cleanTenant).toLowerCase();
     const settings = await getGameSettings(game.id);
     const cardValNum = parseAmountWithDecimals(game.card_value || '0') || 0;
     const isFreeGame = game.is_free === true || game.type === 'free' || settings.is_free === true || settings.type === 'free' || cardValNum === 0 || (typeof game.card_value === 'string' && game.card_value.toLowerCase().includes('gratis'));
@@ -8738,9 +8764,8 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
 
     // Check if player exists in this tenant
     let playerQuery = supabase.from('players').select('*').eq('phone', phone);
-    const cleanTenant = targetTenant === 'default' ? 'demo' : (targetTenant || 'bingo-lite');
-    if (cleanTenant && cleanTenant !== 'global') {
-      playerQuery = playerQuery.eq('tenant_id', cleanTenant);
+    if (finalGameTenant && finalGameTenant !== 'global') {
+      playerQuery = playerQuery.eq('tenant_id', finalGameTenant);
     }
     let { data: player } = await playerQuery.maybeSingle();
 
@@ -8761,7 +8786,7 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
           card_count: 2,
           status: 'approved',
           referral_code: referralCode,
-          tenant_id: targetTenant || 'default',
+          tenant_id: finalGameTenant,
           receipt_url: JSON.stringify([currentReceipt])
         })
         .select()
@@ -8785,12 +8810,12 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
       const gameClaims = history.filter((h: any) => h.game_id === game.id);
       if (gameClaims.length >= 1) {
         // Already claimed for this game, ensure approved status and 2 cards assigned
-        await supabase.from('players').update({ status: 'approved' }).eq('id', player.id);
+        await supabase.from('players').update({ status: 'approved', card_count: 2, tenant_id: finalGameTenant }).eq('id', player.id);
         const { data: existingCards } = await supabase.from('cards').select('id').eq('player_id', player.id).eq('game_id', game.id);
         if (!existingCards || existingCards.length < 2) {
-          await generateCardsForPlayer(player.id, game.id, 2, false, false);
+          await generateCardsForPlayer(player.id, game.id, 2, false, false, finalGameTenant);
         }
-        return res.json({ success: true, message: 'Tus 2 cartones gratis ya están asignados y aprobados.' });
+        return res.json({ success: true, message: 'Tus 2 cartones gratis ya están asignados y aprobados.', player });
       }
 
       const currentReceipt = {
@@ -8804,8 +8829,9 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
 
       const { data: updatedPlayer } = await supabase.from('players')
         .update({
-          card_count: (player.card_count || 0) + 2,
+          card_count: 2,
           status: 'approved',
+          tenant_id: finalGameTenant,
           receipt_url: JSON.stringify(history)
         })
         .eq('id', player.id)
@@ -8818,9 +8844,9 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
     }
 
     // Always generate 2 cards for this game and ensure approved status
-    await generateCardsForPlayer(player.id, game.id, 2, false, false);
-    getChannel(targetTenant).publish('new_player', player);
-    invalidatePlayersCaches(targetTenant);
+    await generateCardsForPlayer(player.id, game.id, 2, false, false, finalGameTenant);
+    getChannel(finalGameTenant).publish('new_player', player);
+    invalidatePlayersCaches(finalGameTenant);
 
     return res.json({ success: true, message: '¡2 cartones gratis asignados exitosamente!', player });
   } catch (err: any) {
@@ -8873,21 +8899,28 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
   let audit: any = null;
 
   try {
-    const effectiveTenant = (rawTenantId || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
+    const rawTenant = (rawTenantId || req.query.tenantId || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toString().toLowerCase();
+    let effectiveTenant = rawTenant === 'default' ? 'demo' : rawTenant;
+
     // Buscar el juego
     let game;
     if (gameId) {
       game = await getGameFullState(parseInt(gameId));
+      if (game && game.tenant_id) {
+        effectiveTenant = (game.tenant_id === 'default' ? 'demo' : game.tenant_id).toLowerCase();
+      }
     } else {
       game = await getActiveGame(effectiveTenant);
     }
 
     if (!game) {
-      return res.status(400).json({ error: 'No hay juego activo' });
+      return res.status(400).json({ error: 'No hay juego activo en esta sala.' });
     }
 
+    const cleanTenant = (game.tenant_id ? (game.tenant_id === 'default' ? 'demo' : game.tenant_id) : effectiveTenant).toLowerCase();
     const settings = await getGameSettings(game.id);
-    const isFreeGame = (game.is_free === true || game.type === 'free' || settings.is_free === true || settings.type === 'free') && !(game.is_free === false || game.type === 'paid');
+    const cardValNum = parseAmountWithDecimals(game.card_value || '0') || 0;
+    const isFreeGame = (game.is_free === true || game.type === 'free' || settings.is_free === true || settings.type === 'free' || cardValNum === 0 || (typeof game.card_value === 'string' && game.card_value.toLowerCase().includes('gratis'))) && !(game.is_free === false && cardValNum > 0);
 
     if (payment_method === 'gift' || invited_by) {
       const cleanInvitedBy = normalizePhone(invited_by);
@@ -9140,7 +9173,6 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       .select('*')
       .eq('phone', phone);
 
-    const cleanTenant = effectiveTenant === 'default' ? 'demo' : (effectiveTenant || 'bingo-lite');
     if (cleanTenant && cleanTenant !== 'global') {
       selectPlayerQuery = selectPlayerQuery.eq('tenant_id', cleanTenant);
     }
@@ -9224,17 +9256,14 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         referred_by_player_code: existingPlayer.referred_by_player_code || player_ref || req.body.referred_by || req.body.ref || null,
         name,
         city,
-        card_count: isGiftReg ? 1 : (existingPlayer.card_count + finalCardCount),
+        card_count: isGiftReg ? 1 : (isFreeRegistration ? 2 : (existingPlayer.card_count + finalCardCount)),
         receipt_url: JSON.stringify(history),
-        status
+        status,
+        tenant_id: cleanTenant
       };
 
       if (email && typeof email === 'string' && email.trim()) {
         updateData.email = email.trim();
-      }
-      const effectiveTenant = rawTenantId || (req as any).tenantId;
-      if (effectiveTenant) {
-        updateData.tenant_id = effectiveTenant;
       }
 
       if (password) {
@@ -9264,16 +9293,16 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       }
 
       if (status === 'approved') {
-        const cardsToMake = isGiftReg ? 1 : finalCardCount;
-        console.log(`Debug: Generating ${cardsToMake} cards for updated player ${updatedPlayer.id} for game ${game.id}`);
-        await generateCardsForPlayer(updatedPlayer.id, game.id, cardsToMake, false, isGiftReg);
+        const cardsToMake = isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount);
+        console.log(`Debug: Generating ${cardsToMake} cards for updated player ${updatedPlayer.id} for game ${game.id} in tenant ${cleanTenant}`);
+        await generateCardsForPlayer(updatedPlayer.id, game.id, cardsToMake, false, isGiftReg, cleanTenant);
         if (payment_method !== 'gift' && payment_method !== 'free') {
           payReferralCommission(updatedPlayer, game, finalCardCount).catch(console.error);
         }
       }
 
-      getChannel(effectiveTenant).publish('new_player', updatedPlayer);
-      invalidatePlayersCaches(effectiveTenant);
+      getChannel(cleanTenant).publish('new_player', updatedPlayer);
+      invalidatePlayersCaches(cleanTenant);
       try {
         await supabase.from('gift_invitations').update({ status: 'claimed' }).eq('recipient_phone', phone);
       } catch (err) {
@@ -9286,12 +9315,12 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         uid: updatedPlayer.id,
         phone: updatedPlayer.phone,
         role: 'player',
-        tenant_id: effectiveTenant || 'default'
+        tenant_id: cleanTenant
       });
       return res.json({ success: true, player: updatedPlayer, token: playerToken });
     }
 
-    console.log('Insertando nuevo jugador...');
+    console.log('Insertando nuevo jugador para tenant:', cleanTenant);
     const status = finalStatus;
     const referralCode = Math.floor(1000 + Math.random() * 9000).toString();
     const isGiftReg = Boolean(payment_method === 'gift' || invited_by);
@@ -9302,17 +9331,14 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       name,
       phone,
       city,
-      card_count: isGiftReg ? 1 : finalCardCount,
+      card_count: isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount),
       receipt_url: currentReceipt ? JSON.stringify([currentReceipt]) : null,
-      status
+      status,
+      tenant_id: cleanTenant
     };
 
     if (email && typeof email === 'string' && email.trim()) {
       newPlayerData.email = email.trim();
-    }
-    const effectiveTenantNew = rawTenantId || (req as any).tenantId;
-    if (effectiveTenantNew) {
-      newPlayerData.tenant_id = effectiveTenantNew;
     }
 
     if (password) {
@@ -9341,17 +9367,17 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     }
 
     if (status === 'approved') {
-      const cardsToMake = isGiftReg ? 1 : finalCardCount;
-      console.log(`Debug: Generating ${cardsToMake} cards for new player ${newPlayer.id} for game ${game.id}`);
-      await generateCardsForPlayer(newPlayer.id, game.id, cardsToMake, false, isGiftReg);
+      const cardsToMake = isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount);
+      console.log(`Debug: Generating ${cardsToMake} cards for new player ${newPlayer.id} for game ${game.id} in tenant ${cleanTenant}`);
+      await generateCardsForPlayer(newPlayer.id, game.id, cardsToMake, false, isGiftReg, cleanTenant);
       if (payment_method !== 'gift' && payment_method !== 'free') {
         payReferralCommission(newPlayer, game, finalCardCount).catch(console.error);
       }
     }
 
-    console.log('Jugador registrado con éxito:', newPlayer.id);
-    getChannel(effectiveTenant).publish('new_player', newPlayer);
-    invalidatePlayersCaches(effectiveTenant);
+    console.log('Jugador registrado con éxito:', newPlayer.id, 'en sala:', cleanTenant);
+    getChannel(cleanTenant).publish('new_player', newPlayer);
+    invalidatePlayersCaches(cleanTenant);
     try {
       await supabase.from('gift_invitations').update({ status: 'claimed' }).eq('recipient_phone', phone);
     } catch (err) {
@@ -9364,7 +9390,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       uid: newPlayer?.id || phone,
       phone: phone,
       role: 'player',
-      tenant_id: effectiveTenantNew || 'default'
+      tenant_id: cleanTenant
     });
     res.json({ success: true, player: newPlayer, token: playerToken });
   } catch (err: any) {
@@ -9893,12 +9919,13 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
     }
 
     const adminUser = (req as any).adminUser;
+    const rawPTenant = (player.tenant_id || (req as any).tenantId || 'bingo-lite').toLowerCase();
+    const playerTenant = rawPTenant === 'default' ? 'demo' : rawPTenant;
+
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
-      const playerTenant = (player.tenant_id || 'default').toLowerCase();
-      const adminTenant = (adminUser.tenant_id || 'default').toLowerCase();
-      const isSameTenant = playerTenant === adminTenant ||
-        ((playerTenant === 'default' || playerTenant === 'bingo-lite') && (adminTenant === 'default' || adminTenant === 'bingo-lite'));
-      if (!isSameTenant) {
+      const rawAdminTenant = (adminUser.tenant_id || 'bingo-lite').toLowerCase();
+      const adminTenant = rawAdminTenant === 'default' ? 'demo' : rawAdminTenant;
+      if (playerTenant !== adminTenant) {
         return res.status(403).json({
           error: `Acceso denegado: El jugador pertenece a la sala "${player.tenant_id}". No tienes autorización para aprobarlo.`
         });
@@ -9909,12 +9936,13 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
     const { error: firstUpdateErr } = await supabase.from('players').update({
       status: 'approved',
       is_approved: true,
-      is_paid: true
+      is_paid: true,
+      tenant_id: playerTenant
     }).eq('id', playerId);
 
     if (firstUpdateErr) {
       console.warn('[Approve Player] First update failed (likely missing columns), falling back to status-only update:', firstUpdateErr.message);
-      const { error: fallbackErr } = await supabase.from('players').update({ status: 'approved' }).eq('id', playerId);
+      const { error: fallbackErr } = await supabase.from('players').update({ status: 'approved', tenant_id: playerTenant }).eq('id', playerId);
       if (fallbackErr) {
         throw new Error(`Fallback update failed: ${fallbackErr.message}`);
       }
@@ -9970,7 +9998,6 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
     if (targetGameId) {
       game = await getGameFullState(targetGameId);
     }
-    const playerTenant = (player.tenant_id || (req as any).tenantId || 'default').toLowerCase();
     if (!game) {
       game = await getActiveGame(playerTenant);
     }
@@ -9983,17 +10010,19 @@ app.post('/api/players/:id/approve', requireAdmin, async (req, res) => {
         .eq('game_id', game.id);
 
       const currentCardCount = existingCards ? existingCards.length : 0;
-      const targetCount = player.card_count || 1;
+      const isFreeGame = (game.is_free === true || game.type === 'free' || Number(game.card_value) === 0);
+      const targetCount = isFreeGame ? 2 : Math.max(1, player.card_count || 1);
 
       if (currentCardCount < targetCount) {
         const cardsToGenerate = targetCount - currentCardCount;
-        console.log(`[Approve Player] Generating ${cardsToGenerate} missing cards for player ${player.id} (had ${currentCardCount}, target ${targetCount}) in game ${game.id}`);
-        await generateCardsForPlayer(player.id, game.id, cardsToGenerate, false, false);
+        console.log(`[Approve Player] Generating ${cardsToGenerate} missing cards for player ${player.id} (had ${currentCardCount}, target ${targetCount}) in game ${game.id} room ${playerTenant}`);
+        await generateCardsForPlayer(player.id, game.id, cardsToGenerate, false, false, playerTenant);
       } else if (currentCardCount === 0) {
-        console.log(`[Approve Player] Generating ${targetCount} cards for player ${player.id} in game ${game.id}`);
-        await generateCardsForPlayer(player.id, game.id, targetCount, false, false);
+        console.log(`[Approve Player] Generating ${targetCount} cards for player ${player.id} in game ${game.id} room ${playerTenant}`);
+        await generateCardsForPlayer(player.id, game.id, targetCount, false, false, playerTenant);
       }
 
+      await supabase.from('players').update({ card_count: targetCount }).eq('id', player.id);
       await activateWallet(player.phone, game.id);
       payReferralCommission(player, game, targetCount).catch(console.error);
     }
@@ -10088,20 +10117,25 @@ app.post('/api/admin/players/approve-all', requireAdmin, async (req, res) => {
           }
         } catch (e) { }
 
-        const playerTenant = (player.tenant_id || (req as any).tenantId || 'default').toLowerCase();
-        let game = targetGameId ? await getGameFullState(targetGameId) : await getActiveGame(playerTenant);
+        const rawPT = (player.tenant_id || (req as any).tenantId || 'bingo-lite').toLowerCase();
+        const cleanPlayerTenant = rawPT === 'default' ? 'demo' : rawPT;
+        let game = targetGameId ? await getGameFullState(targetGameId) : await getActiveGame(cleanPlayerTenant);
         if (game) {
           const { data: existingCards } = await supabase.from('cards').select('id').eq('player_id', player.id).eq('game_id', game.id);
           const currentCardCount = existingCards ? existingCards.length : 0;
-          const targetCount = player.card_count || 1;
+          const isFreeGame = (game.is_free === true || game.type === 'free' || Number(game.card_value) === 0);
+          const targetCount = isFreeGame ? 2 : Math.max(1, player.card_count || 1);
           if (currentCardCount < targetCount) {
-            await generateCardsForPlayer(player.id, game.id, targetCount - currentCardCount, false, false);
+            await generateCardsForPlayer(player.id, game.id, targetCount - currentCardCount, false, false, cleanPlayerTenant);
+          } else if (currentCardCount === 0) {
+            await generateCardsForPlayer(player.id, game.id, targetCount, false, false, cleanPlayerTenant);
           }
+          await supabase.from('players').update({ card_count: targetCount, tenant_id: cleanPlayerTenant }).eq('id', player.id);
           await activateWallet(player.phone, game.id);
           payReferralCommission(player, game, targetCount).catch(() => { });
         }
 
-        getChannel(playerTenant).publish('player_approved', { id: player.id, phone: player.phone });
+        getChannel(cleanPlayerTenant).publish('player_approved', { id: player.id, phone: player.phone });
         if (player.phone) {
           sendPushNotification({
             recipient: 'single',
@@ -10509,20 +10543,35 @@ app.post('/api/admin/recharge-requests/:id/reject', requireAdmin, async (req, re
 app.get('/api/players/:phone/cards', async (req, res) => {
   try {
     const phone = normalizePhone(req.params.phone);
-    const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase();
+    const rawTarget = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+    const cleanTenant = rawTarget === 'default' ? 'demo' : rawTarget;
 
     let playerQuery = supabase.from('players').select('*').eq('phone', phone);
-    const cleanTenant = targetTenant === 'default' ? 'demo' : (targetTenant || 'bingo-lite');
     if (cleanTenant && cleanTenant !== 'global') {
       playerQuery = playerQuery.eq('tenant_id', cleanTenant);
     }
 
     let { data: player, error: playerErr } = await playerQuery.maybeSingle();
 
-    if (playerErr && playerErr.code === '42703') {
-      if (targetTenant && targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-        return res.status(404).json({ error: 'Player not found' });
+    // Auto-heal si el jugador fue registrado con tenant_id nulo o 'default'
+    if (!player && cleanTenant) {
+      const { data: legacyPlayer } = await supabase.from('players')
+        .select('*')
+        .eq('phone', phone)
+        .or(`tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.${cleanTenant}`)
+        .order('id', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (legacyPlayer) {
+        player = legacyPlayer;
+        playerErr = null;
+        await supabase.from('players').update({ tenant_id: cleanTenant }).eq('id', player.id);
+        player.tenant_id = cleanTenant;
       }
+    }
+
+    if (playerErr && playerErr.code === '42703') {
       const fallback = await supabase.from('players').select('*').eq('phone', phone).maybeSingle();
       player = fallback.data;
       playerErr = fallback.error;
@@ -10530,44 +10579,52 @@ app.get('/api/players/:phone/cards', async (req, res) => {
 
     if (playerErr || !player) return res.status(404).json({ error: 'Player not found' });
 
-    // Touch player presence
-    touchPlayerPresence(phone, player.name);
+    // Touch player presence con su tenant correspondiente estricto
+    touchPlayerPresence(phone, player.name, cleanTenant);
 
-    // 1. Get active game (can be null)
-    let game = await getActiveGame(targetTenant);
+    // 1. Get active game para esta sala
+    let game = await getActiveGame(cleanTenant);
 
-    // --- AUTO-ASSIGNMENT FOR FREE GAMES ---
-    if (game && (game.is_free || game.type === 'free')) {
-      try {
-        const { count } = await supabase.from('cards')
-          .select('*', { count: 'exact', head: true })
-          .eq('player_id', player.id)
-          .eq('game_id', game.id);
+    // --- AUTO-ASSIGNMENT / SELF-HEALING FOR CARDS ---
+    if (game) {
+      const settings = await getGameSettings(game.id);
+      const cardValNum = parseAmountWithDecimals(game.card_value || '0') || 0;
+      const isFree = (game.is_free === true || game.type === 'free' || settings.is_free === true || settings.type === 'free' || cardValNum === 0 || (typeof game.card_value === 'string' && game.card_value.toLowerCase().includes('gratis'))) && !(game.is_free === false && cardValNum > 0);
+      const isApproved = player.status === 'approved';
 
-        if (count === 0 || count === null) {
-          const isGiftUser = Boolean(player.receipt_url && String(player.receipt_url).includes('GIFT_'));
-          const cardsToAssign = isGiftUser ? 1 : 2;
-          console.log(`[Auto-Assign] Player ${player.phone} has no cards for free game ${game.id}. Assigning ${cardsToAssign} card(s).`);
-          await generateCardsForPlayer(player.id, game.id, cardsToAssign, false, false);
-          if (player.status !== 'approved') {
-            const { error: updateErr } = await supabase.from('players').update({
-              status: 'approved',
-              card_count: cardsToAssign,
-              is_approved: true,
-              is_paid: true
-            }).eq('id', player.id);
+      if (isFree || isApproved) {
+        try {
+          const { count } = await supabase.from('cards')
+            .select('*', { count: 'exact', head: true })
+            .eq('player_id', player.id)
+            .eq('game_id', game.id);
 
-            if (updateErr) {
-              console.warn('[Auto-Assign Player] Update failed (likely missing columns), falling back to status-only update:', updateErr.message);
-              await supabase.from('players').update({ status: 'approved', card_count: cardsToAssign }).eq('id', player.id);
+          if (count === 0 || count === null) {
+            const isGiftUser = Boolean(player.receipt_url && String(player.receipt_url).includes('GIFT_'));
+            const targetCards = isGiftUser ? 1 : (isFree ? 2 : Math.max(2, player.card_count || 2));
+            console.log(`[Auto-Assign/Healing] Player ${player.phone} has no cards for game ${game.id} in room ${cleanTenant}. Generating ${targetCards} cards.`);
+            await generateCardsForPlayer(player.id, game.id, targetCards, false, false, cleanTenant);
+            
+            if (player.status !== 'approved' || (player.card_count || 0) < targetCards) {
+              const { error: updateErr } = await supabase.from('players').update({
+                status: 'approved',
+                card_count: targetCards,
+                is_approved: true,
+                is_paid: true
+              }).eq('id', player.id);
+
+              if (updateErr) {
+                console.warn('[Auto-Assign Player] Update failed, falling back to status-only update:', updateErr.message);
+                await supabase.from('players').update({ status: 'approved', card_count: targetCards }).eq('id', player.id);
+              }
+              player.status = 'approved';
+              player.card_count = targetCards;
             }
-            player.status = 'approved';
-            player.card_count = cardsToAssign;
+            getChannel(cleanTenant).publish('player_approved', { id: player.id, phone: player.phone });
           }
-          getChannel(targetTenant).publish('player_approved', { id: player.id, phone: player.phone });
+        } catch (autoErr) {
+          console.error('[Auto-Assign] Error:', autoErr);
         }
-      } catch (autoErr) {
-        console.error('[Auto-Assign] Error:', autoErr);
       }
     }
 
@@ -12608,37 +12665,51 @@ async function startBackgroundGameLoop() {
 // Ping presence route for players
 app.post('/api/players/ping', (req, res) => {
   try {
-    const { phone, name } = req.body;
+    const { phone, name, tenantId } = req.body;
     if (!phone) {
       return res.status(400).json({ error: 'Phone is required for ping' });
     }
-    const tId = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default');
-    touchPlayerPresence(phone, name, tId);
-    res.json({ success: true, online_count: onlinePlayers.size });
+    const rawTId = ((tenantId as string) || (req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+    const cleanTId = rawTId === 'default' ? 'demo' : rawTId;
+    touchPlayerPresence(phone, name, cleanTId);
+
+    const now = Date.now();
+    let tenantCount = 0;
+    for (const [key, value] of onlinePlayers.entries()) {
+      if (now - value.timestamp <= 120000) {
+        const pTenant = ((value as any).tenant_id || 'bingo-lite').toLowerCase();
+        const cleanPT = pTenant === 'default' ? 'demo' : pTenant;
+        if (cleanPT === cleanTId) {
+          tenantCount++;
+        }
+      }
+    }
+    res.json({ success: true, online_count: tenantCount });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Online players list and count for admins (Aislado por Sala / Tenant)
+// Online players list and count for admins (Aislado estrictamente por Sala / Tenant)
 app.get('/api/admin/online-players', (req, res) => {
   try {
-    const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
+    const rawTarget = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+    const targetTenant = rawTarget === 'default' ? 'demo' : rawTarget;
     const now = Date.now();
     const activeOnline: any[] = [];
     for (const [key, value] of onlinePlayers.entries()) {
       if (now - value.timestamp <= 120000) {
-        const pTenant = ((value as any).tenant_id || 'default').toLowerCase();
+        const pTenant = ((value as any).tenant_id || 'bingo-lite').toLowerCase();
+        const cleanPT = pTenant === 'default' ? 'demo' : pTenant;
         if (
-          !targetTenant ||
           targetTenant === 'global' ||
-          pTenant === targetTenant ||
-          ((targetTenant === 'default' || targetTenant === 'bingo-lite') && (pTenant === 'default' || pTenant === 'bingo-lite'))
+          cleanPT === targetTenant
         ) {
           activeOnline.push({
             phone: value.phone,
             name: value.name,
-            last_active: value.timestamp
+            last_active: value.timestamp,
+            tenant_id: cleanPT
           });
         }
       } else {

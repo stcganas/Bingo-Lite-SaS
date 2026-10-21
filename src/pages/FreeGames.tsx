@@ -12,7 +12,7 @@ import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
 export default function FreeGames() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { tenantPrefix, tenantSlug } = useTenant();
+  const { tenant, tenantPrefix, tenantSlug } = useTenant();
   const [currentView, setCurrentView] = useState<'games' | 'leaderboard'>('games');
   const [freeGames, setFreeGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,20 +79,23 @@ export default function FreeGames() {
     if (user && user.role === 'player' && user.phone) {
       setClaimingGameId(gameId);
       try {
-        const res = await apiFetch('/api/players/claim-free-cards', {
+        const rawTenant = tenantSlug || tenant?.slug || 'bingo-lite';
+        const cleanTenant = rawTenant === 'default' ? 'demo' : rawTenant.toLowerCase();
+        const res = await apiFetch(`/api/players/claim-free-cards?tenantId=${encodeURIComponent(cleanTenant)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             phone: user.phone,
             name: user.name,
-            gameId
+            gameId,
+            tenantId: cleanTenant
           })
         });
         const data = await res.json();
         if (res.ok && data.success) {
           setClaimedGameIds(prev => new Set([...prev, gameId]));
           toast.success('¡Tus 2 cartones gratis se han cargado exitosamente! 🎉');
-          navigate(`/player?gameId=${gameId}`);
+          navigate(`${tenantPrefix || ''}/player?gameId=${gameId}`);
           return;
         }
         if (!res.ok && (data.alreadyClaimed || data.error?.includes('Ya has reclamado'))) {

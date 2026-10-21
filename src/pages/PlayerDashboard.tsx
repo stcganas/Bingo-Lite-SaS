@@ -1117,14 +1117,17 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
 
     const sendPing = async () => {
       try {
-        await fetch('/api/players/ping', {
+        const rawTenant = effectiveTenant || slug || tenantSlug || user?.tenant_id || player?.tenant_id || 'bingo-lite';
+        const cleanTenant = rawTenant === 'default' ? 'demo' : rawTenant.toLowerCase();
+        await apiFetch(`/api/players/ping?tenantId=${encodeURIComponent(cleanTenant)}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
             phone: activePhone,
-            name: user?.name || player?.name || 'Jugador'
+            name: user?.name || player?.name || 'Jugador',
+            tenantId: cleanTenant
           })
         });
       } catch (err) {
@@ -1139,7 +1142,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     const interval = setInterval(sendPing, 45000);
 
     return () => clearInterval(interval);
-  }, [user?.phone, player?.phone, user?.name, player?.name]);
+  }, [user?.phone, player?.phone, user?.name, player?.name, effectiveTenant, slug, tenantSlug, user?.tenant_id, player?.tenant_id]);
 
   useEffect(() => {
     if (gameState && gameState.ai_chat_enabled === false) {

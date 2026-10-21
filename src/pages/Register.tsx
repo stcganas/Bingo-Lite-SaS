@@ -11,6 +11,7 @@ import { ReceiptScanner, ReceiptScanningModal } from '../components/ReceiptScann
 
 export default function Register() {
   const navigate = useNavigate();
+  const { slug } = useParams<{ slug?: string }>();
   const [searchParams] = useSearchParams();
   const invitedBy = searchParams.get('invited_by') || '';
   const inviteId = searchParams.get('invite_id') || '';
@@ -24,6 +25,9 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [activeGame, setActiveGame] = useState<any>(null);
   const [showPassword, setShowPassword] = useState(false);
+
+  const rawTenantCandidate = (slug || tenantSlug || tenant?.slug || 'bingo-lite').toLowerCase();
+  const cleanTenant = rawTenantCandidate === 'default' ? 'demo' : rawTenantCandidate;
 
   const cardPriceNumber = Math.max(0, Number(String(activeGame?.card_value ?? '').replace(/[^0-9.-]+/g, "")) || 0);
   const isFreeGame = Boolean(
@@ -109,7 +113,8 @@ export default function Register() {
   }, [invitedBy, isFreeGame]);
 
   useEffect(() => {
-    const fetchGamePath = gameId ? `/api/game?id=${gameId}` : '/api/game';
+    const tenantParam = `tenantId=${encodeURIComponent(cleanTenant)}`;
+    const fetchGamePath = gameId ? `/api/game?id=${gameId}&${tenantParam}` : `/api/game?${tenantParam}`;
     apiFetch(fetchGamePath)
       .then(async res => {
         if (!res.ok) throw new Error('Error al cargar el juego');
@@ -227,7 +232,7 @@ export default function Register() {
     data.append('phone', normalizedPhone);
     data.append('city', formData.city);
     if (formData.email) data.append('email', formData.email.trim());
-    data.append('tenant_id', tenant.id || tenantSlug || 'default');
+    data.append('tenant_id', cleanTenant);
     data.append('access_code', formData.room_code || tenant.access_code || 'LITE777');
     if (formData.seller_code) data.append('seller_code', formData.seller_code);
     if (formData.player_ref) data.append('player_ref', formData.player_ref);
@@ -249,8 +254,8 @@ export default function Register() {
     if (!isFreeGame && file) data.append('receipt', file);
 
     try {
-      console.log('Enviando registro para:', normalizedPhone);
-      const res = await apiFetch('/api/players', {
+      console.log('Enviando registro para:', normalizedPhone, 'en sala:', cleanTenant);
+      const res = await apiFetch(`/api/players?tenantId=${encodeURIComponent(cleanTenant)}`, {
         method: 'POST',
         body: data,
       });
@@ -279,7 +284,7 @@ export default function Register() {
 
       if (result.success) {
         // Guardar token y sesión de jugador directamente para garantizar autenticación inmediata
-        const currentSlug = tenantSlug || tenant.slug || 'bingo-lite';
+        const currentSlug = cleanTenant;
         if (result.token) {
           localStorage.setItem('bingo_player_token', result.token);
         }
@@ -337,7 +342,7 @@ ${roomDirectUrl}
           console.warn('Auto open WhatsApp blocked:', e);
         }
         
-        const successRoute = tenantPrefix ? `${tenantPrefix}/registration-success` : '/registration-success';
+        const successRoute = tenantPrefix ? `${tenantPrefix}/registration-success` : (currentSlug !== 'bingo-lite' ? `/sala/${currentSlug}/registration-success` : '/registration-success');
         navigate(successRoute, { 
           state: { 
             registrationData: {
