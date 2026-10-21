@@ -18,17 +18,21 @@ const gameSettingsCache = new Map<string, { value: any, timestamp: number }>();
 const SETTINGS_CACHE_TTL = 30000; // 30 seconds
 
 function resolveSettingsKey(gameIdOrScope: number | string, tenantId?: string): { key: string; tenant: string } {
+  if (gameIdOrScope === 'platform_landing') {
+    return { key: 'saas_landing_maintenance', tenant: 'global' };
+  }
   if (gameIdOrScope === 'global' || (typeof gameIdOrScope === 'string' && isNaN(Number(gameIdOrScope)))) {
-    const rawTid = (tenantId || (typeof gameIdOrScope === 'string' && gameIdOrScope !== 'global' ? gameIdOrScope : 'default')).toLowerCase();
-    const tid = rawTid === 'global' ? 'default' : rawTid;
+    const rawTid = (tenantId || (typeof gameIdOrScope === 'string' && gameIdOrScope !== 'global' ? gameIdOrScope : 'bingo-lite')).toLowerCase();
+    const tid = (rawTid === 'default' || rawTid === 'global' || !rawTid) ? 'bingo-lite' : rawTid;
     return {
-      key: tid === 'default' ? 'app_global_settings' : `room_settings_${tid}`,
+      key: `room_settings_${tid}`,
       tenant: tid
     };
   }
+  const normTenant = (tenantId === 'default' || tenantId === 'global' || !tenantId) ? 'bingo-lite' : tenantId.toLowerCase();
   return {
     key: `gameSettings_${gameIdOrScope}`,
-    tenant: (tenantId || 'default').toLowerCase()
+    tenant: normTenant
   };
 }
 
@@ -1330,14 +1334,18 @@ async function requireAdmin(req: express.Request, res: express.Response, next: e
 
       // Si es un admin de sala (no superadmin), aislar estrictamente a su sala asignada
       if (!adminSession.isSuperAdmin) {
-        const adminTenant = (adminSession.tenant_id || '').toLowerCase();
-        if (targetTenantId && targetTenantId.toLowerCase() !== adminTenant && targetTenantId !== 'default') {
+        const adminTenant = (adminSession.tenant_id || 'bingo-lite').toLowerCase();
+        const normTarget = (targetTenantId || '').toLowerCase();
+        const isMainTenant = (normTarget === 'default' || normTarget === 'bingo-lite' || !normTarget) && 
+                             (adminTenant === 'default' || adminTenant === 'bingo-lite');
+
+        if (!isMainTenant && normTarget && normTarget !== 'default' && normTarget !== adminTenant) {
           return res.status(403).json({
             error: `Acceso denegado: Tus permisos de administrador pertenecen exclusivamente a la sala "${adminSession.tenant_id}". No puedes gestionar "${targetTenantId}".`
           });
         }
         // Sobrescribir tenantId con el tenant verificado del admin para garantizar aislamiento
-        (req as any).tenantId = adminTenant;
+        (req as any).tenantId = isMainTenant ? 'bingo-lite' : adminTenant;
         (req as any).isSuperAdmin = false;
       } else {
         (req as any).isSuperAdmin = true;
@@ -2378,7 +2386,8 @@ app.post('/api/admin/settings/player-commission', requireAdmin, async (req, res)
 // Maintenance & Updates Mode Endpoints (Estrictamente Aislados por Sala / Tenant)
 app.get('/api/maintenance-status', async (req, res) => {
   try {
-    const targetTenant = getTenantIdFromRequest(req);
+    const rawTenant = req.query.slug || req.query.tenantId || req.query.tenant || getTenantIdFromRequest(req);
+    const targetTenant = (rawTenant === 'default' || rawTenant === 'global' || !rawTenant) ? 'bingo-lite' : String(rawTenant).toLowerCase();
     const settings = await getGameSettings('global', targetTenant);
     res.json({
       maintenance_mode: settings.maintenance_mode === true,
@@ -2392,7 +2401,11 @@ app.get('/api/maintenance-status', async (req, res) => {
 
 app.post('/api/admin/maintenance', requireAdmin, async (req, res) => {
   try {
-    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const adminUser = (req as any).adminUser;
+    const rawTenant = (!adminUser?.isSuperAdmin && adminUser?.tenant_id)
+      ? adminUser.tenant_id
+      : ((req as any).tenantId || req.body.tenant_id || getTenantIdFromRequest(req));
+    const targetTenant = (rawTenant === 'default' || rawTenant === 'global' || !rawTenant) ? 'bingo-lite' : String(rawTenant).toLowerCase();
     const { maintenance_mode, maintenance_message } = req.body;
     const updates: any = {};
     if (maintenance_mode !== undefined) updates.maintenance_mode = Boolean(maintenance_mode);
@@ -2413,6 +2426,54 @@ app.post('/api/admin/maintenance', requireAdmin, async (req, res) => {
     }
 
     res.json({ success: true, tenant_id: targetTenant, ...updates });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint público para que la landing page verifique su propio estado de mantenimiento
+app.get('/api/landing-maintenance-status', async (req, res) => {
+  try {
+    const { data } = await supabase.from('settings').select('value').eq('key', 'saas_landing_maintenance').maybeSingle();
+    let val: any = {};
+    if (data?.value) {
+      val = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+    }
+    res.json({
+      active: val.active === true,
+      message: val.message || 'La plataforma principal de Bingo Lite se encuentra temporalmente en mantenimiento y actualización de sistemas. Volveremos muy pronto.'
+    });
+  } catch (err) {
+    res.json({ active: false, message: '' });
+  }
+});
+
+// Endpoint administrativo para que el Super Admin active/desactive mantenimiento en la landing page principal
+app.post('/api/superadmin/landing-maintenance', requireAdmin, async (req, res) => {
+  try {
+    const adminUser = (req as any).adminUser;
+    if (!adminUser?.isSuperAdmin) {
+      return res.status(403).json({ error: 'Solo el Super Administrador puede gestionar el mantenimiento de la página principal.' });
+    }
+    const { active, message } = req.body;
+    const payload = {
+      active: Boolean(active),
+      message: message || 'La plataforma principal de Bingo Lite se encuentra temporalmente en mantenimiento y actualización de sistemas. Volveremos muy pronto.',
+      updated_at: new Date().toISOString()
+    };
+
+    await supabase.from('settings').upsert({
+      key: 'saas_landing_maintenance',
+      value: JSON.stringify(payload)
+    });
+
+    try {
+      await getChannel('bingo-global').publish('landing_maintenance_updated', payload);
+    } catch (e) {
+      console.warn('[LandingMaintenance] Error publishing update:', e);
+    }
+
+    res.json({ success: true, ...payload });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -2805,19 +2866,27 @@ app.delete('/api/admin/sellers/:id', requireAdmin, async (req, res) => {
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const { data: existingSeller } = await supabase.from('sellers').select('id, tenant_id').eq('id', id).maybeSingle();
       if (!existingSeller) return res.status(404).json({ error: 'Revendedor no encontrado' });
-      const sTenant = (existingSeller.tenant_id || 'default').toLowerCase();
-      if (sTenant !== adminUser.tenant_id.toLowerCase()) {
+      const sTenant = (existingSeller.tenant_id || 'bingo-lite').toLowerCase();
+      const adminTenant = adminUser.tenant_id.toLowerCase();
+      const isMainTenant = (sTenant === 'default' || sTenant === 'bingo-lite') && 
+                           (adminTenant === 'default' || adminTenant === 'bingo-lite');
+      if (!isMainTenant && sTenant !== adminTenant) {
         return res.status(403).json({ error: 'Acceso denegado: Este revendedor pertenece a otra sala.' });
       }
     }
 
-    // Delete from auth first
-    const { error: authError } = await supabase.auth.admin.deleteUser(id);
-    if (authError) return res.status(500).json({ error: authError.message });
+    // 1. Eliminar primero de la base de datos de sellers
+    const { error: dbError } = await supabase.from('sellers').delete().eq('id', id);
+    if (dbError) {
+      return res.status(500).json({ error: dbError.message });
+    }
 
-    // Should cascade to sellers table due to ON DELETE CASCADE
-    // but just in case:
-    await supabase.from('sellers').delete().eq('id', id);
+    // 2. Intentar eliminar usuario de Auth sin fallar si ya no existe
+    try {
+      await supabase.auth.admin.deleteUser(id);
+    } catch (authErr: any) {
+      console.warn('[DeleteSeller] Aviso eliminando usuario de auth:', authErr?.message);
+    }
 
     res.json({ success: true });
   } catch (error: any) {
@@ -4261,9 +4330,12 @@ app.post('/api/games', requireAdmin, async (req, res) => {
   console.log('--- CREATING NEW GAME ---');
   try {
     const adminUser = (req as any).adminUser;
-    const targetTenant = adminUser.isSuperAdmin
-      ? (req.body.tenant_id || (req as any).tenantId || req.query.tenantId || 'default').toLowerCase()
-      : (adminUser.tenant_id || 'default').toLowerCase();
+    const rawTargetTenant = adminUser.isSuperAdmin
+      ? (req.body.tenant_id || (req as any).tenantId || req.query.tenantId || 'bingo-lite')
+      : (adminUser.tenant_id || 'bingo-lite');
+    const targetTenant = (rawTargetTenant === 'default' || rawTargetTenant === 'global' || !rawTargetTenant)
+      ? 'bingo-lite'
+      : rawTargetTenant.toLowerCase();
 
     const {
       name, start_time, prize, card_value, patterns, rematchPatterns, type, prize_type,
@@ -4273,7 +4345,7 @@ app.post('/api/games', requireAdmin, async (req, res) => {
     console.log('Creation data:', { name, start_time, type, prize_type, active_lottery, active_draw, targetTenant });
 
     // 1. Garantizar que el tenant exista en la tabla tenants de Supabase para evitar violación de Foreign Key
-    if (targetTenant && targetTenant !== 'default') {
+    if (targetTenant) {
       try {
         const { data: tData } = await supabase.from('tenants').select('id').eq('id', targetTenant).maybeSingle();
         if (!tData) {
@@ -4293,20 +4365,28 @@ app.post('/api/games', requireAdmin, async (req, res) => {
     }
 
     // 2. Sanitizar datos numéricos y de texto para evitar errores de sintaxis en PostgreSQL
-    const cleanCardValue = Number(String(card_value || 0).replace(/[^0-9.]/g, '')) || 0;
+    const cleanCardValue = Number(String(card_value || 0).replace(/\./g, '').replace(/,/g, '').replace(/[^0-9]/g, '')) || 0;
     const cleanPrize = prize !== undefined && prize !== null ? String(prize).trim() : '0';
+
+    let isoStartTime = new Date().toISOString();
+    if (start_time) {
+      try {
+        const d = new Date(start_time);
+        if (!isNaN(d.getTime())) {
+          isoStartTime = d.toISOString();
+        }
+      } catch (e) { }
+    }
 
     const newGame: any = {
       name: name ? String(name).trim() : 'Gran Bingo',
-      start_time: start_time || new Date().toISOString(),
+      start_time: isoStartTime,
       prize: cleanPrize,
       card_value: cleanCardValue,
       status: 'scheduled',
-      drawn_balls: []
+      drawn_balls: [],
+      tenant_id: targetTenant
     };
-    if (targetTenant && targetTenant !== 'global') {
-      newGame.tenant_id = targetTenant;
-    }
 
     let { data: game, error } = await supabase.from('game').insert(newGame).select().single();
     if (error && error.message && error.message.includes('tenant_id')) {
@@ -4443,10 +4523,17 @@ app.patch('/api/games/:id', requireAdmin, async (req, res) => {
     // Only update fields allowed to be updated without breaking existing sold cards
     const updateData: any = {};
     if (name) updateData.name = String(name).trim();
-    if (start_time) updateData.start_time = start_time;
+    if (start_time) {
+      try {
+        const d = new Date(start_time);
+        if (!isNaN(d.getTime())) {
+          updateData.start_time = d.toISOString();
+        }
+      } catch (e) { }
+    }
     if (prize !== undefined) updateData.prize = String(prize).trim();
     if (card_value !== undefined) {
-      updateData.card_value = Number(String(card_value).replace(/[^0-9.]/g, '')) || 0;
+      updateData.card_value = Number(String(card_value).replace(/\./g, '').replace(/,/g, '').replace(/[^0-9]/g, '')) || 0;
     }
     if (type !== undefined) {
       updateData.is_free = type === 'free';
@@ -5076,12 +5163,30 @@ app.get('/api/patterns', async (req, res) => {
 app.post('/api/patterns', requireAdmin, async (req, res) => {
   const { id, name, grid, is_active } = req.body;
   const adminUser = (req as any).adminUser;
-  const rawTargetTenant = (req as any).tenantId || getTenantIdFromRequest(req) || adminUser?.tenant_id || 'default';
-  const targetTenant = rawTargetTenant === 'global' ? 'default' : rawTargetTenant.toLowerCase();
+  const rawTargetTenant = (!adminUser?.isSuperAdmin && adminUser?.tenant_id)
+    ? adminUser.tenant_id
+    : ((req as any).tenantId || req.body.tenant_id || getTenantIdFromRequest(req) || 'bingo-lite');
+  const targetTenant = (rawTargetTenant === 'default' || rawTargetTenant === 'global' || !rawTargetTenant)
+    ? 'bingo-lite'
+    : rawTargetTenant.toLowerCase();
   
   cachedPatternsByTenant.delete(targetTenant);
   cachedPatternsByTenant.delete('default');
   cachedPatternsByTenant.delete('bingo-lite');
+
+  const cleanName = String(name || '').trim();
+  if (!cleanName) {
+    return res.status(400).json({ error: 'El patrón debe tener un nombre válido' });
+  }
+
+  // Sanitizar grid a formato 5x5
+  let safeGrid = grid;
+  if (typeof safeGrid === 'string') {
+    try { safeGrid = JSON.parse(safeGrid); } catch (e) { }
+  }
+  if (!Array.isArray(safeGrid) || safeGrid.length !== 5) {
+    safeGrid = Array(5).fill(null).map(() => Array(5).fill(false));
+  }
 
   if (id) {
     const { data: existingPattern } = await supabase.from('patterns').select('*').eq('id', id).maybeSingle();
@@ -5090,21 +5195,17 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
     }
 
     if (!adminUser?.isSuperAdmin) {
-      const pTenant = (existingPattern.tenant_id || 'default').toLowerCase();
-      const isMainTenant = (pTenant === 'default' || pTenant === 'bingo-lite') && (targetTenant === 'default' || targetTenant === 'bingo-lite');
+      const pTenant = (existingPattern.tenant_id || 'bingo-lite').toLowerCase();
+      const isMainTenant = (pTenant === 'default' || pTenant === 'bingo-lite') && 
+                           (targetTenant === 'default' || targetTenant === 'bingo-lite');
       if (!isMainTenant && pTenant !== targetTenant) {
         return res.status(403).json({ error: 'Acceso denegado: Este patrón pertenece a otra sala.' });
       }
     }
 
-    const cleanName = String(name || '').trim();
-    if (!cleanName) {
-      return res.status(400).json({ error: 'El patrón debe tener un nombre válido' });
-    }
-
     let updatePayload: any = { 
       name: cleanName, 
-      grid, 
+      grid: safeGrid, 
       is_active: is_active ?? true 
     };
     if (existingPattern.tenant_id) {
@@ -5120,7 +5221,7 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
       .single();
 
     if (error && error.message && (error.message.includes('tenant_id') || error.message.includes('is_active'))) {
-      const fallbackPayload: any = { name: cleanName, grid };
+      const fallbackPayload: any = { name: cleanName, grid: safeGrid };
       if (is_active !== undefined) fallbackPayload.is_active = is_active;
       const fallback = await supabase.from('patterns')
         .update(fallbackPayload)
@@ -5134,14 +5235,9 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   } else {
-    const cleanName = String(name || '').trim();
-    if (!cleanName) {
-      return res.status(400).json({ error: 'El patrón debe tener un nombre válido' });
-    }
-
     let newPattern: any = { 
       name: cleanName, 
-      grid, 
+      grid: safeGrid, 
       is_active: is_active ?? true, 
       tenant_id: targetTenant 
     };
@@ -5151,7 +5247,7 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
       .single();
 
     if (error && error.message && (error.message.includes('tenant_id') || error.message.includes('is_active'))) {
-      const fallbackPayload: any = { name: cleanName, grid };
+      const fallbackPayload: any = { name: cleanName, grid: safeGrid };
       if (is_active !== undefined) fallbackPayload.is_active = is_active;
       const fallback = await supabase.from('patterns')
         .insert(fallbackPayload)
@@ -5169,8 +5265,12 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
 // Delete Pattern (Hard delete con protección de pertenencia a sala)
 app.delete('/api/patterns/:id', requireAdmin, async (req, res) => {
   const adminUser = (req as any).adminUser;
-  const rawTargetTenant = (req as any).tenantId || getTenantIdFromRequest(req) || adminUser?.tenant_id || 'default';
-  const targetTenant = rawTargetTenant === 'global' ? 'default' : rawTargetTenant.toLowerCase();
+  const rawTargetTenant = (!adminUser?.isSuperAdmin && adminUser?.tenant_id)
+    ? adminUser.tenant_id
+    : ((req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite');
+  const targetTenant = (rawTargetTenant === 'default' || rawTargetTenant === 'global' || !rawTargetTenant)
+    ? 'bingo-lite'
+    : rawTargetTenant.toLowerCase();
 
   cachedPatternsByTenant.delete(targetTenant);
   cachedPatternsByTenant.delete('default');
@@ -5181,11 +5281,20 @@ app.delete('/api/patterns/:id', requireAdmin, async (req, res) => {
     const { data: existingPattern } = await supabase.from('patterns').select('id, tenant_id').eq('id', req.params.id).maybeSingle();
     if (existingPattern && existingPattern.tenant_id) {
       const pTenant = existingPattern.tenant_id.toLowerCase();
-      const isMainTenant = (pTenant === 'default' || pTenant === 'bingo-lite') && (targetTenant === 'default' || targetTenant === 'bingo-lite');
+      const isMainTenant = (pTenant === 'default' || pTenant === 'bingo-lite') && 
+                           (targetTenant === 'default' || targetTenant === 'bingo-lite');
       if (!isMainTenant && pTenant !== targetTenant) {
         return res.status(403).json({ error: 'Acceso denegado: Este patrón pertenece a otra sala.' });
       }
     }
+  }
+
+  // Verificar si está en uso en algún juego antes de intentar borrar
+  const { data: inUse } = await supabase.from('game_patterns').select('id').eq('pattern_id', req.params.id).limit(1);
+  if (inUse && inUse.length > 0) {
+    // Si está en uso, marcar como inactivo en lugar de que PostgreSQL lance error de FK
+    await supabase.from('patterns').update({ is_active: false }).eq('id', req.params.id);
+    return res.json({ success: true, deactivated: true });
   }
 
   const { error } = await supabase.from('patterns').delete().eq('id', req.params.id);

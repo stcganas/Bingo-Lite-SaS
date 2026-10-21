@@ -635,7 +635,8 @@ export default function AdminDashboard() {
   const [isSavingMaintenance, setIsSavingMaintenance] = useState(false);
 
   useEffect(() => {
-    apiFetch('/api/maintenance-status')
+    const effectiveSlug = (slug || user?.tenant_id || 'bingo-lite').toLowerCase();
+    apiFetch(`/api/maintenance-status?slug=${encodeURIComponent(effectiveSlug)}`)
       .then(res => res.json())
       .then(data => {
         if (data) {
@@ -644,7 +645,7 @@ export default function AdminDashboard() {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [slug, user?.tenant_id]);
 
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isSavingAutoplay, setIsSavingAutoplay] = useState(false);
@@ -5903,12 +5904,14 @@ export default function AdminDashboard() {
                       onClick={async () => {
                         setIsSavingMaintenance(true);
                         try {
+                          const effectiveSlug = (slug || user?.tenant_id || 'bingo-lite').toLowerCase();
                           const res = await apiFetch('/api/admin/maintenance', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                               maintenance_mode: maintenanceMode,
-                              maintenance_message: maintenanceMessage
+                              maintenance_message: maintenanceMessage,
+                              tenant_id: effectiveSlug
                             })
                           });
                           if (res.ok) {

@@ -230,6 +230,66 @@ export default function SuperAdminDashboard() {
   const [notifyRoom, setNotifyRoom] = useState<Room | null>(null);
   const [showNotify, setShowNotify] = useState(false);
   const [filterActive, setFilterActive] = useState<'all' | 'active' | 'suspended'>('all');
+  const [landingMaintenance, setLandingMaintenance] = useState({ active: false, message: '' });
+  const [savingLandingMaintenance, setSavingLandingMaintenance] = useState(false);
+
+  const fetchLandingMaintenance = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/landing-maintenance-status');
+      if (res.ok) {
+        const d: any = await res.json();
+        setLandingMaintenance({ active: !!d.active, message: d.message || '' });
+      }
+    } catch { }
+  }, []);
+
+  const handleToggleLandingMaintenance = async () => {
+    setSavingLandingMaintenance(true);
+    try {
+      const nextState = !landingMaintenance.active;
+      const res = await apiFetch('/api/superadmin/landing-maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          active: nextState,
+          message: landingMaintenance.message
+        })
+      });
+      if (res.ok) {
+        setLandingMaintenance(prev => ({ ...prev, active: nextState }));
+        toast.success(nextState ? 'Mantenimiento de Página Principal activado' : 'Mantenimiento de Página Principal desactivado');
+      } else {
+        toast.error('Error al actualizar mantenimiento');
+      }
+    } catch {
+      toast.error('Error de conexión');
+    } finally {
+      setSavingLandingMaintenance(false);
+    }
+  };
+
+  const handleSaveLandingMessage = async () => {
+    setSavingLandingMaintenance(true);
+    try {
+      const res = await apiFetch('/api/superadmin/landing-maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          active: landingMaintenance.active,
+          message: landingMaintenance.message
+        })
+      });
+      if (res.ok) {
+        toast.success('Mensaje de mantenimiento actualizado');
+      } else {
+        toast.error('Error al guardar mensaje');
+      }
+    } catch {
+      toast.error('Error de conexión');
+    } finally {
+      setSavingLandingMaintenance(false);
+    }
+  };
 
   const fetchStats = useCallback(async () => {
     try {
@@ -254,7 +314,10 @@ export default function SuperAdminDashboard() {
     finally { setLoadingRooms(false); }
   }, []);
 
-  useEffect(() => { fetchStats(); }, [fetchStats]);
+  useEffect(() => { 
+    fetchStats(); 
+    fetchLandingMaintenance();
+  }, [fetchStats, fetchLandingMaintenance]);
   useEffect(() => { if (tab === 'rooms' || tab === 'overview') fetchRooms(); }, [tab, fetchRooms]);
 
   const handleStatusToggle = async (room: Room) => {
@@ -436,6 +499,55 @@ export default function SuperAdminDashboard() {
               <>
                 <div className="sa-page-title">Panel de Control Global</div>
                 <div className="sa-page-sub">Gestion centralizada de todas las salas de bingo en la plataforma.</div>
+
+                {/* ── Control de Mantenimiento de la Página Principal (SaaS Global) ── */}
+                <div className="sa-section" style={{ background: 'linear-gradient(135deg, rgba(30,27,75,0.4), #0f0f22)', border: '1px solid #312e81', borderRadius: '16px', padding: '18px 22px', marginBottom: '20px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '14px', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <div style={{ width: '42px', height: '42px', borderRadius: '12px', background: landingMaintenance.active ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)', color: landingMaintenance.active ? '#f87171' : '#34d399', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <Icon path={landingMaintenance.active ? ICONS.ban : ICONS.check} cls="w-6 h-6" />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          Mantenimiento Página Principal (SaaS Global)
+                          <span style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '10px', fontWeight: 700, background: landingMaintenance.active ? 'rgba(239,68,68,0.25)' : 'rgba(16,185,129,0.25)', color: landingMaintenance.active ? '#fca5a5' : '#6ee7b7' }}>
+                            {landingMaintenance.active ? 'BLOQUEADA' : 'DISPONIBLE'}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '2px' }}>
+                          Controla exclusivamente la pantalla de mantenimiento de la página de inicio (bingolite.click /). No afecta las salas individuales.
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      className={`sa-btn ${landingMaintenance.active ? 'sa-btn-success' : 'sa-btn-danger'}`}
+                      style={{ padding: '8px 18px', fontSize: '0.85rem' }}
+                      disabled={savingLandingMaintenance}
+                      onClick={handleToggleLandingMaintenance}
+                    >
+                      <Icon path={landingMaintenance.active ? ICONS.check : ICONS.ban} cls="w-4 h-4" />
+                      {savingLandingMaintenance ? 'Procesando...' : landingMaintenance.active ? 'Desactivar y Abrir Landing' : 'Activar Modo Mantenimiento'}
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginTop: '10px' }}>
+                    <input
+                      style={{ flex: 1, minWidth: '240px', background: '#090918', border: '1px solid #2d2b55', borderRadius: '8px', padding: '8px 12px', color: '#e2e8f0', fontSize: '0.82rem', outline: 'none' }}
+                      placeholder="Mensaje de mantenimiento para la página principal..."
+                      value={landingMaintenance.message}
+                      onChange={e => setLandingMaintenance({ ...landingMaintenance, message: e.target.value })}
+                    />
+                    <button
+                      className="sa-btn sa-btn-ghost"
+                      style={{ padding: '8px 14px' }}
+                      disabled={savingLandingMaintenance}
+                      onClick={handleSaveLandingMessage}
+                    >
+                      <Icon path={ICONS.edit} cls="w-4 h-4" /> Guardar Mensaje
+                    </button>
+                  </div>
+                </div>
+
                 <div className="sa-stats-grid">
                   <StatCard label="Salas registradas" value={stats?.totalRooms || 0} icon={ICONS.rooms} color="#818cf8" />
                   <StatCard label="Jugadores totales" value={stats?.totalPlayers || 0} icon={ICONS.users} color="#34d399" />

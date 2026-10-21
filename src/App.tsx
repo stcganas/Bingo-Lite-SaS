@@ -575,6 +575,7 @@ function ScrollToTop() {
 
 function MaintenanceWrapper({ children }: { children: React.ReactNode }) {
   const [maintenance, setMaintenance] = useState<{ active: boolean; message: string }>({ active: false, message: '' });
+  const [landingMaintenance, setLandingMaintenance] = useState<{ active: boolean; message: string }>({ active: false, message: '' });
   const { user } = useAuth();
   const location = useLocation();
 
@@ -583,17 +584,40 @@ function MaintenanceWrapper({ children }: { children: React.ReactNode }) {
   const currentRoomSlug = roomMatch ? roomMatch[1].toLowerCase() : null;
 
   useEffect(() => {
-    // REGLA CRÍTICA: La página principal del SaaS (/) y rutas públicas globales jamás entran en mantenimiento
+    // 1. Si no es una sala, verificar el estado de mantenimiento propio de la Página Principal / Plataforma
     if (!currentRoomSlug) {
       setMaintenance({ active: false, message: '' });
-      return;
+
+      apiFetch('/api/landing-maintenance-status')
+        .then(res => res.json())
+        .then(data => {
+          if (data) {
+            setLandingMaintenance({ active: Boolean(data.active), message: data.message || '' });
+          }
+        })
+        .catch(() => {});
+
+      const globalChannel = getBingoChannel('bingo-global');
+      const handleLandingUpdate = (msg: any) => {
+        if (msg.data) {
+          setLandingMaintenance({
+            active: Boolean(msg.data.active),
+            message: msg.data.message || ''
+          });
+        }
+      };
+      globalChannel.subscribe('landing_maintenance_updated', handleLandingUpdate);
+      return () => {
+        globalChannel.unsubscribe('landing_maintenance_updated', handleLandingUpdate);
+      };
     }
 
-    // Consultar el estado de mantenimiento específico para esta sala
+    // 2. Si es una sala (/sala/:slug), consultar el estado de mantenimiento exclusivo para esta sala
+    setLandingMaintenance({ active: false, message: '' });
     apiFetch(`/api/maintenance-status?slug=${currentRoomSlug}`)
       .then(res => res.json())
       .then(data => {
-        if (data && (data.tenant_id === currentRoomSlug || !data.tenant_id)) {
+        if (data && (data.tenant_id === currentRoomSlug || !data.tenant_id || currentRoomSlug === 'bingo-lite')) {
           setMaintenance({ active: Boolean(data.maintenance_mode), message: data.maintenance_message || '' });
         }
       })
@@ -604,7 +628,7 @@ function MaintenanceWrapper({ children }: { children: React.ReactNode }) {
     const handleMaintenanceUpdate = (msg: any) => {
       if (msg.data) {
         const msgTenant = (msg.data.tenant_id || '').toLowerCase();
-        if (!msgTenant || msgTenant === currentRoomSlug) {
+        if (!msgTenant || msgTenant === currentRoomSlug || (currentRoomSlug === 'bingo-lite' && msgTenant === 'default')) {
           setMaintenance({
             active: Boolean(msg.data.maintenance_mode),
             message: msg.data.maintenance_message || ''
@@ -618,24 +642,28 @@ function MaintenanceWrapper({ children }: { children: React.ReactNode }) {
     };
   }, [currentRoomSlug]);
 
-  // Si estamos en la landing page o fuera de una sala, jamás mostrar pantalla de mantenimiento
-  if (!currentRoomSlug) {
-    return <>{children}</>;
-  }
-
-  // Rutas administrativas (tanto /admin como /sala/:slug/admin) nunca deben ser bloqueadas
-  const isAdminRoute = location.pathname.includes('/admin');
+  // Rutas administrativas (tanto /admin, /superadmin como /sala/:slug/admin) nunca deben ser bloqueadas
+  const isAdminRoute = location.pathname.includes('/admin') || location.pathname.includes('/superadmin') || location.pathname.includes('/login');
   if (isAdminRoute) {
     return <>{children}</>;
   }
 
-  if (maintenance.active) {
+  // 1. Mantenimiento para salas individuales (/sala/:slug)
+  if (currentRoomSlug && maintenance.active) {
     const isAdmin = user?.role === 'admin';
     const cleanUserPhone = user?.phone ? user.phone.replace(/\D/g, '').slice(-10) : '';
     const isAuthorizedPlayer = cleanUserPhone === '3145261451';
 
     if (!isAdmin && !isAuthorizedPlayer) {
       return <MaintenanceScreen message={maintenance.message} />;
+    }
+  }
+
+  // 2. Mantenimiento para la página principal / plataforma global (controlada desde Super Admin)
+  if (!currentRoomSlug && landingMaintenance.active) {
+    const isSuperAdmin = user?.role === 'admin' && (user?.isSuperAdmin || user?.email === 'stcganas@gmail.com' || user?.email === 'comamosexpress@gmail.com');
+    if (!isSuperAdmin) {
+      return <MaintenanceScreen message={landingMaintenance.message} />;
     }
   }
 
