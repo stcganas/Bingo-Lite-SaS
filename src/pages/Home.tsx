@@ -378,17 +378,17 @@ export default function Home() {
                     </div>
                     <div className="text-slate-700 font-black text-2xl">:</div>
                     <div className="flex flex-col items-center">
-                      <span className="text-3xl font-black text-white leading-none mb-1">{timeLeft.hours.toString().padStart(2, '0')}</span>
+                      <span className="text-3xl font-black text-white leading-none mb-1">{String(timeLeft?.hours ?? 0).padStart(2, '0')}</span>
                       <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Horas</span>
                     </div>
                     <div className="text-slate-700 font-black text-2xl">:</div>
                     <div className="flex flex-col items-center">
-                      <span className="text-3xl font-black text-white leading-none mb-1">{timeLeft.minutes.toString().padStart(2, '0')}</span>
+                      <span className="text-3xl font-black text-white leading-none mb-1">{String(timeLeft?.minutes ?? 0).padStart(2, '0')}</span>
                       <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Min</span>
                     </div>
                     <div className="text-slate-700 font-black text-2xl">:</div>
                     <div className="flex flex-col items-center">
-                      <span className="text-3xl font-black text-yellow-400 leading-none mb-1">{timeLeft.seconds.toString().padStart(2, '0')}</span>
+                      <span className="text-3xl font-black text-yellow-400 leading-none mb-1">{String(timeLeft?.seconds ?? 0).padStart(2, '0')}</span>
                       <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Seg</span>
                     </div>
                   </div>

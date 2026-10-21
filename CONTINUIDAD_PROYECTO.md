@@ -124,6 +124,11 @@
     - **Sincronización de Botones de Control en `AdminDashboard.tsx`:**
       - Los botones "DETENER AUTOPLAY" y "Pausar Sorteo Auto" envían explícitamente el `gameId` en el cuerpo de la petición (`POST /api/admin/game/autoplay/stop`).
       - El servidor localiza el tenant exacto y detiene tanto el sorteo en memoria como en la base de datos de forma atómica.
+17. **Corrección de Error en Aprobación de Jugadores (`TypeError: Cannot read properties of undefined (reading 'toString')`):**
+    - **Causa Raíz:** En `AdminDashboard.tsx` (línea 4683), al aprobar un jugador su estado cambiaba a `'approved'`, lo que activaba de inmediato el renderizado del listado de cartones asignados. En la evaluación de figuras ganadoras (`bingoAlerts.some(a => a.card_number.toString() === cardNum.toString())`), los objetos de `bingoAlerts` contienen la estructura `{ game_pattern_id, winners: [...] }` y no poseen `card_number` en el nivel raíz. Al evaluar `a.card_number.toString()`, JavaScript lanzaba `TypeError: Cannot read properties of undefined (reading 'toString')`, provocando la captura de la pantalla por el `ErrorBoundary`.
+    - **Solución Blindada:** 
+      - En `AdminDashboard.tsx`, se refactorizó la comprobación para validar la existencia de `cardNum`, `a.card_number` y recorrer de forma segura el arreglo `a.winners` usando `String(val)`.
+      - En `PlayerDashboard.tsx` y `Home.tsx`, se protegieron todas las conversiones de números de cartón, identificadores y cuentas regresivas frente a valores `null` o `undefined`.
 
 ---
 

@@ -4679,8 +4679,16 @@ export default function AdminDashboard() {
                         <div className="mt-4 p-3 bg-slate-50 rounded-xl border border-slate-100">
                           <p className="text-[10px] font-black text-slate-400 mb-2 uppercase tracking-widest">Números Asignados</p>
                           <div className="flex flex-wrap gap-1">
-                            {player.cards.map((cardNum: string, idx: number) => {
-                              const isWinner = bingoAlerts.some(a => a.card_number.toString() === cardNum.toString());
+                            {player.cards.map((cardNum: any, idx: number) => {
+                              const isWinner = bingoAlerts.some((a: any) => {
+                                const cNum = cardNum != null ? String(cardNum) : '';
+                                if (!cNum) return false;
+                                if (a?.card_number != null && String(a.card_number) === cNum) return true;
+                                if (Array.isArray(a?.winners)) {
+                                  return a.winners.some((w: any) => w?.card_number != null && String(w.card_number) === cNum);
+                                }
+                                return false;
+                              });
                               return (
                                 <span 
                                   key={`${cardNum}-${idx}`} 

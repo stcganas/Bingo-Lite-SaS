@@ -677,8 +677,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       if (data?.patterns) {
         const winners = new Set<string>();
         data.patterns.forEach((p: any) => {
-          if (p.winner_player_id && p.winner_card_number) {
-            winners.add(p.winner_card_number.toString());
+          if (p?.winner_player_id && p?.winner_card_number != null) {
+            winners.add(String(p.winner_card_number));
           }
         });
         setWinningCards(winners);
@@ -966,8 +966,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       if (safePatterns && safePatterns.length > 0) {
         const winners = new Set<string>();
         safePatterns.forEach((p: any) => {
-          if (p.winner_player_id && p.winner_card_number) {
-            winners.add(p.winner_card_number.toString());
+          if (p?.winner_player_id && p?.winner_card_number != null) {
+            winners.add(String(p.winner_card_number));
           }
         });
         setWinningCards(winners);
@@ -1074,10 +1074,10 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
 
       // Identify if current player is one of the winners
       winners.forEach(w => {
-        if (w.card_number) {
+        if (w?.card_number != null) {
           setWinningCards(prev => {
             const next = new Set(prev);
-            next.add(w.card_number.toString());
+            next.add(String(w.card_number));
             return next;
           });
         }
@@ -2169,7 +2169,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                                 "w-14 h-14 md:w-16 md:h-16 rounded-2xl flex items-center justify-center border-2 shadow-2xl relative overflow-hidden",
                                 gameState?.status === 'scheduled' ? "bg-white/10 border-white/30 backdrop-blur-md" : "bg-slate-800 border-slate-700"
                               )}>
-                                <span className="text-2xl md:text-3xl font-black text-white relative z-10">{value.toString().padStart(2, '0')}</span>
+                                <span className="text-2xl md:text-3xl font-black text-white relative z-10">{String(value ?? 0).padStart(2, '0')}</span>
                                 <div className="absolute inset-x-0 bottom-0 h-1/2 bg-white/5" />
                               </div>
                               <span className={clsx(
@@ -2260,8 +2260,9 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                         [0,0,0,0,0]
                       ];
 
-                      const isWinnerCard = winningCards.has(card.card_number.toString()) || 
-                                           (!isNaN(Number(card.card_number)) && winningCards.has(String(Number(card.card_number))));
+                      const cardNumStr = card?.card_number != null ? String(card.card_number) : '';
+                      const isWinnerCard = (cardNumStr !== '' && winningCards.has(cardNumStr)) || 
+                                           (card?.card_number != null && !isNaN(Number(card.card_number)) && winningCards.has(String(Number(card.card_number))));
 
                       const { hasWonPattern } = getAllWinningCellsForCard(
                         card,
@@ -2369,7 +2370,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                                       <button
                                         key={`${rIdx}-${cIdx}`}
                                         data-no-click-sound="true"
-                                        onClick={(e) => toggleCell(e, card.id.toString(), rIdx, cIdx, cell)}
+                                        onClick={(e) => toggleCell(e, String(card?.id ?? ''), rIdx, cIdx, cell)}
                                         className={clsx(
                                           "aspect-square flex items-center justify-center font-black transition-all transform active:scale-90 shadow-sm relative",
                                           isCompact 
