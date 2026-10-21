@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Trophy, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock, Grid, Volume2, VolumeX, Radio, Maximize2, Minimize2, X, MessageSquare, Bot, Sparkles, Wallet, LogOut, Plus, Share2, Copy, MessageCircle, ChevronDown, ChevronUp, Users, List, BellRing, PlusCircle, Key, ShieldCheck } from 'lucide-react';
+import { Trophy, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock, Grid, Volume2, VolumeX, Radio, Maximize2, Minimize2, X, MessageSquare, Bot, Sparkles, Wallet, LogOut, Plus, Share2, Copy, MessageCircle, ChevronDown, ChevronUp, Users, List, BellRing, PlusCircle, Key, ShieldCheck, History } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
@@ -19,7 +19,7 @@ import PushSubscriptionBanner from '../components/PushSubscriptionBanner';
 import { useTTS } from '../hooks/useTTS';
 import { useAuth } from '../AuthContext';
 import { useTenant } from '../TenantContext';
-import { getBingoChannel } from '../ably';
+import { getBingoChannel, ably } from '../ably';
 import { announceBall } from '../utils/speech';
 import { playMarkSound, playUnmarkSound, playErrorSound, playChatOpenSound, playChatCloseSound, playSynthesizedDJEffect, getAudioContext, setGlobalFxVolume, getGlobalFxVolume, playBase64PCM, playFxFromUrl } from '../utils/sound';
 import { Gift, Send, Info } from 'lucide-react';
@@ -29,6 +29,96 @@ import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
 import { ReceiptScanner, ReceiptScanningModal } from '../components/ReceiptScanner';
 import celebratingBingoBg from '../assets/images/celebrating_bingo_bg_1791949145658.jpg';
 
+const normalizeBalls = (balls: any): number[] => {
+  if (!balls) return [];
+  let parsed = balls;
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch (e) { parsed = []; }
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.map((b: any) => Number(b)).filter((n: number) => !isNaN(n) && n > 0);
+};
+
+export const getBallLetter = (ball: number): string => {
+  if (ball >= 1 && ball <= 15) return 'B';
+  if (ball >= 16 && ball <= 30) return 'I';
+  if (ball >= 31 && ball <= 45) return 'N';
+  if (ball >= 46 && ball <= 60) return 'G';
+  if (ball >= 61 && ball <= 75) return 'O';
+  return '';
+};
+
+export const getBallVisualTheme = (ball: number) => {
+  const letter = getBallLetter(ball);
+  switch (letter) {
+    case 'B':
+      return {
+        letter: 'B',
+        badgeBg: 'bg-rose-600',
+        gradient: 'from-rose-500 via-red-600 to-rose-700',
+        glow: 'shadow-rose-500/40',
+        text: 'text-rose-600',
+        border: 'border-rose-400',
+        lightBg: 'bg-rose-50',
+        chipBg: 'bg-rose-500 text-white'
+      };
+    case 'I':
+      return {
+        letter: 'I',
+        badgeBg: 'bg-sky-600',
+        gradient: 'from-sky-500 via-blue-600 to-indigo-700',
+        glow: 'shadow-blue-500/40',
+        text: 'text-blue-600',
+        border: 'border-blue-400',
+        lightBg: 'bg-blue-50',
+        chipBg: 'bg-blue-600 text-white'
+      };
+    case 'N':
+      return {
+        letter: 'N',
+        badgeBg: 'bg-amber-500',
+        gradient: 'from-amber-400 via-orange-500 to-amber-600',
+        glow: 'shadow-amber-500/40',
+        text: 'text-amber-600',
+        border: 'border-amber-400',
+        lightBg: 'bg-amber-50',
+        chipBg: 'bg-amber-500 text-white'
+      };
+    case 'G':
+      return {
+        letter: 'G',
+        badgeBg: 'bg-emerald-600',
+        gradient: 'from-emerald-400 via-green-600 to-emerald-700',
+        glow: 'shadow-emerald-500/40',
+        text: 'text-emerald-600',
+        border: 'border-emerald-400',
+        lightBg: 'bg-emerald-50',
+        chipBg: 'bg-emerald-600 text-white'
+      };
+    case 'O':
+      return {
+        letter: 'O',
+        badgeBg: 'bg-purple-600',
+        gradient: 'from-purple-500 via-violet-600 to-indigo-800',
+        glow: 'shadow-purple-500/40',
+        text: 'text-purple-600',
+        border: 'border-purple-400',
+        lightBg: 'bg-purple-50',
+        chipBg: 'bg-purple-600 text-white'
+      };
+    default:
+      return {
+        letter: '-',
+        badgeBg: 'bg-slate-600',
+        gradient: 'from-slate-500 via-slate-600 to-slate-700',
+        glow: 'shadow-slate-500/40',
+        text: 'text-slate-600',
+        border: 'border-slate-400',
+        lightBg: 'bg-slate-50',
+        chipBg: 'bg-slate-600 text-white'
+      };
+  }
+};
 
 const getProxyUrl = (url: string): string => {
   if (!url) return '';
@@ -52,6 +142,7 @@ const getProxyUrl = (url: string): string => {
 
 export default function PlayerDashboard() {
   const navigate = useNavigate();
+  const { slug } = useParams<{ slug?: string }>();
   const { user, loading: authLoading, logout } = useAuth();
   const { tenantSlug, tenantPrefix } = useTenant();
   const fetchReferralStats = useCallback(async () => {
@@ -143,7 +234,12 @@ ${refUrl}
       fetchReferralStats();
     }
   }, [user?.phone, fetchReferralStats]);
-  const channel = getBingoChannel(tenantSlug || undefined);
+
+  const [player, setPlayer] = useState<any>(null);
+  const effectiveTenant = slug || tenantSlug || (user?.tenant_id && user.tenant_id !== 'global' ? user.tenant_id : undefined) || (player?.tenant_id && player.tenant_id !== 'global' ? player.tenant_id : undefined);
+  const channel = getBingoChannel(effectiveTenant);
+  const [realtimeConnected, setRealtimeConnected] = useState<boolean>(ably.connection.state === 'connected');
+
   const userRef = useRef(user);
   useEffect(() => {
     userRef.current = user;
@@ -153,7 +249,6 @@ ${refUrl}
   const lastAnnouncedBallIdRef = useRef<string | null>(null);
   const lastAnnouncedBallTimeRef = useRef<number>(0);
   
-  const [player, setPlayer] = useState<any>(null);
   const [savedLotteryCodes, setSavedLotteryCodes] = useState<Set<string>>(new Set());
   const [lotteryConfirmed, setLotteryConfirmed] = useState<boolean>(false);
   const [lotteryWinningCode, setLotteryWinningCode] = useState<string | null>(null);
@@ -178,6 +273,26 @@ ${refUrl}
   const [rechargeStatus, setRechargeStatus] = useState<'idle' | 'success' | 'pending' | 'error'>('idle');
   const [rechargeError, setRechargeError] = useState('');
   const [gameState, setGameState] = useState<any>(null);
+
+  // Cálculos reactivos de balotas salientes, contador y progreso
+  const currentDrawnBalls = useMemo(() => {
+    return normalizeBalls(gameState?.drawn_balls);
+  }, [gameState?.drawn_balls]);
+
+  const drawnBallsSet = useMemo(() => {
+    return new Set<number>(currentDrawnBalls);
+  }, [currentDrawnBalls]);
+
+  const lastDrawnBall = currentDrawnBalls.length > 0 ? currentDrawnBalls[currentDrawnBalls.length - 1] : null;
+
+  const recentDrawnBalls = useMemo(() => {
+    if (currentDrawnBalls.length <= 1) return [];
+    return currentDrawnBalls.slice(0, -1).slice(-6).reverse();
+  }, [currentDrawnBalls]);
+
+  const totalDrawn = currentDrawnBalls.length;
+  const remainingBalls = Math.max(0, 75 - totalDrawn);
+  const progressPercent = Math.min(100, Math.round((totalDrawn / 75) * 100));
   const [markedCells, setMarkedCells] = useState<Record<string, boolean>>({});
   const [winningCards, setWinningCards] = useState<Set<string>>(new Set());
   const [bingoLoading, setBingoLoading] = useState(false);
@@ -619,7 +734,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     try {
       const normalizedPhone = currentUser.phone ? normalizePhone(currentUser.phone) : '';
       if (!normalizedPhone) return;
-      const tenantParam = tenantSlug ? `&tenantId=${encodeURIComponent(tenantSlug)}` : '';
+      const tenantParam = effectiveTenant ? `&tenantId=${encodeURIComponent(effectiveTenant)}` : '';
       const res = await apiFetch(`/api/players/${normalizedPhone}/cards?_t=${Date.now()}${tenantParam}`);
       const data = await res.json();
       
@@ -652,7 +767,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
 
   const fetchGameState = async () => {
     try {
-      const res = await apiFetch(`/api/game?_t=${Date.now()}`);
+      const tenantParam = effectiveTenant ? `&tenantId=${encodeURIComponent(effectiveTenant)}` : '';
+      const res = await apiFetch(`/api/game?_t=${Date.now()}${tenantParam}`);
       if (!res.ok) {
         // ignored
         return;
@@ -668,8 +784,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       }
 
       const data = await res.json();
-      if (data && typeof data.drawn_balls === 'string') {
-        try { data.drawn_balls = JSON.parse(data.drawn_balls); } catch(e) { data.drawn_balls = []; }
+      if (data) {
+        data.drawn_balls = normalizeBalls(data.drawn_balls);
       }
       setGameState(data);
 
@@ -701,7 +817,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     if (!currentUser?.phone) return;
     try {
       const normalizedPhone = normalizePhone(currentUser.phone);
-      const tenantParam = tenantSlug ? `&tenantId=${encodeURIComponent(tenantSlug)}` : '';
+      const tenantParam = effectiveTenant ? `&tenantId=${encodeURIComponent(effectiveTenant)}` : '';
       const res = await apiFetch(`/api/wallet?phone=${normalizedPhone}${tenantParam}&gameId=${gameStateRef.current?.id || ''}&_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
@@ -723,7 +839,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     if (!currentUser?.phone) return;
     try {
       const normalizedPhone = normalizePhone(currentUser.phone);
-      const tenantParam = tenantSlug ? `&tenantId=${encodeURIComponent(tenantSlug)}` : '';
+      const tenantParam = effectiveTenant ? `&tenantId=${encodeURIComponent(effectiveTenant)}` : '';
       const res = await apiFetch(`/api/wallet/history?phone=${normalizedPhone}${tenantParam}&_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
@@ -881,19 +997,95 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
         fetchWalletBalance();
       }, 20000);
 
-      // Refrescar inmediatamente al volver a la pestaña
-      const onFocus = () => {
-        fetchWalletBalance();
-        fetchWalletHistory();
+      // Refrescar inmediatamente al volver a la pestaña o al cambiar de foco
+      const onFocusOrVisible = () => {
+        if (document.visibilityState === 'visible') {
+          console.log('[Realtime] Pestaña visible o en foco: sincronizando estado de juego, cartones y saldo...');
+          fetchGameState();
+          fetchCards();
+          fetchWalletBalance();
+          fetchWalletHistory();
+        }
       };
-      window.addEventListener('focus', onFocus);
+      window.addEventListener('focus', onFocusOrVisible);
+      document.addEventListener('visibilitychange', onFocusOrVisible);
 
       return () => {
         clearInterval(interval);
-        window.removeEventListener('focus', onFocus);
+        window.removeEventListener('focus', onFocusOrVisible);
+        document.removeEventListener('visibilitychange', onFocusOrVisible);
       };
     }
-  }, [user?.phone, gameState?.id]);
+  }, [user?.phone, gameState?.id, effectiveTenant]);
+
+  // Listener de ciclo de vida de conexión en tiempo real con Ably (auto-recuperación de conexión)
+  useEffect(() => {
+    const handleConnected = () => {
+      console.log('[Ably Realtime] Conectado exitosamente al canal en vivo');
+      setRealtimeConnected(true);
+      fetchGameState();
+      fetchCards();
+      fetchWalletBalance();
+    };
+
+    const handleDisconnected = () => {
+      console.warn('[Ably Realtime] Desconectado temporalmente de la sala');
+      setRealtimeConnected(false);
+    };
+
+    const handleSuspended = () => {
+      console.warn('[Ably Realtime] Conexión de red suspendida');
+      setRealtimeConnected(false);
+    };
+
+    ably.connection.on('connected', handleConnected);
+    ably.connection.on('disconnected', handleDisconnected);
+    ably.connection.on('suspended', handleSuspended);
+    setRealtimeConnected(ably.connection.state === 'connected');
+
+    return () => {
+      ably.connection.off('connected', handleConnected);
+      ably.connection.off('disconnected', handleDisconnected);
+      ably.connection.off('suspended', handleSuspended);
+    };
+  }, [effectiveTenant]);
+
+  // Heartbeat de auto-reconciliación activa durante el juego (garantiza cero desincronizaciones)
+  useEffect(() => {
+    if (!gameState?.id || (gameState.status !== 'playing' && gameState.status !== 'paused')) {
+      return;
+    }
+
+    const reconcileGame = async () => {
+      try {
+        const tenantParam = effectiveTenant ? `&tenantId=${encodeURIComponent(effectiveTenant)}` : '';
+        const res = await apiFetch(`/api/game?_t=${Date.now()}${tenantParam}`);
+        if (!res.ok) return;
+        const freshGame = await res.json();
+        if (!freshGame || !freshGame.id) return;
+
+        const serverBalls = normalizeBalls(freshGame.drawn_balls);
+        const currentBalls = normalizeBalls(gameStateRef.current?.drawn_balls);
+
+        // Si el servidor tiene más balotas o el estado de juego cambió, actualiza de inmediato
+        if (serverBalls.length !== currentBalls.length || freshGame.status !== gameStateRef.current?.status) {
+          console.log(`[Reconcile] Desincronización resuelta: local (${currentBalls.length}) vs servidor (${serverBalls.length})`);
+          freshGame.drawn_balls = serverBalls;
+          const safePatterns = (freshGame.patterns && freshGame.patterns.length > 0) ? freshGame.patterns : (gameStateRef.current?.patterns || []);
+          setGameState((prev: any) => ({
+            ...prev,
+            ...freshGame,
+            patterns: safePatterns
+          }));
+        }
+      } catch (err) {
+        // Silencioso
+      }
+    };
+
+    const reconcileInterval = setInterval(reconcileGame, 3500);
+    return () => clearInterval(reconcileInterval);
+  }, [gameState?.id, gameState?.status, effectiveTenant]);
 
   // Keep player marked as online via a background heartbeat ping
   useEffect(() => {
@@ -992,6 +1184,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     const onBallDrawn = (msg: any) => {
       console.log('DEBUG: Evento ball_drawn recibido en PlayerDashboard:', msg.data);
       const ball = Number(msg.data);
+      if (isNaN(ball) || ball <= 0) return;
       const msgId = msg.id || `${ball}-${Date.now()}`;
       
       // Deduplicate audio events to prevent overlapping locutions ("se medio menciona una y termina cantando otra")
@@ -1009,15 +1202,25 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       // Update local state immediately
       setGameState((prev: any) => {
         if (!prev) return prev;
-        let currentBalls = prev.drawn_balls || [];
-        if (typeof currentBalls === 'string') {
-          try { currentBalls = JSON.parse(currentBalls); } catch(e) { currentBalls = []; }
-        }
+        const currentBalls = normalizeBalls(prev.drawn_balls);
         if (currentBalls.includes(ball)) return prev;
         return { ...prev, drawn_balls: [...currentBalls, ball] };
       });
     };
     channel.subscribe('ball_drawn', onBallDrawn);
+
+    const onServerAutoplayUpdated = (msg: any) => {
+      console.log('DEBUG: Evento server_autoplay_updated recibido en PlayerDashboard:', msg.data);
+      fetchGameState();
+    };
+    channel.subscribe('server_autoplay_updated', onServerAutoplayUpdated);
+
+    const onGamesUpdated = () => {
+      console.log('DEBUG: Evento games_updated recibido en PlayerDashboard');
+      fetchGameState();
+      fetchCards();
+    };
+    channel.subscribe('games_updated', onGamesUpdated);
 
     const onPlayerApproved = (msg: any) => {
       console.log('DEBUG: Evento player_approved recibido, refrescando...');
@@ -1185,6 +1388,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       channel.unsubscribe('game_finished', onGameFinished);
       channel.unsubscribe('payment_banner', onPaymentBanner);
       channel.unsubscribe('play_dj_sound', onPlayDjSound);
+      channel.unsubscribe('server_autoplay_updated', onServerAutoplayUpdated);
+      channel.unsubscribe('games_updated', onGamesUpdated);
     };
   }, [channel]);
 
@@ -1217,9 +1422,9 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
 
   const announceLastBalls = () => {
     if (isAnnouncingWinnerRef.current) return;
-    if (!gameState?.drawn_balls || gameState.drawn_balls.length === 0) return;
-    const lastBalls = gameState.drawn_balls.slice(-5);
-    toast.success('Re-anunciando últimas 5 balotas...');
+    if (!currentDrawnBalls.length) return;
+    const lastBalls = currentDrawnBalls.slice(-5);
+    toast.success('Re-anunciando últimas balotas...');
     lastBalls.forEach((ball: number) => {
       announceBall(ball, false);
     });
@@ -1256,7 +1461,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
     e.stopPropagation();
     if (value === 'FREE' || value === 0 || value === '0') return;
     
-    const isDrawn = gameState?.drawn_balls?.includes(value);
+    const numVal = Number(value);
+    const isDrawn = !isNaN(numVal) && drawnBallsSet.has(numVal);
     
     if (!isDrawn) {
       if (!isMutedRef.current) {
@@ -1704,17 +1910,34 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                   {gameState.card_value && <span className="flex items-center gap-1.5"><Grid size={14} className="text-blue-500" /> Cartón: <span className="text-blue-600 font-black">{formatCurrency(gameState.card_value)}</span></span>}
                 </div>
               </div>
-              <div className="bg-blue-50 px-6 py-3 rounded-2xl border border-blue-100 flex items-center gap-4">
+              <div className="bg-blue-50 px-5 py-3 rounded-2xl border border-blue-100 flex items-center gap-4">
                 <div className="text-right">
-                  <span className="text-[10px] font-black text-slate-400 uppercase block tracking-widest">Balotas</span>
-                  <span className="font-black text-blue-800 text-2xl">{gameState.drawn_balls?.length || 0}</span>
+                  <div className="flex items-center gap-1.5 justify-end">
+                    <span className="flex h-2 w-2 relative">
+                      <span className={clsx(
+                        "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+                        realtimeConnected ? "bg-emerald-400" : "bg-amber-400"
+                      )} />
+                      <span className={clsx(
+                        "relative inline-flex rounded-full h-2 w-2",
+                        realtimeConnected ? "bg-emerald-500" : "bg-amber-500"
+                      )} />
+                    </span>
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                      {realtimeConnected ? 'En Vivo' : 'Conectando'}
+                    </span>
+                  </div>
+                  <div className="flex items-baseline justify-end gap-1 mt-0.5">
+                    <span className="font-black text-blue-900 text-2xl leading-none">{totalDrawn}</span>
+                    <span className="font-bold text-slate-400 text-xs">/ 75</span>
+                  </div>
                 </div>
                 <div className="w-px h-8 bg-blue-200" />
                 <button 
                   onClick={announceLastBalls}
                   className="p-3 bg-yellow-400 hover:bg-yellow-500 rounded-xl transition text-yellow-900 shadow-sm active:scale-90"
                   title="Re-anunciar últimas balotas"
-                  disabled={!gameState?.drawn_balls?.length}
+                  disabled={!totalDrawn}
                 >
                   <Volume2 size={20} />
                 </button>
@@ -2043,7 +2266,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                 <h3 className="text-lg font-black text-slate-800 mb-6 uppercase tracking-wider flex items-center gap-2">
                   <Grid size={24} className="text-blue-500" /> Tablero General
                 </h3>
-                <BingoBoard drawnBalls={gameState?.drawn_balls || []} />
+                <BingoBoard drawnBalls={currentDrawnBalls} />
               </div>
             )}
 
@@ -2191,6 +2414,197 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                           className="h-full bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.5)]"
                         />
                       </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Panel de Balotas Salientes y Contador en Tiempo Real */}
+                {gameState && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white rounded-[2.5rem] p-5 sm:p-6 shadow-2xl border-4 border-slate-700/60 relative overflow-hidden"
+                  >
+                    {/* Efectos de luz ambiente de fondo */}
+                    <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+                    <div className="absolute bottom-0 left-0 w-80 h-80 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+
+                    {/* Cabecera superior del panel */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-700/80 relative z-10">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex h-3 w-3 relative">
+                          <span className={clsx(
+                            "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+                            realtimeConnected ? "bg-emerald-400" : "bg-amber-400"
+                          )} />
+                          <span className={clsx(
+                            "relative inline-flex rounded-full h-3 w-3",
+                            realtimeConnected ? "bg-emerald-500" : "bg-amber-500"
+                          )} />
+                        </span>
+                        <div>
+                          <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-white flex items-center gap-2">
+                            Balotas Salientes & Tablero En Vivo
+                          </h3>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                            {realtimeConnected ? 'Sincronizado en tiempo real' : 'Reconectando sala...'}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={announceLastBalls}
+                          disabled={!currentDrawnBalls.length}
+                          className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="Repetir locución de las últimas balotas"
+                        >
+                          <Volume2 size={14} />
+                          <span className="hidden sm:inline">Repetir Balotas</span>
+                        </button>
+
+                        <button
+                          onClick={handleSync}
+                          disabled={syncing}
+                          className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-xl transition active:scale-95 disabled:opacity-50"
+                          title="Sincronizar manualmente"
+                        >
+                          <RefreshCw size={16} className={clsx(syncing && "animate-spin text-blue-400")} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Contenido: Balota actual 3D + Contador con barra + Historial reciente */}
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-5 pt-5 items-center relative z-10">
+                      
+                      {/* 1. Balota Actual Saliente en 3D */}
+                      <div className="md:col-span-4 flex flex-col items-center justify-center p-3 sm:p-4 bg-slate-800/80 rounded-3xl border border-slate-700/80 shadow-inner">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                          {gameState.status === 'playing' ? '🔴 Balota Actual Cantada' : 'Balota en Juego'}
+                        </span>
+
+                        {lastDrawnBall ? (() => {
+                          const theme = getBallVisualTheme(lastDrawnBall);
+                          return (
+                            <AnimatePresence mode="wait">
+                              <motion.div
+                                key={lastDrawnBall}
+                                initial={{ scale: 0.5, rotate: -20, opacity: 0 }}
+                                animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                                exit={{ scale: 0.8, opacity: 0 }}
+                                transition={{ type: "spring", stiffness: 350, damping: 20 }}
+                                className={clsx(
+                                  "relative w-28 h-28 sm:w-32 sm:h-32 rounded-full p-1.5 shadow-2xl flex items-center justify-center bg-gradient-to-br",
+                                  theme.gradient,
+                                  theme.glow
+                                )}
+                              >
+                                <div className="absolute top-1 left-4 w-1/2 h-1/3 bg-white/30 rounded-full blur-[2px] pointer-events-none" />
+                                <div className="absolute inset-0 rounded-full ring-2 ring-white/40 pointer-events-none" />
+
+                                <div className="w-full h-full rounded-full flex flex-col items-center justify-center text-center">
+                                  <span className="text-white text-base sm:text-lg font-black tracking-widest drop-shadow-md leading-none">
+                                    {theme.letter}
+                                  </span>
+                                  <div className="bg-white w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center shadow-lg border-2 border-black/10 mt-1">
+                                    <span className="text-slate-900 font-black text-2xl sm:text-3xl leading-none">
+                                      {lastDrawnBall}
+                                    </span>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            </AnimatePresence>
+                          );
+                        })() : (
+                          <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full border-4 border-dashed border-slate-600 flex flex-col items-center justify-center text-slate-400">
+                            <Clock size={28} className="animate-pulse mb-1 text-slate-500" />
+                            <span className="text-[10px] font-black uppercase tracking-wider text-center px-2">
+                              En Espera...
+                            </span>
+                          </div>
+                        )}
+
+                        <span className="text-[11px] font-black uppercase tracking-wider text-slate-300 mt-3 flex items-center gap-1.5">
+                          {lastDrawnBall ? `Letra ${getBallLetter(lastDrawnBall)} - Número ${lastDrawnBall}` : 'Sin balotas sorteadas'}
+                        </span>
+                      </div>
+
+                      {/* 2. Contador de Balotas y Progreso */}
+                      <div className="md:col-span-4 flex flex-col justify-center space-y-3 p-4 bg-slate-800/80 rounded-3xl border border-slate-700/80">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                            Contador de Balotas
+                          </span>
+                          <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                            {progressPercent}% Jugado
+                          </span>
+                        </div>
+
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-4xl sm:text-5xl font-black text-white tracking-tight">
+                            {totalDrawn}
+                          </span>
+                          <span className="text-xl sm:text-2xl font-bold text-slate-400">
+                            / 75
+                          </span>
+                          <span className="text-xs font-bold text-slate-400 uppercase ml-auto">
+                            Balotas
+                          </span>
+                        </div>
+
+                        {/* Barra de progreso interactiva */}
+                        <div className="w-full bg-slate-700/80 rounded-full h-3 p-0.5 overflow-hidden border border-slate-600">
+                          <motion.div
+                            className="h-full bg-gradient-to-r from-blue-500 via-emerald-400 to-amber-400 rounded-full shadow-lg"
+                            initial={{ width: 0 }}
+                            animate={{ width: `${progressPercent}%` }}
+                            transition={{ duration: 0.5, ease: "easeOut" }}
+                          />
+                        </div>
+
+                        <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-wider text-slate-400">
+                          <span>Salieron: {totalDrawn}</span>
+                          <span className="text-amber-400 font-extrabold">Faltan: {remainingBalls}</span>
+                        </div>
+                      </div>
+
+                      {/* 3. Historial de Últimas Balotas Salientes */}
+                      <div className="md:col-span-4 flex flex-col justify-center p-4 bg-slate-800/80 rounded-3xl border border-slate-700/80 h-full">
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2.5 flex items-center gap-1.5">
+                          <History size={12} className="text-slate-400" /> Últimas Balotas Cantadas
+                        </span>
+
+                        {recentDrawnBalls.length > 0 ? (
+                          <div className="flex flex-wrap gap-2 items-center">
+                            {recentDrawnBalls.map((ball, idx) => {
+                              const theme = getBallVisualTheme(ball);
+                              return (
+                                <div
+                                  key={`${ball}-${idx}`}
+                                  className={clsx(
+                                    "flex items-center gap-1.5 px-2.5 py-1.5 rounded-2xl border shadow-md transition transform hover:scale-105",
+                                    theme.border,
+                                    "bg-slate-900/90"
+                                  )}
+                                  title={`Balota ${theme.letter}-${ball}`}
+                                >
+                                  <span className={clsx("w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black", theme.chipBg)}>
+                                    {theme.letter}
+                                  </span>
+                                  <span className="text-white font-black text-sm">
+                                    {ball}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-center py-4 text-slate-500 text-xs font-bold uppercase tracking-wider">
+                            {totalDrawn > 0 ? 'Solo ha salido una balota' : 'Aún no han salido balotas'}
+                          </div>
+                        )}
+                      </div>
+
                     </div>
                   </motion.div>
                 )}
@@ -2361,7 +2775,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                                 <React.Fragment key={rIdx}>
                                   {row.map((cell, cIdx) => {
                                     const isFree = cell === 'FREE' || cell === 0 || cell === '0';
-                                    const isDrawn = gameState?.drawn_balls?.includes(cell);
+                                    const numCell = Number(cell);
+                                    const isDrawn = !isFree && !isNaN(numCell) && drawnBallsSet.has(numCell);
                                     const isMarked = markedCells[`${card.id}-${rIdx}-${cIdx}`];
                                     const isWinner = winner !== null;
                                     const shouldShowCell = !isWinner || isMarked || isFree;
