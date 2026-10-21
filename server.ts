@@ -3729,6 +3729,10 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
     const rawTargetTenant = ((req.query.tenantId as string) || (req.query.tenant as string) || (req.query.slug as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
     const targetTenant = rawTargetTenant === 'default' ? 'demo' : rawTargetTenant;
 
+    // 0. Cargar roomSettings para verificar fecha de reseteo del torneo y aislamiento de sala
+    const roomSettings = await getGameSettings('global', targetTenant);
+    const tournamentResetAt: string | null = roomSettings.tournament_reset_at || null;
+
     // 1. Obtener juegos de esta sala específica para detectar cuáles son gratis y pagos
     let gamesQuery = supabase
       .from('game')
@@ -3758,27 +3762,35 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
 
     const freeGameIdList = Array.from(freeGameIds);
 
-    // 2. Obtener patrones ganadores de juegos gratis activos en la tabla game_patterns (estrictamente de esta sala)
+    // 2. Obtener patrones ganadores de juegos gratis activos en la tabla game_patterns (estrictamente de esta sala y de la temporada actual)
     let freeWinningPatterns: any[] = [];
     if (freeGameIdList.length > 0) {
-      const { data: wpData } = await supabase
+      let wpQuery = supabase
         .from('game_patterns')
         .select('id, game_id, pattern_id, winner_player_id, prize, won_at')
         .in('game_id', freeGameIdList)
         .not('winner_player_id', 'is', null)
         .order('won_at', { ascending: false });
 
+      if (tournamentResetAt) {
+        wpQuery = wpQuery.gt('won_at', tournamentResetAt);
+      }
+
+      const { data: wpData } = await wpQuery;
       if (wpData) {
         freeWinningPatterns = wpData;
       }
     }
 
-    // 3. Obtener premios históricos de la tabla persistente free_game_prizes filtrados por sala
+    // 3. Obtener premios de la tabla persistente free_game_prizes filtrados por sala y temporada actual
     const dbFreePrizesList: any[] = [];
     try {
       let fpQuery = supabase.from('free_game_prizes').select('*');
       if (targetTenant && targetTenant !== 'global') {
         fpQuery = fpQuery.eq('tenant_id', targetTenant);
+      }
+      if (tournamentResetAt) {
+        fpQuery = fpQuery.gt('won_at', tournamentResetAt);
       }
       const { data: dbFreePrizes } = await fpQuery;
       if (dbFreePrizes && Array.isArray(dbFreePrizes)) {
@@ -3786,11 +3798,14 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
       }
     } catch (e) { }
 
-    // 4. Obtener premios de respaldo específicos de esta sala en roomSettings (NUNCA en globalSettings)
-    const roomSettings = await getGameSettings('global', targetTenant);
-    const customPrizes: any[] = Array.isArray(roomSettings.custom_free_game_prizes)
+    // 4. Obtener premios de respaldo específicos de esta sala en roomSettings (temporada actual)
+    let customPrizes: any[] = Array.isArray(roomSettings.custom_free_game_prizes)
       ? [...roomSettings.custom_free_game_prizes]
       : [];
+    if (tournamentResetAt) {
+      const resetTime = new Date(tournamentResetAt).getTime();
+      customPrizes = customPrizes.filter(cp => !cp.won_at || new Date(cp.won_at).getTime() > resetTime);
+    }
 
     // Recolectar todos los IDs de jugadores y patrones para buscar sus nombres
     const playerIds = new Set<number>();
@@ -3834,16 +3849,21 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
       }
     }
 
-    // 6. Contador de juegos pagos específico de esta sala
+    // 6. Contador de juegos pagos específico de esta sala (en la temporada actual)
     const paidGamesPlayedMap = new Map<number, Set<number>>();
 
     // 6a. De la tabla cards para los juegos pagos de esta sala
     if (paidGameIds.size > 0) {
-      const { data: allCardsData } = await supabase
+      let cardsQuery = supabase
         .from('cards')
-        .select('player_id, game_id')
+        .select('player_id, game_id, created_at')
         .in('game_id', Array.from(paidGameIds));
 
+      if (tournamentResetAt) {
+        cardsQuery = cardsQuery.gt('created_at', tournamentResetAt);
+      }
+
+      const { data: allCardsData } = await cardsQuery;
       if (allCardsData) {
         allCardsData.forEach(c => {
           const pid = Number(c.player_id);
@@ -3860,9 +3880,12 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
 
     // 6b. De la tabla player_paid_game_participations filtrada por esta sala
     try {
-      let partQ = supabase.from('player_paid_game_participations').select('player_id, game_id');
+      let partQ = supabase.from('player_paid_game_participations').select('player_id, game_id, created_at');
       if (targetTenant && targetTenant !== 'global') {
         partQ = partQ.eq('tenant_id', targetTenant);
+      }
+      if (tournamentResetAt) {
+        partQ = partQ.gt('created_at', tournamentResetAt);
       }
       const { data: dbParts } = await partQ;
       if (dbParts && Array.isArray(dbParts)) {
@@ -4125,7 +4148,9 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
       total_players_winning: ranking.length,
       total_distributed: totalDistributed,
       free_games_count: freeGameIdList.length,
-      paid_games_count_total: paidGameIds.size
+      paid_games_count_total: paidGameIds.size,
+      tournament_reset_at: tournamentResetAt,
+      tournament_history: Array.isArray(roomSettings.tournament_history) ? roomSettings.tournament_history : []
     });
   } catch (err: any) {
     console.error('Error in /api/free-games/leaderboard:', err);
@@ -4265,6 +4290,163 @@ app.delete('/api/admin/free-games/prize/:id', requireAdmin, async (req, res) => 
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Resetear Torneo de Juegos Gratuitos a $0 y archivar la temporada cerrada (Administrador)
+app.post('/api/admin/free-games/reset-tournament', requireAdmin, async (req, res) => {
+  try {
+    const { tenantId, tenant_id, reason } = req.body;
+    const rawTargetTenant = ((tenantId || tenant_id || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite') as string).toLowerCase();
+    const targetTenant = rawTargetTenant === 'default' ? 'demo' : rawTargetTenant;
+
+    // 1. Obtener roomSettings actuales de esta sala específica
+    const roomSettings = await getGameSettings('global', targetTenant);
+    const nowIso = new Date().toISOString();
+    const previousResetAt: string | null = roomSettings.tournament_reset_at || null;
+
+    // 2. Construir snapshot de la temporada actual para archivarla en el historial antes de resetear a $0
+    let gamesQuery = supabase.from('game').select('id, is_free, card_value').eq('tenant_id', targetTenant);
+    const { data: gData } = await gamesQuery;
+    const freeGIds: number[] = [];
+    if (gData) {
+      for (const g of gData) {
+        const s = await getGameSettings(Number(g.id), targetTenant);
+        if (isGameFree(g, s)) freeGIds.push(Number(g.id));
+      }
+    }
+
+    // Patrones ganadores actuales
+    let wpList: any[] = [];
+    if (freeGIds.length > 0) {
+      let q = supabase.from('game_patterns').select('id, game_id, pattern_id, winner_player_id, prize, won_at')
+        .in('game_id', freeGIds)
+        .not('winner_player_id', 'is', null);
+      if (previousResetAt) q = q.gt('won_at', previousResetAt);
+      const { data: w } = await q;
+      if (w) wpList = w;
+    }
+
+    // Premios de free_game_prizes actuales
+    let fpList: any[] = [];
+    try {
+      let fpQ = supabase.from('free_game_prizes').select('*').eq('tenant_id', targetTenant);
+      if (previousResetAt) fpQ = fpQ.gt('won_at', previousResetAt);
+      const { data: fpData } = await fpQ;
+      if (fpData) fpList = fpData;
+    } catch (e) { }
+
+    // Premios personalizados actuales
+    let cpList = Array.isArray(roomSettings.custom_free_game_prizes) ? [...roomSettings.custom_free_game_prizes] : [];
+    if (previousResetAt) {
+      const resetTime = new Date(previousResetAt).getTime();
+      cpList = cpList.filter(cp => !cp.won_at || new Date(cp.won_at).getTime() > resetTime);
+    }
+
+    // Consolidar acumulados por jugador
+    const summaryMap = new Map<number, { player_id: number; total_won: number; count: number }>();
+    const addPrizeToSummary = (pid: number, amt: number) => {
+      if (!pid || !amt || amt <= 0) return;
+      const cur = summaryMap.get(pid) || { player_id: pid, total_won: 0, count: 0 };
+      cur.total_won += amt;
+      cur.count += 1;
+      summaryMap.set(pid, cur);
+    };
+
+    fpList.forEach(p => addPrizeToSummary(Number(p.player_id), Number(p.prize_amount) || 0));
+    wpList.forEach(w => addPrizeToSummary(Number(w.winner_player_id), Number(w.prize) || 0));
+    cpList.forEach(c => addPrizeToSummary(Number(c.player_id), Number(c.amount) || 0));
+
+    // Obtener nombres de los primeros 5 jugadores
+    const sortedWinners = Array.from(summaryMap.values()).sort((a, b) => b.total_won - a.total_won);
+    const topPids = sortedWinners.slice(0, 5).map(w => w.player_id);
+    const playerNamesMap = new Map<number, { name: string; phone: string }>();
+    if (topPids.length > 0) {
+      const { data: pNames } = await supabase.from('players').select('id, name, phone').in('id', topPids);
+      if (pNames) {
+        pNames.forEach(p => playerNamesMap.set(p.id, { name: p.name, phone: p.phone }));
+      }
+    }
+
+    const archivedSeason = {
+      id: `season_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      closed_at: nowIso,
+      started_at: previousResetAt || 'Inicio del Torneo',
+      reason: reason || 'Meta de $300.000 COP completada / Reseteo de temporada',
+      closed_by: (req as any).user?.email || (req as any).adminUser?.email || 'admin',
+      total_distributed: sortedWinners.reduce((sum, w) => sum + w.total_won, 0),
+      total_players_winning: sortedWinners.length,
+      goal_winner: sortedWinners[0] ? {
+        player_id: sortedWinners[0].player_id,
+        player_name: playerNamesMap.get(sortedWinners[0].player_id)?.name || `Jugador #${sortedWinners[0].player_id}`,
+        player_phone: playerNamesMap.get(sortedWinners[0].player_id)?.phone || '',
+        total_won: sortedWinners[0].total_won,
+        reached_goal: sortedWinners[0].total_won >= 300000
+      } : null,
+      second_place_winner: sortedWinners[1] ? {
+        player_id: sortedWinners[1].player_id,
+        player_name: playerNamesMap.get(sortedWinners[1].player_id)?.name || `Jugador #${sortedWinners[1].player_id}`,
+        player_phone: playerNamesMap.get(sortedWinners[1].player_id)?.phone || '',
+        total_won: sortedWinners[1].total_won
+      } : null,
+      third_place_winner: sortedWinners[2] ? {
+        player_id: sortedWinners[2].player_id,
+        player_name: playerNamesMap.get(sortedWinners[2].player_id)?.name || `Jugador #${sortedWinners[2].player_id}`,
+        player_phone: playerNamesMap.get(sortedWinners[2].player_id)?.phone || '',
+        total_won: sortedWinners[2].total_won
+      } : null
+    };
+
+    // 3. Actualizar historial de temporadas en roomSettings
+    const history = Array.isArray(roomSettings.tournament_history) ? [...roomSettings.tournament_history] : [];
+    if (archivedSeason.total_distributed > 0 || archivedSeason.goal_winner) {
+      history.unshift(archivedSeason);
+    }
+
+    // 4. Guardar settings de la sala con tournament_reset_at actualizado a AHORA y contadores en 0
+    await saveGameSettings('global', {
+      tournament_reset_at: nowIso,
+      tournament_history: history,
+      custom_free_game_prizes: [],
+      paid_game_participations: {}
+    }, targetTenant);
+
+    // 5. Limpieza física preventiva en BD de la sala
+    try {
+      await supabase.from('free_game_prizes').delete().eq('tenant_id', targetTenant);
+    } catch (e) {
+      console.warn(`[ResetTournament] Notice limpiando free_game_prizes para sala ${targetTenant}:`, e);
+    }
+
+    try {
+      await supabase.from('player_paid_game_participations').delete().eq('tenant_id', targetTenant);
+    } catch (e) {
+      console.warn(`[ResetTournament] Notice limpiando player_paid_game_participations para sala ${targetTenant}:`, e);
+    }
+
+    // 6. Notificar a todos los clientes de la sala en tiempo real por Ably
+    try {
+      getChannel(targetTenant).publish('tournament_reset', {
+        reset_at: nowIso,
+        tenant_id: targetTenant,
+        archived_season: archivedSeason
+      });
+    } catch (realtimeErr) {
+      console.warn(`[ResetTournament] Error notificando Ably en sala ${targetTenant}:`, realtimeErr);
+    }
+
+    console.log(`[ResetTournament] Torneo de Juegos Gratuitos de sala [${targetTenant}] reiniciado a $0 exitosamente a las ${nowIso}`);
+
+    res.json({
+      success: true,
+      message: '¡Torneo de Juegos Gratuitos reiniciado a $0 exitosamente!',
+      reset_at: nowIso,
+      archived_season: archivedSeason,
+      tenant_id: targetTenant
+    });
+  } catch (err: any) {
+    console.error('Error in /api/admin/free-games/reset-tournament:', err);
+    res.status(500).json({ error: err.message || 'Error al reiniciar el torneo de juegos gratis' });
   }
 });
 

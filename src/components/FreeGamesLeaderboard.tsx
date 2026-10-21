@@ -3,7 +3,7 @@ import {
   Trophy, Medal, Award, Gift, Calendar, Clock, Sparkles, 
   ChevronDown, ChevronUp, Search, RefreshCw, Plus, Trash2, 
   AlertCircle, CheckCircle2, User, Phone, DollarSign, ShieldAlert,
-  Gamepad2, Check, Edit3, X
+  Gamepad2, Check, Edit3, X, RotateCcw, History, AlertTriangle, Crown
 } from 'lucide-react';
 import clsx from 'clsx';
 import { apiFetch } from '../utils/api';
@@ -44,6 +44,35 @@ interface RankedWinner {
   is_eligible: boolean;
 }
 
+export interface TournamentSeasonHistory {
+  id: string;
+  closed_at: string;
+  started_at?: string;
+  reason?: string;
+  closed_by?: string;
+  total_distributed: number;
+  total_players_winning: number;
+  goal_winner?: {
+    player_id: number;
+    player_name: string;
+    player_phone: string;
+    total_won: number;
+    reached_goal?: boolean;
+  } | null;
+  second_place_winner?: {
+    player_id: number;
+    player_name: string;
+    player_phone: string;
+    total_won: number;
+  } | null;
+  third_place_winner?: {
+    player_id: number;
+    player_name: string;
+    player_phone: string;
+    total_won: number;
+  } | null;
+}
+
 interface LeaderboardData {
   goal_amount: number;
   goal_amount_formatted: string;
@@ -59,6 +88,8 @@ interface LeaderboardData {
   total_distributed: number;
   free_games_count: number;
   paid_games_count_total: number;
+  tournament_reset_at?: string | null;
+  tournament_history?: TournamentSeasonHistory[];
 }
 
 interface FreeGamesLeaderboardProps {
@@ -120,6 +151,15 @@ export default function FreeGamesLeaderboard({ isAdmin = false, tenantId, onClos
   const [adjustPlayerName, setAdjustPlayerName] = useState('');
   const [adjustCount, setAdjustCount] = useState<number>(0);
   const [adjustingPaid, setAdjustingPaid] = useState(false);
+
+  // Admin Modal para Reiniciar Torneo a $0
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetReason, setResetReason] = useState('Meta de $300.000 COP completada');
+  const [confirmSafetyCheck, setConfirmSafetyCheck] = useState(false);
+  const [resettingTournament, setResettingTournament] = useState(false);
+
+  // Modal para ver Historial de Temporadas Anteriores
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   const fetchLeaderboard = async () => {
     try {
@@ -246,6 +286,45 @@ export default function FreeGamesLeaderboard({ isAdmin = false, tenantId, onClos
     }
   };
 
+  const handleResetTournament = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!confirmSafetyCheck) {
+      toast.error('Debes marcar la casilla de confirmación para reiniciar el torneo a $0');
+      return;
+    }
+
+    setResettingTournament(true);
+    try {
+      const res = await apiFetch('/api/admin/free-games/reset-tournament', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: currentTenant,
+          reason: resetReason.trim() || 'Meta de $300.000 COP completada'
+        })
+      });
+
+      const resData = await res.json();
+      if (res.ok && resData.success) {
+        toast.success('¡Torneo de Juegos Gratuitos reiniciado exitosamente a $0!', {
+          duration: 5000,
+          icon: '🔄'
+        });
+        setShowResetModal(false);
+        setConfirmSafetyCheck(false);
+        setResetReason('Meta de $300.000 COP completada');
+        await fetchLeaderboard();
+      } else {
+        toast.error(resData.error || 'Error al reiniciar el torneo');
+      }
+    } catch (err: any) {
+      console.error('Error resetting tournament:', err);
+      toast.error('Error de conexión al reiniciar el torneo');
+    } finally {
+      setResettingTournament(false);
+    }
+  };
+
   const filteredRanking = data?.ranking.filter(item => {
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
@@ -297,14 +376,39 @@ export default function FreeGamesLeaderboard({ isAdmin = false, tenantId, onClos
               <span className="hidden sm:inline">Actualizar</span>
             </button>
 
-            {isAdmin && (
+            {data?.tournament_history && data.tournament_history.length > 0 && (
               <button
-                onClick={() => setShowAddModal(true)}
-                className="px-4 py-3 bg-white text-yellow-950 hover:bg-yellow-100 rounded-2xl font-black transition shadow-lg flex items-center gap-2 text-xs uppercase tracking-wider active:scale-95"
+                onClick={() => setShowHistoryModal(true)}
+                className="px-3.5 py-3 bg-yellow-400/25 hover:bg-yellow-400/40 text-yellow-100 rounded-2xl backdrop-blur-md border border-yellow-300/40 transition shadow-md active:scale-95 flex items-center gap-2 text-xs font-black uppercase tracking-wider"
+                title="Ver temporadas finalizadas anteriores"
               >
-                <Plus size={16} />
-                <span>+ Registrar Premio</span>
+                <History size={16} className="text-yellow-300" />
+                <span>Historial ({data.tournament_history.length})</span>
               </button>
+            )}
+
+            {isAdmin && (
+              <>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="px-4 py-3 bg-white text-yellow-950 hover:bg-yellow-100 rounded-2xl font-black transition shadow-lg flex items-center gap-2 text-xs uppercase tracking-wider active:scale-95"
+                >
+                  <Plus size={16} />
+                  <span>+ Premio</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setConfirmSafetyCheck(false);
+                    setShowResetModal(true);
+                  }}
+                  className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black transition shadow-lg flex items-center gap-2 text-xs uppercase tracking-wider active:scale-95 border-2 border-red-400"
+                  title="Reiniciar acumulados de los juegos gratis a $0"
+                >
+                  <RotateCcw size={16} />
+                  <span>Reiniciar a $0</span>
+                </button>
+              </>
             )}
 
             {onClose && (
@@ -365,6 +469,44 @@ export default function FreeGamesLeaderboard({ isAdmin = false, tenantId, onClos
           </div>
         </div>
       </div>
+
+      {/* BANNER ESPECIAL: GRAN META ALCANZADA */}
+      {data?.has_goal_winner && (
+        <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-800 text-white rounded-3xl p-6 sm:p-7 shadow-2xl border-4 border-emerald-300/80 flex flex-col md:flex-row items-center justify-between gap-5 relative overflow-hidden animate-in zoom-in-95 duration-300">
+          <div className="absolute top-0 right-0 -mr-10 -mt-10 w-44 h-44 bg-white/10 rounded-full blur-2xl pointer-events-none" />
+          
+          <div className="flex items-center gap-4 relative z-10">
+            <div className="w-16 h-16 rounded-2xl bg-white text-emerald-800 flex items-center justify-center font-black text-3xl shadow-xl shrink-0 border-2 border-emerald-200">
+              🏆
+            </div>
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-black/20 border border-white/20 text-yellow-300 text-[10px] font-black uppercase tracking-widest">
+                <Crown size={12} className="text-yellow-300" />
+                <span>¡Gran Meta de $300.000 COP Alcanzada!</span>
+              </div>
+              <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight">
+                {data.goal_winner?.player_name} ha ganado el Primer Premio
+              </h3>
+              <p className="text-xs sm:text-sm text-emerald-100 font-medium max-w-2xl leading-relaxed">
+                ¡Los 3 grandes premios del podio han sido liberados! Una vez entregados los premios a los ganadores, puedes archivar la temporada y reiniciar todos los acumulados a $0 COP.
+              </p>
+            </div>
+          </div>
+
+          {isAdmin && (
+            <button
+              onClick={() => {
+                setConfirmSafetyCheck(false);
+                setShowResetModal(true);
+              }}
+              className="px-6 py-4 bg-yellow-400 hover:bg-yellow-300 text-yellow-950 font-black text-xs uppercase tracking-wider rounded-2xl shadow-2xl transition active:scale-95 shrink-0 flex items-center gap-2.5 border-2 border-white/60 relative z-10"
+            >
+              <RotateCcw size={18} className="text-yellow-950" />
+              <span>Reiniciar a $0 Ahora</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* REGLA FUNDAMENTAL BOX */}
       <div className="bg-gradient-to-r from-amber-50 via-yellow-50 to-orange-50 border-2 border-yellow-400/80 rounded-3xl p-6 shadow-xl relative overflow-hidden">
@@ -1082,6 +1224,275 @@ export default function FreeGamesLeaderboard({ isAdmin = false, tenantId, onClos
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN MODAL: REINICIAR TORNEO A $0 */}
+      {isAdmin && showResetModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl border-2 border-red-200 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-red-100 text-red-600 rounded-2xl">
+                  <RotateCcw size={22} />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-lg leading-tight">
+                    Reiniciar Torneo a $0
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Sala: <strong className="text-slate-800 uppercase">{currentTenant}</strong>
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowResetModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-black p-1.5 rounded-xl hover:bg-slate-100 transition"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Resumen del podio que se archivará */}
+            <div className="bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Trophy size={16} className="text-amber-600" />
+                <span className="text-[11px] font-black uppercase text-amber-900 tracking-wider">
+                  Podio de la temporada que se archivará
+                </span>
+              </div>
+
+              {data?.ranking && data.ranking.length > 0 ? (
+                <div className="space-y-2 text-xs">
+                  {data.ranking.slice(0, 3).map((w, idx) => (
+                    <div key={w.player_id} className="flex items-center justify-between bg-white/80 px-3 py-2 rounded-xl border border-amber-200/60">
+                      <div className="flex items-center gap-2">
+                        <span className="font-black text-amber-700">
+                          {idx === 0 ? '🥇 1°' : idx === 1 ? '🥈 2°' : '🥉 3°'}
+                        </span>
+                        <span className="font-bold text-slate-800 truncate max-w-[170px] sm:max-w-[220px]">
+                          {w.player_name}
+                        </span>
+                      </div>
+                      <span className="font-black text-amber-800">
+                        ${w.total_won.toLocaleString('es-CO')} COP
+                      </span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between text-[11px] font-bold text-amber-900 pt-1 px-1">
+                    <span>Total entregado en la temporada:</span>
+                    <span className="font-black">${data.total_distributed.toLocaleString('es-CO')} COP</span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500 italic">
+                  No hay ganadores acumulados en este momento.
+                </p>
+              )}
+            </div>
+
+            {/* Advertencia destructiva */}
+            <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-3">
+              <AlertTriangle size={20} className="text-red-600 shrink-0 mt-0.5" />
+              <div className="text-xs text-red-900 space-y-1">
+                <p className="font-black uppercase tracking-wider">¿Qué sucede al reiniciar?</p>
+                <p className="font-medium leading-relaxed">
+                  1. Todos los acumulados de los juegos gratis de esta sala <strong className="text-red-700">volverán a $0 COP</strong>.
+                </p>
+                <p className="font-medium leading-relaxed">
+                  2. El contador de los <strong className="text-red-700">30 juegos pagos</strong> se reiniciará para que los jugadores comiencen una nueva carrera.
+                </p>
+                <p className="font-medium leading-relaxed">
+                  3. La temporada que termina se guardará intacta en el <strong className="text-slate-900">Historial de Temporadas</strong> con sus ganadores y fechas.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleResetTournament} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-black uppercase text-slate-500 tracking-wider mb-1">
+                  Motivo o Notas del Cierre (Opcional)
+                </label>
+                <input
+                  type="text"
+                  value={resetReason}
+                  onChange={e => setResetReason(e.target.value)}
+                  placeholder="Ej: Meta de $300k alcanzada y entregada"
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400 focus:bg-white"
+                />
+              </div>
+
+              {/* Casilla de confirmación obligatoria */}
+              <label className="flex items-start gap-3 p-3.5 bg-slate-50 hover:bg-slate-100 rounded-2xl border border-slate-200 cursor-pointer select-none transition">
+                <input 
+                  type="checkbox"
+                  checked={confirmSafetyCheck}
+                  onChange={e => setConfirmSafetyCheck(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 text-red-600 rounded border-slate-300 focus:ring-red-500 cursor-pointer"
+                />
+                <span className="text-xs font-bold text-slate-700 leading-tight">
+                  Confirmo que deseo colocar los acumulados en <span className="font-black text-red-600">$0 COP</span> y comenzar una nueva temporada del Torneo de Juegos Gratuitos para la sala <strong className="text-slate-900">{currentTenant}</strong>.
+                </span>
+              </label>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowResetModal(false)}
+                  disabled={resettingTournament}
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={!confirmSafetyCheck || resettingTournament}
+                  className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-lg active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  <RotateCcw size={15} className={clsx(resettingTournament && "animate-spin")} />
+                  <span>{resettingTournament ? 'Reiniciando a $0...' : 'Confirmar y Colocar en $0'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: HISTORIAL DE TEMPORADAS ANTERIORES */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-7 shadow-2xl border border-slate-200 space-y-5 max-h-[90vh] flex flex-col">
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-yellow-100 text-yellow-700 rounded-2xl">
+                  <History size={22} />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-lg leading-tight">
+                    Historial de Temporadas del Torneo
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Cuadro de Honor de Ganadores de la Sala <strong className="text-slate-800 uppercase">{currentTenant}</strong>
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowHistoryModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-black p-1.5 rounded-xl hover:bg-slate-100 transition"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Listado de temporadas */}
+            <div className="overflow-y-auto space-y-4 pr-1 grow">
+              {data?.tournament_history && data.tournament_history.length > 0 ? (
+                data.tournament_history.map((season, index) => {
+                  const closedDate = new Date(season.closed_at);
+                  const formattedClosed = !isNaN(closedDate.getTime()) 
+                    ? closedDate.toLocaleDateString('es-CO', { timeZone: 'America/Bogota', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                    : season.closed_at;
+
+                  return (
+                    <div 
+                      key={season.id || index}
+                      className="bg-gradient-to-br from-slate-50 to-amber-50/40 rounded-2xl p-5 border border-slate-200/80 shadow-sm space-y-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/60 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2.5 py-0.5 rounded-full bg-yellow-400 text-yellow-950 text-[10px] font-black uppercase tracking-wider">
+                            Temporada #{data.tournament_history!.length - index}
+                          </span>
+                          <span className="text-xs font-bold text-slate-600">
+                            Finalizada: {formattedClosed}
+                          </span>
+                        </div>
+                        <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                          Total: ${season.total_distributed.toLocaleString('es-CO')} COP
+                        </span>
+                      </div>
+
+                      {season.reason && (
+                        <p className="text-xs text-slate-600 font-medium italic">
+                          "{season.reason}"
+                        </p>
+                      )}
+
+                      {/* Podio de la temporada */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                        {/* 1° Lugar */}
+                        <div className="bg-white p-3 rounded-xl border border-yellow-200 shadow-sm flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-yellow-400 text-yellow-950 flex items-center justify-center font-black text-base shrink-0">
+                            🥇
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-black uppercase text-yellow-800 tracking-wider">1° Lugar</p>
+                            <p className="text-xs font-black text-slate-900 truncate">
+                              {season.goal_winner?.player_name || 'Sin registro'}
+                            </p>
+                            <p className="text-[11px] font-bold text-yellow-600">
+                              ${season.goal_winner ? season.goal_winner.total_won.toLocaleString('es-CO') : 0}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* 2° Lugar */}
+                        <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-slate-200 text-slate-800 flex items-center justify-center font-black text-base shrink-0">
+                            🥈
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-black uppercase text-slate-600 tracking-wider">2° Lugar</p>
+                            <p className="text-xs font-black text-slate-900 truncate">
+                              {season.second_place_winner?.player_name || 'Sin registro'}
+                            </p>
+                            <p className="text-[11px] font-bold text-slate-600">
+                              ${season.second_place_winner ? season.second_place_winner.total_won.toLocaleString('es-CO') : 0}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* 3° Lugar */}
+                        <div className="bg-white p-3 rounded-xl border border-amber-100 shadow-sm flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-amber-200 text-amber-900 flex items-center justify-center font-black text-base shrink-0">
+                            🥉
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-black uppercase text-amber-800 tracking-wider">3° Lugar</p>
+                            <p className="text-xs font-black text-slate-900 truncate">
+                              {season.third_place_winner?.player_name || 'Sin registro'}
+                            </p>
+                            <p className="text-[11px] font-bold text-amber-700">
+                              ${season.third_place_winner ? season.third_place_winner.total_won.toLocaleString('es-CO') : 0}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-center py-12 space-y-3">
+                  <div className="w-16 h-16 rounded-3xl bg-slate-100 text-slate-400 mx-auto flex items-center justify-center text-2xl font-black">
+                    🏆
+                  </div>
+                  <h4 className="font-black text-slate-700 text-base">Aún no hay temporadas archivadas</h4>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    Cuando los jugadores alcancen la meta de los $300.000 COP y el Administrador reinicie el torneo a $0, la temporada se archivará automáticamente aquí en el Cuadro de Honor.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-3 border-t border-slate-100 shrink-0">
+              <button
+                onClick={() => setShowHistoryModal(false)}
+                className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-black text-xs uppercase tracking-wider rounded-xl transition shadow-md"
+              >
+                Cerrar Historial
+              </button>
+            </div>
           </div>
         </div>
       )}
