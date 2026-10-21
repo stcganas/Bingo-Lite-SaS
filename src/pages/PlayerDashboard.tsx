@@ -285,10 +285,12 @@ ${refUrl}
 
   const lastDrawnBall = currentDrawnBalls.length > 0 ? currentDrawnBalls[currentDrawnBalls.length - 1] : null;
 
-  const recentDrawnBalls = useMemo(() => {
-    if (currentDrawnBalls.length <= 1) return [];
-    return currentDrawnBalls.slice(0, -1).slice(-6).reverse();
+  // Las 4 últimas balotas salientes para visualización compacta y móvil (más reciente primero)
+  const last4DrawnBalls = useMemo(() => {
+    if (!currentDrawnBalls.length) return [];
+    return currentDrawnBalls.slice(-4).reverse();
   }, [currentDrawnBalls]);
+  const recentDrawnBalls = last4DrawnBalls;
 
   const totalDrawn = currentDrawnBalls.length;
   const remainingBalls = Math.max(0, 75 - totalDrawn);
@@ -1423,8 +1425,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
   const announceLastBalls = () => {
     if (isAnnouncingWinnerRef.current) return;
     if (!currentDrawnBalls.length) return;
-    const lastBalls = currentDrawnBalls.slice(-5);
-    toast.success('Re-anunciando últimas balotas...');
+    const lastBalls = currentDrawnBalls.slice(-4);
+    toast.success('Re-anunciando últimas 4 balotas...');
     lastBalls.forEach((ball: number) => {
       announceBall(ball, false);
     });
@@ -2418,193 +2420,160 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                   </motion.div>
                 )}
 
-                {/* Panel de Balotas Salientes y Contador en Tiempo Real */}
+                {/* Panel Compacto: Últimas Balotas Salientes fusionado con Barra de Progreso y Balotas Restantes (Mobile-First) */}
                 {gameState && (
                   <motion.div 
-                    initial={{ opacity: 0, y: 12 }}
+                    initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white rounded-[2.5rem] p-5 sm:p-6 shadow-2xl border-4 border-slate-700/60 relative overflow-hidden"
+                    className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-2xl sm:rounded-3xl p-3 sm:p-4 shadow-xl border-2 border-slate-700/80 relative overflow-hidden mb-4"
                   >
-                    {/* Efectos de luz ambiente de fondo */}
-                    <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
-                    <div className="absolute bottom-0 left-0 w-80 h-80 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+                    {/* Efectos de luz ambiente sutiles */}
+                    <div className="absolute top-0 right-0 w-48 h-48 bg-blue-500/10 rounded-full blur-2xl pointer-events-none" />
+                    <div className="absolute bottom-0 left-0 w-48 h-48 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
 
-                    {/* Cabecera superior del panel */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-700/80 relative z-10">
-                      <div className="flex items-center gap-2.5">
-                        <span className="flex h-3 w-3 relative">
+                    {/* Cabecera compacta: Estado de conexión + Botones de acción */}
+                    <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-700/60 relative z-10">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-2.5 w-2.5 relative">
                           <span className={clsx(
                             "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
                             realtimeConnected ? "bg-emerald-400" : "bg-amber-400"
                           )} />
                           <span className={clsx(
-                            "relative inline-flex rounded-full h-3 w-3",
+                            "relative inline-flex rounded-full h-2.5 w-2.5",
                             realtimeConnected ? "bg-emerald-500" : "bg-amber-500"
                           )} />
                         </span>
-                        <div>
-                          <h3 className="text-xs sm:text-sm font-black uppercase tracking-wider text-white flex items-center gap-2">
-                            Balotas Salientes & Tablero En Vivo
-                          </h3>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                            {realtimeConnected ? 'Sincronizado en tiempo real' : 'Reconectando sala...'}
-                          </p>
-                        </div>
+                        <h3 className="text-[11px] sm:text-xs font-black uppercase tracking-wider text-white flex items-center gap-1.5">
+                          Balotas Salientes & Tablero En Vivo
+                          <span className="text-[9px] font-bold text-slate-400 lowercase">
+                            ({realtimeConnected ? 'en vivo' : 'reconectando'})
+                          </span>
+                        </h3>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <button
                           onClick={announceLastBalls}
                           disabled={!currentDrawnBalls.length}
-                          className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                          className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1 transition active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
                           title="Repetir locución de las últimas balotas"
                         >
-                          <Volume2 size={14} />
-                          <span className="hidden sm:inline">Repetir Balotas</span>
+                          <Volume2 size={12} />
+                          <span className="hidden xs:inline">Repetir</span>
                         </button>
 
                         <button
                           onClick={handleSync}
                           disabled={syncing}
-                          className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-xl transition active:scale-95 disabled:opacity-50"
+                          className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 rounded-lg transition active:scale-95 disabled:opacity-50"
                           title="Sincronizar manualmente"
                         >
-                          <RefreshCw size={16} className={clsx(syncing && "animate-spin text-blue-400")} />
+                          <RefreshCw size={12} className={clsx(syncing && "animate-spin text-blue-400")} />
                         </button>
                       </div>
                     </div>
 
-                    {/* Contenido: Balota actual 3D + Contador con barra + Historial reciente */}
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-5 pt-5 items-center relative z-10">
+                    {/* Fila principal: Las 4 últimas balotas cantadas + Contador de balotas restantes */}
+                    <div className="pt-2.5 pb-2 flex items-center justify-between gap-2 relative z-10">
                       
-                      {/* 1. Balota Actual Saliente en 3D */}
-                      <div className="md:col-span-4 flex flex-col items-center justify-center p-3 sm:p-4 bg-slate-800/80 rounded-3xl border border-slate-700/80 shadow-inner">
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
-                          {gameState.status === 'playing' ? '🔴 Balota Actual Cantada' : 'Balota en Juego'}
-                        </span>
-
-                        {lastDrawnBall ? (() => {
-                          const theme = getBallVisualTheme(lastDrawnBall);
-                          return (
-                            <AnimatePresence mode="wait">
-                              <motion.div
-                                key={lastDrawnBall}
-                                initial={{ scale: 0.5, rotate: -20, opacity: 0 }}
-                                animate={{ scale: 1, rotate: 0, opacity: 1 }}
-                                exit={{ scale: 0.8, opacity: 0 }}
-                                transition={{ type: "spring", stiffness: 350, damping: 20 }}
-                                className={clsx(
-                                  "relative w-28 h-28 sm:w-32 sm:h-32 rounded-full p-1.5 shadow-2xl flex items-center justify-center bg-gradient-to-br",
-                                  theme.gradient,
-                                  theme.glow
-                                )}
-                              >
-                                <div className="absolute top-1 left-4 w-1/2 h-1/3 bg-white/30 rounded-full blur-[2px] pointer-events-none" />
-                                <div className="absolute inset-0 rounded-full ring-2 ring-white/40 pointer-events-none" />
-
-                                <div className="w-full h-full rounded-full flex flex-col items-center justify-center text-center">
-                                  <span className="text-white text-base sm:text-lg font-black tracking-widest drop-shadow-md leading-none">
-                                    {theme.letter}
-                                  </span>
-                                  <div className="bg-white w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center shadow-lg border-2 border-black/10 mt-1">
-                                    <span className="text-slate-900 font-black text-2xl sm:text-3xl leading-none">
-                                      {lastDrawnBall}
-                                    </span>
-                                  </div>
-                                </div>
-                              </motion.div>
-                            </AnimatePresence>
-                          );
-                        })() : (
-                          <div className="w-28 h-28 sm:w-32 sm:h-32 rounded-full border-4 border-dashed border-slate-600 flex flex-col items-center justify-center text-slate-400">
-                            <Clock size={28} className="animate-pulse mb-1 text-slate-500" />
-                            <span className="text-[10px] font-black uppercase tracking-wider text-center px-2">
-                              En Espera...
-                            </span>
-                          </div>
-                        )}
-
-                        <span className="text-[11px] font-black uppercase tracking-wider text-slate-300 mt-3 flex items-center gap-1.5">
-                          {lastDrawnBall ? `Letra ${getBallLetter(lastDrawnBall)} - Número ${lastDrawnBall}` : 'Sin balotas sorteadas'}
-                        </span>
-                      </div>
-
-                      {/* 2. Contador de Balotas y Progreso */}
-                      <div className="md:col-span-4 flex flex-col justify-center space-y-3 p-4 bg-slate-800/80 rounded-3xl border border-slate-700/80">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                            Contador de Balotas
-                          </span>
-                          <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                            {progressPercent}% Jugado
-                          </span>
-                        </div>
-
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-4xl sm:text-5xl font-black text-white tracking-tight">
-                            {totalDrawn}
-                          </span>
-                          <span className="text-xl sm:text-2xl font-bold text-slate-400">
-                            / 75
-                          </span>
-                          <span className="text-xs font-bold text-slate-400 uppercase ml-auto">
-                            Balotas
-                          </span>
-                        </div>
-
-                        {/* Barra de progreso interactiva */}
-                        <div className="w-full bg-slate-700/80 rounded-full h-3 p-0.5 overflow-hidden border border-slate-600">
-                          <motion.div
-                            className="h-full bg-gradient-to-r from-blue-500 via-emerald-400 to-amber-400 rounded-full shadow-lg"
-                            initial={{ width: 0 }}
-                            animate={{ width: `${progressPercent}%` }}
-                            transition={{ duration: 0.5, ease: "easeOut" }}
-                          />
-                        </div>
-
-                        <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-wider text-slate-400">
-                          <span>Salieron: {totalDrawn}</span>
-                          <span className="text-amber-400 font-extrabold">Faltan: {remainingBalls}</span>
-                        </div>
-                      </div>
-
-                      {/* 3. Historial de Últimas Balotas Salientes */}
-                      <div className="md:col-span-4 flex flex-col justify-center p-4 bg-slate-800/80 rounded-3xl border border-slate-700/80 h-full">
-                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2.5 flex items-center gap-1.5">
-                          <History size={12} className="text-slate-400" /> Últimas Balotas Cantadas
-                        </span>
-
-                        {recentDrawnBalls.length > 0 ? (
-                          <div className="flex flex-wrap gap-2 items-center">
-                            {recentDrawnBalls.map((ball, idx) => {
+                      {/* Las 4 últimas balotas (mostrando la más reciente destacada a la izquierda) */}
+                      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1 overflow-x-auto no-scrollbar py-0.5">
+                        {last4DrawnBalls.length > 0 ? (
+                          <>
+                            {last4DrawnBalls.map((ball, idx) => {
                               const theme = getBallVisualTheme(ball);
+                              const isLatest = idx === 0;
                               return (
-                                <div
+                                <motion.div
                                   key={`${ball}-${idx}`}
+                                  initial={isLatest ? { scale: 0.6, y: -4, opacity: 0 } : false}
+                                  animate={{ scale: 1, y: 0, opacity: 1 }}
+                                  transition={{ type: "spring", stiffness: 400, damping: 25 }}
                                   className={clsx(
-                                    "flex items-center gap-1.5 px-2.5 py-1.5 rounded-2xl border shadow-md transition transform hover:scale-105",
-                                    theme.border,
-                                    "bg-slate-900/90"
+                                    "relative rounded-full shrink-0 flex items-center justify-center transition-all duration-300 shadow-md",
+                                    isLatest
+                                      ? "w-11 h-11 sm:w-12 sm:h-12 ring-2 ring-amber-400/90 bg-gradient-to-br " + theme.gradient + " " + theme.glow
+                                      : "w-9 h-9 sm:w-10 sm:h-10 bg-slate-800/90 border-2 " + theme.border
                                   )}
-                                  title={`Balota ${theme.letter}-${ball}`}
+                                  title={isLatest ? `Última balota cantada: ${theme.letter}-${ball}` : `Balota previa: ${theme.letter}-${ball}`}
                                 >
-                                  <span className={clsx("w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black", theme.chipBg)}>
-                                    {theme.letter}
-                                  </span>
-                                  <span className="text-white font-black text-sm">
-                                    {ball}
-                                  </span>
-                                </div>
+                                  {isLatest ? (
+                                    <div className="w-full h-full rounded-full flex flex-col items-center justify-center text-center p-0.5">
+                                      <span className="text-white text-[8px] sm:text-[9px] font-black tracking-widest leading-none drop-shadow">
+                                        {theme.letter}
+                                      </span>
+                                      <div className="bg-white w-5 h-5 sm:w-6 sm:h-6 rounded-full flex items-center justify-center shadow mt-0.5">
+                                        <span className="text-slate-900 font-black text-xs sm:text-sm leading-none">
+                                          {ball}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="w-full h-full rounded-full flex flex-col items-center justify-center text-center p-0.5">
+                                      <span className={clsx("text-[8px] font-black leading-none", theme.text)}>
+                                        {theme.letter}
+                                      </span>
+                                      <span className="text-white font-black text-xs sm:text-sm leading-none mt-0.5">
+                                        {ball}
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {isLatest && (
+                                    <span className="absolute -top-1.5 px-1 py-0.2 bg-amber-400 text-slate-950 text-[7px] font-black rounded-full uppercase tracking-tighter shadow-sm animate-pulse">
+                                      Última
+                                    </span>
+                                  )}
+                                </motion.div>
                               );
                             })}
-                          </div>
+
+                            {/* Ranuras vacías si han salido menos de 4 balotas para mantener estabilidad visual */}
+                            {Array.from({ length: Math.max(0, 4 - last4DrawnBalls.length) }).map((_, i) => (
+                              <div
+                                key={`placeholder-${i}`}
+                                className="w-9 h-9 sm:w-10 sm:h-10 rounded-full border-2 border-dashed border-slate-700 flex items-center justify-center text-slate-600 text-xs font-bold shrink-0 select-none"
+                              >
+                                -
+                              </div>
+                            ))}
+                          </>
                         ) : (
-                          <div className="text-center py-4 text-slate-500 text-xs font-bold uppercase tracking-wider">
-                            {totalDrawn > 0 ? 'Solo ha salido una balota' : 'Aún no han salido balotas'}
+                          <div className="flex items-center gap-2 text-slate-400 text-xs py-1">
+                            <Clock size={16} className="text-amber-400 animate-pulse shrink-0" />
+                            <span className="text-[11px] font-bold">Esperando inicio del sorteo...</span>
                           </div>
                         )}
                       </div>
 
+                      {/* Contador de Balotas Restantes (Compacto a la derecha) */}
+                      <div className="flex flex-col items-end justify-center pl-3 border-l border-slate-700/70 shrink-0">
+                        <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">
+                          Faltan
+                        </span>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-xl sm:text-2xl font-black text-amber-400 leading-none tracking-tight">
+                            {remainingBalls}
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-500">
+                            / 75
+                          </span>
+                        </div>
+                        <span className="text-[8px] font-extrabold uppercase text-slate-400 mt-0.5">
+                          {totalDrawn} cantadas
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Barra de progreso interactiva fusionada */}
+                    <div className="w-full bg-slate-700/60 rounded-full h-1.5 sm:h-2 p-0.5 overflow-hidden border border-slate-600/50 mt-1 relative z-10">
+                      <motion.div
+                        className="h-full bg-gradient-to-r from-blue-500 via-emerald-400 to-amber-400 rounded-full shadow-sm"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${progressPercent}%` }}
+                        transition={{ duration: 0.4, ease: "easeOut" }}
+                      />
                     </div>
                   </motion.div>
                 )}
