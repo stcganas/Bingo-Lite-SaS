@@ -426,18 +426,30 @@ async function getGiftStatsMap(targetGameId?: number) {
   return giftsMap;
 }
 
+function normalizeTenant(raw?: string): string {
+  if (!raw) return 'bingo-lite';
+  const norm = String(raw).trim().toLowerCase();
+  if (norm === 'default' || norm === 'global' || norm === 'null' || norm === 'undefined' || norm === '') {
+    return 'bingo-lite';
+  }
+  return norm;
+}
+
 // Helper robusto para encontrar al jugador en un tenant específico evitando errores de colisión por teléfono duplicado
 async function findSpecificPlayer(rawPhone: string, targetTenant?: string): Promise<any | null> {
   const phone = normalizePhone(rawPhone);
   if (!phone) return null;
-  const rawTenant = (targetTenant || 'bingo-lite').toLowerCase();
-  const normTenant = rawTenant === 'default' ? 'demo' : rawTenant;
+  const normTenant = normalizeTenant(targetTenant);
 
   try {
-    // 1. Intentar buscar coincidencia exacta con el tenant especificado
+    // 1. Intentar buscar coincidencia exacta con el tenant especificado (o bingo-lite/default)
     let q = supabase.from('players').select('*').eq('phone', phone);
-    if (normTenant && normTenant !== 'global') {
-      q = q.eq('tenant_id', normTenant);
+    if (normTenant !== 'global' && normTenant !== 'all') {
+      if (normTenant === 'bingo-lite') {
+        q = q.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
+      } else {
+        q = q.eq('tenant_id', normTenant);
+      }
     }
     const { data: rows } = await q.order('created_at', { ascending: false }).limit(1);
     if (rows && rows.length > 0) return rows[0];
@@ -455,12 +467,15 @@ async function findSpecificPlayer(rawPhone: string, targetTenant?: string): Prom
 async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
   if (!phone) return 0;
-  const rawTenant = (tenantId || 'bingo-lite').toLowerCase();
-  const targetTenant = rawTenant === 'default' ? 'demo' : rawTenant;
+  const targetTenant = normalizeTenant(tenantId);
   try {
     let query = supabase.from('wallets').select('balance, tenant_id').eq('phone', phone);
-    if (targetTenant && targetTenant !== 'global') {
-      query = query.eq('tenant_id', targetTenant);
+    if (targetTenant !== 'global') {
+      if (targetTenant === 'bingo-lite') {
+        query = query.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
+      } else {
+        query = query.eq('tenant_id', targetTenant);
+      }
     }
     const { data: rows, error } = await query.order('updated_at', { ascending: false });
     if (error) {
@@ -469,7 +484,7 @@ async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<nu
     }
     if (rows && rows.length > 0) {
       // Priorizar coincidencia exacta con targetTenant
-      const exactMatch = rows.find(r => (r.tenant_id || 'bingo-lite').toLowerCase() === targetTenant);
+      const exactMatch = rows.find(r => normalizeTenant(r.tenant_id) === targetTenant);
       if (exactMatch) return Number(exactMatch.balance) || 0;
       const positiveRow = rows.find(r => Number(r.balance) > 0);
       return positiveRow ? Number(positiveRow.balance) : Number(rows[0].balance) || 0;
@@ -487,8 +502,7 @@ const walletUpdateQueues = new Map<string, Promise<any>>();
 async function updateWalletBalance(rawPhone: string, amount: number, description: string = 'Transacción de billetera', type: string = 'other', tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
   if (!phone) throw new Error('Número de teléfono inválido para transacción de billetera.');
-  const rawTenant = (tenantId || 'bingo-lite').toLowerCase();
-  const targetTenant = rawTenant === 'default' ? 'demo' : rawTenant;
+  const targetTenant = normalizeTenant(tenantId);
   const queueKey = `${targetTenant}:${phone}`;
 
   const currentQueue = walletUpdateQueues.get(queueKey) || Promise.resolve();
@@ -557,6 +571,15 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       console.warn('[updateWalletBalance] Advertencia al registrar transacción:', txErr?.message);
     }
 
+    // Si es una recarga positiva de dinero (recharge), activar automáticamente la billetera
+    if (amount > 0 && (type === 'recharge' || type === 'manual_recharge')) {
+      try {
+        await activateWallet(phone, 0, effectiveTenant);
+      } catch (actErr: any) {
+        console.warn('[updateWalletBalance] Advertencia activando billetera:', actErr?.message);
+      }
+    }
+
     // 5. Emitir evento en tiempo real vía Ably a la sala y al canal principal
     try {
       const updateData = { phone, balance: newBalance, tenantId: effectiveTenant };
@@ -575,26 +598,32 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
   return execution;
 }
 
-async function isWalletActivated(rawPhone: string, gameId: number): Promise<boolean> {
+async function isWalletActivated(rawPhone: string, gameId?: number, tenantId?: string): Promise<boolean> {
   const phone = normalizePhone(rawPhone);
+  if (!phone) return false;
+  const targetTenant = normalizeTenant(tenantId);
   try {
-    const balance = await getWalletBalance(phone);
+    const balance = await getWalletBalance(phone, targetTenant);
     if (balance <= 0) return false;
 
-    // Check if player has any approved recharge transaction in history
+    // 1. Check if player has any approved recharge transaction in history
     const { data: txs } = await supabase
       .from('wallet_transactions')
       .select('type')
       .eq('player_phone', phone);
 
-    const hasRecharge = txs && txs.some((t: any) => t.type === 'recharge');
+    const hasRecharge = txs && txs.some((t: any) => t.type === 'recharge' || t.type === 'prize');
 
     if (hasRecharge) {
       // Recharge of real money enables wallet automatically until balance runs out
       return true;
     }
 
-    // Check if they have ever bought a card with real money (by uploading a real receipt, not WALLET_PAYMENT and not FREE_GAME)
+    // 2. Check if they have an activation record
+    const { data: activation } = await supabase.from('wallet_activations').select('id, phone').eq('phone', phone).limit(1);
+    if (activation && activation.length > 0) return true;
+
+    // 3. Check if they have ever bought a card with real money (by uploading a real receipt, not WALLET_PAYMENT and not FREE_GAME)
     const { data: player } = await supabase.from('players').select('receipt_url').eq('phone', phone).maybeSingle();
     if (player && player.receipt_url) {
       try {
@@ -610,27 +639,29 @@ async function isWalletActivated(rawPhone: string, gameId: number): Promise<bool
       }
     }
 
-    // Check if they have an activation record
-    const { data: activation } = await supabase.from('wallet_activations').select('phone').eq('phone', phone).limit(1);
-    if (activation && activation.length > 0) return true;
-
-    return false;
+    // 4. Saldo positivo disponible en billetera habilita su uso
+    return true;
   } catch (e: any) {
     return false;
   }
 }
 
-async function activateWallet(rawPhone: string, gameId: number) {
+async function activateWallet(rawPhone: string, gameId: number = 0, tenantId?: string) {
   const phone = normalizePhone(rawPhone);
+  if (!phone) return;
+  const targetTenant = normalizeTenant(tenantId);
   try {
-    const isActivated = await isWalletActivated(phone, gameId);
-    if (!isActivated) {
-      const payload: any = { phone, game_id: gameId };
+    const { data: existing } = await supabase.from('wallet_activations')
+      .select('id')
+      .eq('phone', phone)
+      .limit(1);
+    if (!existing || existing.length === 0) {
+      const payload: any = { phone, game_id: gameId || 0, tenant_id: targetTenant };
       const { error } = await supabase.from('wallet_activations').insert(payload);
-      if (error) throw error;
+      if (error) console.warn('[activateWallet] Error al insertar activation:', error.message);
     }
   } catch (e: any) {
-
+    console.warn('[activateWallet] Excepción al activar billetera:', e?.message);
   }
 }
 
@@ -1887,60 +1918,64 @@ app.get('/api/wallet', async (req, res) => {
     const phone = normalizePhone(rawPhone as string);
     if (!phone) return res.status(400).json({ error: 'Phone is required' });
 
-    const rawTenantId = (qTenantId as string) || (req as any).tenantId || 'bingo-lite';
-    const cleanTenant = rawTenantId === 'default' ? 'demo' : rawTenantId.toLowerCase();
+    const cleanTenant = normalizeTenant((qTenantId as string) || (req as any).tenantId);
 
     // Touch player presence
     touchPlayerPresence(phone, undefined, cleanTenant);
 
-    const activated = gameId ? await isWalletActivated(phone, parseInt(gameId as string)) : false;
+    const activated = await isWalletActivated(phone, gameId ? parseInt(gameId as string, 10) : 0, cleanTenant);
 
     // Check if player already exists in this tenant and has a password
     let playerQ = supabase.from('players').select('id, password, tenant_id').eq('phone', phone);
-    if (cleanTenant && cleanTenant !== 'global') {
-      playerQ = playerQ.eq('tenant_id', cleanTenant);
+    if (cleanTenant !== 'global') {
+      if (cleanTenant === 'bingo-lite') {
+        playerQ = playerQ.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
+      } else {
+        playerQ = playerQ.eq('tenant_id', cleanTenant);
+      }
     }
-    const { data: player } = await playerQ.maybeSingle();
+    const { data: player } = await playerQ.order('created_at', { ascending: false }).limit(1).maybeSingle();
     const hasPassword = !!(player?.password && player.password.trim() !== '');
 
     // Verificar si el solicitante está autenticado como el dueño o como administrador
     const authUser = await getAuthenticatedUser(req);
-    let canViewBalance = false;
+    let isAuthenticated = false;
     if (authUser) {
-      const rawUserTenant = (authUser.tenant_id || 'bingo-lite').toLowerCase();
-      const userTenant = rawUserTenant === 'default' ? 'demo' : rawUserTenant;
-      const isSameTenant = userTenant === cleanTenant;
+      const userTenant = normalizeTenant(authUser.tenant_id);
+      const isSameTenant = userTenant === cleanTenant || authUser.isSuperAdmin;
 
-      if (authUser.role === 'admin') {
-        if (authUser.isSuperAdmin || isSameTenant) {
-          canViewBalance = true;
-        }
+      if (authUser.role === 'admin' && (authUser.isSuperAdmin || isSameTenant)) {
+        isAuthenticated = true;
       } else if (authUser.role === 'player' && normalizePhone(authUser.phone || '') === phone) {
         if (isSameTenant) {
-          canViewBalance = true;
+          isAuthenticated = true;
         }
       }
     }
 
-    // Si el jugador registrado en la sala aún no tiene contraseña configurada, permitir ver saldo
-    if (!hasPassword && player) {
-      canViewBalance = true;
-    }
+    const balance = await getWalletBalance(phone, cleanTenant);
 
-    if (!canViewBalance) {
-      // CRÍTICO: Devolver HTTP 401. Devolver 200 con balance: 0 falseaba que el saldo se había borrado
-      // en cada sondeo de fondo del cliente.
-      return res.status(401).json({
-        error: 'No autorizado para consultar saldo.',
-        authenticated: false,
-        hasPassword,
-        activated
+    // Si el usuario tiene contraseña pero aún no está autenticado (ej. digitando su número en Registro):
+    // Devolvemos 200 con hasPassword: true para que el formulario le muestre el campo de contraseña sin romper la UI.
+    if (hasPassword && !isAuthenticated) {
+      return res.json({
+        balance: 0,
+        actualBalance: balance,
+        activated,
+        hasPassword: true,
+        authenticated: false
       });
     }
 
-    const balance = await getWalletBalance(phone, cleanTenant);
-    res.json({ balance, activated, hasPassword, authenticated: true });
+    // Si no tiene contraseña o ya está autenticado, retornamos el saldo oficial
+    res.json({
+      balance,
+      activated,
+      hasPassword,
+      authenticated: true
+    });
   } catch (err: any) {
+    console.error('[GET /api/wallet error]:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -1949,8 +1984,7 @@ app.get('/api/wallet/history', async (req, res) => {
   const { phone: rawPhone, tenantId: qTenantId } = req.query;
   if (!rawPhone || typeof rawPhone !== 'string') return res.status(400).json({ error: 'Favor proporcionar un número de teléfono válido' });
   const phone = normalizePhone(rawPhone);
-  const rawTenantId = (qTenantId as string) || (req as any).tenantId || 'bingo-lite';
-  const tenantId = rawTenantId === 'default' ? 'demo' : rawTenantId.toLowerCase();
+  const tenantId = normalizeTenant((qTenantId as string) || (req as any).tenantId);
 
   // CONTROL DE ACCESO ESTRICTO: Solo el titular autenticado o un administrador autorizado pueden ver el historial
   const authUser = await getAuthenticatedUser(req);
@@ -1958,11 +1992,8 @@ app.get('/api/wallet/history', async (req, res) => {
     return res.status(401).json({ error: 'No autorizado: Debes iniciar sesión para consultar el historial financiero.' });
   }
 
-  const userTenant = (authUser.tenant_id || 'default').toLowerCase();
-  const reqTenant = (tenantId || 'default').toLowerCase();
-  const isSameTenant = userTenant === reqTenant ||
-    (userTenant === 'bingo-lite' && reqTenant === 'default') ||
-    (userTenant === 'default' && reqTenant === 'bingo-lite');
+  const userTenant = normalizeTenant(authUser.tenant_id);
+  const isSameTenant = userTenant === tenantId || authUser.isSuperAdmin;
 
   if (authUser.role === 'player') {
     if (normalizePhone(authUser.phone || '') !== phone) {
@@ -1978,23 +2009,18 @@ app.get('/api/wallet/history', async (req, res) => {
   }
 
   try {
-    console.log(`[API] Fetching history for ${phone} in tenant ${tenantId}`);
     let query = supabase.from('wallet_transactions').select('*').eq('player_phone', phone);
-    if (tenantId !== 'default' && tenantId !== 'bingo-lite') {
-      query = query.eq('tenant_id', tenantId);
+    if (tenantId !== 'global') {
+      if (tenantId === 'bingo-lite') {
+        query = query.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
+      } else {
+        query = query.eq('tenant_id', tenantId);
+      }
     }
     const { data: history, error } = await query.order('created_at', { ascending: false });
     if (error) {
       if (error.code === 'PGRST205' || error.code === '42P01') {
-        console.warn('History table not found, returning empty');
         return res.json([]);
-      }
-      if (error.code === '42703') { // Columna tenant_id no existe en BD
-        if (tenantId !== 'default' && tenantId !== 'bingo-lite') {
-          return res.json([]); // En salas externas no filtrar transacciones de otras salas
-        }
-        const fallback = await supabase.from('wallet_transactions').select('*').eq('player_phone', phone).order('created_at', { ascending: false });
-        return res.json(fallback.data || []);
       }
       throw error;
     }
@@ -2014,18 +2040,38 @@ app.post('/api/admin/wallet/recharge', requireAdmin, async (req, res) => {
     }
 
     const adminUser = (req as any).adminUser;
-    let targetTenant = adminUser?.isSuperAdmin ? (qTenantId || (req as any).tenantId || 'default') : (adminUser?.tenant_id || 'default');
+    const targetTenant = normalizeTenant(
+      adminUser?.isSuperAdmin 
+        ? (qTenantId || (req as any).tenantId) 
+        : (adminUser?.tenant_id || (req as any).tenantId || qTenantId)
+    );
 
-    // Verificar que el jugador existe en el tenant asignado usando el helper seguro (soporta múltiples salas)
-    const player = await findSpecificPlayer(phone, targetTenant);
-    if (!player && adminUser && !adminUser.isSuperAdmin) {
-      return res.status(404).json({ error: `El jugador no se encuentra registrado en tu sala (${targetTenant}).` });
+    // Verificar si el jugador ya existe en otra sala (para administradores que no sean SuperAdmin)
+    if (adminUser && !adminUser.isSuperAdmin) {
+      const otherTenantPlayer = await supabase.from('players')
+        .select('tenant_id')
+        .eq('phone', phone)
+        .neq('tenant_id', targetTenant)
+        .limit(1)
+        .maybeSingle();
+
+      if (otherTenantPlayer.data && otherTenantPlayer.data.tenant_id && normalizeTenant(otherTenantPlayer.data.tenant_id) !== targetTenant) {
+        return res.status(403).json({ error: `El jugador pertenece a otra sala (${otherTenantPlayer.data.tenant_id}). No puedes recargarle desde esta sala.` });
+      }
     }
 
-    // El tenant para recarga es prioritariamente la sala que el administrador está gestionando actualmente
-    const rechargeTenant = (targetTenant && targetTenant !== 'global') ? targetTenant : (player?.tenant_id || 'default');
-    const newBalance = await updateWalletBalance(phone, numAmount, `Recarga por el administrador por $${numAmount}`, 'recharge', rechargeTenant);
-    res.json({ success: true, newBalance, phone });
+    const newBalance = await updateWalletBalance(
+      phone, 
+      numAmount, 
+      `Recarga por el administrador por $${numAmount}`, 
+      'recharge', 
+      targetTenant
+    );
+
+    // Activar la billetera explícitamente para garantizar que pueda comprar cartones de inmediato
+    await activateWallet(phone, 0, targetTenant);
+
+    res.json({ success: true, newBalance, phone, tenantId: targetTenant });
   } catch (err: any) {
     console.error('[Admin Wallet Recharge Error]:', err);
     res.status(500).json({ error: err.message || 'Error interno al procesar la recarga de billetera.' });
@@ -2035,45 +2081,45 @@ app.post('/api/admin/wallet/recharge', requireAdmin, async (req, res) => {
 app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
   try {
     const adminUser = (req as any).adminUser;
-    const targetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
-      ? adminUser.tenant_id.toLowerCase()
-      : (((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase());
+    const rawTargetTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id
+      : ((req.query.tenantId as string) || (req as any).tenantId || '');
+    const targetTenant = normalizeTenant(rawTargetTenant);
 
     // 1. Obtener jugadores registrados respetando tenant
     let query = supabase.from('players').select('id, name, phone, tenant_id, created_at');
-    if (targetTenant && targetTenant !== 'global') {
-      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
-      query = query.eq('tenant_id', cleanTenant);
+    if (targetTenant !== 'global') {
+      if (targetTenant === 'bingo-lite') {
+        query = query.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
+      } else {
+        query = query.eq('tenant_id', targetTenant);
+      }
     }
     const { data: players, error } = await query.order('created_at', { ascending: false });
     if (error) throw error;
 
-    // 2. Consulta en bloque a la tabla wallets (1 sola query rápida a BD)
-    const { data: allWallets } = await supabase.from('wallets').select('phone, balance, tenant_id, updated_at');
+    // 2. Consulta en bloque a la tabla wallets
+    let walletQuery = supabase.from('wallets').select('phone, balance, tenant_id, updated_at');
+    if (targetTenant !== 'global') {
+      if (targetTenant === 'bingo-lite') {
+        walletQuery = walletQuery.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
+      } else {
+        walletQuery = walletQuery.eq('tenant_id', targetTenant);
+      }
+    }
+    const { data: allWallets } = await walletQuery;
     const walletMap = new Map<string, number>();
     (allWallets || []).forEach((w: any) => {
       const cleanPhone = normalizePhone(w.phone);
       if (!cleanPhone) return;
-      const wTenant = (w.tenant_id || 'default').toLowerCase();
       const bal = Number(w.balance) || 0;
-
-      // Coincidencia estricta de tenant para default/bingo-lite
-      const isDefaultOrBingoLite = (targetTenant === 'default' || targetTenant === 'bingo-lite' || !targetTenant || targetTenant === 'global');
-      if (isDefaultOrBingoLite) {
-        if (wTenant === 'default' || wTenant === 'bingo-lite') {
-          const current = walletMap.get(cleanPhone);
-          if (current === undefined || bal > current) {
-            walletMap.set(cleanPhone, bal);
-          }
-        }
-      } else {
-        if (wTenant === targetTenant) {
-          walletMap.set(cleanPhone, bal);
-        }
+      const current = walletMap.get(cleanPhone);
+      if (current === undefined || bal > current) {
+        walletMap.set(cleanPhone, bal);
       }
     });
 
-    // 3. Desduplicar jugadores por teléfono canónico para evitar repetición de tarjetas en UI
+    // 3. Desduplicar jugadores por teléfono canónico
     const seenPhones = new Set<string>();
     const deduplicatedWallets: any[] = [];
 
@@ -2090,9 +2136,23 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
         id: p.id,
         name: p.name,
         phone: cleanPhone,
-        tenant_id: p.tenant_id || targetTenant || 'default',
+        tenant_id: p.tenant_id || targetTenant,
         balance
       });
+    }
+
+    // 4. Incluir billeteras que tengan saldo pero aún no tengan fila en players
+    for (const [wPhone, wBal] of walletMap.entries()) {
+      if (!seenPhones.has(wPhone) && wBal > 0) {
+        seenPhones.add(wPhone);
+        deduplicatedWallets.unshift({
+          id: `wallet-${wPhone}`,
+          name: `Usuario ${wPhone.slice(-4)}`,
+          phone: wPhone,
+          tenant_id: targetTenant,
+          balance: wBal
+        });
+      }
     }
 
     res.json(deduplicatedWallets);
@@ -9195,7 +9255,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
           return res.status(400).json({ error: 'No es necesario usar la billetera para juegos gratuitos' });
         }
 
-        const effectiveWalletTenant = (rawTenantId || (req as any).tenantId || game?.tenant_id || 'default').toLowerCase();
+        const effectiveWalletTenant = normalizeTenant(rawTenantId || (req as any).tenantId || game?.tenant_id);
 
         // SEGURIDAD FINANCIERA: Verificar que quien gasta el saldo sea el titular autorizado
         let existingPlayerForWallet = null;
@@ -9225,7 +9285,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
           return res.status(400).json({ error: 'Saldo insuficiente en la billetera' });
         }
 
-        const activated = await isWalletActivated(phone, game.id);
+        const activated = await isWalletActivated(phone, game.id, effectiveWalletTenant);
         if (!activated) {
           return res.status(400).json({
             error: 'Billetera no activada',
@@ -10544,7 +10604,7 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
       return res.status(400).json({ error: 'El comprobante no contiene un monto numérico positivo válido para acreditar' });
     }
 
-    const targetTenant = (player.tenant_id || adminUser?.tenant_id || 'default').toLowerCase();
+    const targetTenant = normalizeTenant(player.tenant_id || adminUser?.tenant_id);
 
     // 1. Acreditar saldo en la billetera de forma atómica
     const newBalance = await updateWalletBalance(
@@ -10554,6 +10614,9 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
       'recharge',
       targetTenant
     );
+
+    // Activar la billetera explícitamente
+    await activateWallet(player.phone, 0, targetTenant);
 
     // 2. Marcar como aprobado en el historial de comprobantes
     receipt.is_silent_error = false;

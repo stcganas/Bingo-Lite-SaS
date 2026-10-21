@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getBingoChannel } from '../ably';
-import { Play, Pause, Square, RefreshCcw, CheckCircle2, XCircle, Users, Trophy, Clock, Plus, Trash2, Calendar, Gamepad2, Grid, Settings, List, Volume2, Volume1, VolumeX, Radio, MessageSquare, Save, LogOut, ChevronDown, ChevronUp, HardDrive, Bot, Wallet, DollarSign, Ban, Shield, ShieldCheck, Edit3, Mail, MapPin, Share2, Copy, MessageCircle, X, BellRing, History, Loader2, Image, Upload, Music, Sliders, BarChart2, Sparkles, Gift, Download, Zap, Gauge, FastForward, Timer, PlayCircle, StopCircle, ArrowRight, Check, Key, QrCode, Scan, Star, SlidersHorizontal, Search, CheckSquare, Wrench } from 'lucide-react';
+import { Play, Pause, Square, RefreshCcw, CheckCircle2, XCircle, Users, Trophy, Clock, Plus, Trash2, Calendar, Gamepad2, Grid, Settings, List, Volume2, Volume1, VolumeX, Radio, MessageSquare, Save, LogOut, ChevronDown, ChevronUp, HardDrive, Bot, Wallet, DollarSign, Ban, Shield, ShieldCheck, Edit3, Mail, MapPin, Share2, Copy, MessageCircle, X, BellRing, History, Loader2, Image, Upload, Music, Sliders, BarChart2, Sparkles, Gift, Download, Zap, Gauge, FastForward, Timer, PlayCircle, StopCircle, ArrowRight, Check, Key, QrCode, Scan, Star, SlidersHorizontal, Search, CheckSquare, Wrench, Smartphone } from 'lucide-react';
 import { useTTS } from '../hooks/useTTS';
 import { announceBall } from '../utils/speech';
 import NotificationBell from '../components/NotificationBell';
@@ -727,6 +727,10 @@ export default function AdminDashboard() {
   const [userToDelete, setUserToDelete] = useState<any>(null);
   const [rechargeAmount, setRechargeAmount] = useState<string>('');
   const [selectedWalletPlayer, setSelectedWalletPlayer] = useState<string | null>(null);
+  const [showDirectRechargeModal, setShowDirectRechargeModal] = useState(false);
+  const [directRechargePhone, setDirectRechargePhone] = useState('');
+  const [directRechargeAmount, setDirectRechargeAmount] = useState('');
+  const [isSubmittingDirectRecharge, setIsSubmittingDirectRecharge] = useState(false);
   const [historyPlayer, setHistoryPlayer] = useState<any>(null);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [walletHistoryData, setWalletHistoryData] = useState<any[]>([]);
@@ -1367,6 +1371,46 @@ export default function AdminDashboard() {
       }
     } catch (err) {
       toast.error('Error de conexión');
+    }
+  };
+
+  const handleDirectRecharge = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const phone = normalizePhone(directRechargePhone);
+    const amountNum = parseFloat(directRechargeAmount);
+    if (!phone || phone.length < 10) {
+      toast.error('Ingresa un número de teléfono válido (al menos 10 dígitos)');
+      return;
+    }
+    if (isNaN(amountNum) || amountNum <= 0) {
+      toast.error('Ingresa un monto válido mayor a 0');
+      return;
+    }
+    setIsSubmittingDirectRecharge(true);
+    try {
+      const res = await apiFetch('/api/admin/wallet/recharge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone,
+          amount: amountNum,
+          tenantId: currentTenant || undefined
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.success(`Recarga de ${formatCurrency(amountNum)} acreditada exitosamente al teléfono ${phone}`);
+        setShowDirectRechargeModal(false);
+        setDirectRechargePhone('');
+        setDirectRechargeAmount('');
+        await fetchWalletPlayers();
+      } else {
+        toast.error(data.error || 'Error al recargar saldo');
+      }
+    } catch (err) {
+      toast.error('Error de conexión al procesar la recarga');
+    } finally {
+      setIsSubmittingDirectRecharge(false);
     }
   };
 
@@ -5812,7 +5856,7 @@ export default function AdminDashboard() {
 
             {/* Control de Billeteras */}
             <div className="bg-white rounded-3xl shadow-xl border-4 border-blue-500 overflow-hidden font-sans">
-              <div className="bg-blue-600 p-6 text-white flex justify-between items-center">
+              <div className="bg-blue-600 p-6 text-white flex flex-wrap gap-4 justify-between items-center">
                 <div className="flex items-center gap-3">
                   <Wallet size={32} />
                   <div>
@@ -5820,6 +5864,13 @@ export default function AdminDashboard() {
                     <p className="text-blue-100 text-xs font-bold">Gestiona el saldo de los jugadores</p>
                   </div>
                 </div>
+                <button
+                  onClick={() => setShowDirectRechargeModal(true)}
+                  className="flex items-center gap-2 bg-white text-blue-700 hover:bg-blue-50 px-4 py-2.5 rounded-2xl font-black text-xs uppercase tracking-wider shadow-md transition transform active:scale-95 cursor-pointer"
+                >
+                  <Plus size={18} className="stroke-[3]" />
+                  Recarga Manual por Teléfono
+                </button>
               </div>
 
               <div className="p-6">
@@ -5893,6 +5944,82 @@ export default function AdminDashboard() {
                 )}
               </div>
             </div>
+
+            {/* Modal de Recarga Manual Directa */}
+            {showDirectRechargeModal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+                <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border-4 border-blue-500 space-y-4">
+                  <div className="flex justify-between items-center border-b pb-3">
+                    <div className="flex items-center gap-2">
+                      <Wallet className="text-blue-600" size={24} />
+                      <h3 className="text-lg font-black text-slate-800 uppercase">Recarga Manual a Billetera</h3>
+                    </div>
+                    <button
+                      onClick={() => setShowDirectRechargeModal(false)}
+                      className="p-1 rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleDirectRecharge} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-black uppercase tracking-wider text-slate-600 mb-1">
+                        Número de Teléfono del Jugador
+                      </label>
+                      <div className="relative">
+                        <Smartphone className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                        <input
+                          type="tel"
+                          required
+                          placeholder="Ej: 3001234567"
+                          value={directRechargePhone}
+                          onChange={(e) => setDirectRechargePhone(e.target.value)}
+                          className="w-full pl-10 pr-4 py-3 rounded-2xl border-2 border-slate-200 focus:border-blue-500 font-bold text-slate-800 text-sm outline-none transition"
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">Si el jugador no está registrado previamente, se le acreditará el saldo para cuando ingrese.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-black uppercase tracking-wider text-slate-600 mb-1">
+                        Monto a Recargar ($)
+                      </label>
+                      <div className="relative">
+                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                        <input
+                          type="number"
+                          required
+                          min="1000"
+                          step="500"
+                          placeholder="Ej: 20000"
+                          value={directRechargeAmount}
+                          onChange={(e) => setDirectRechargeAmount(e.target.value)}
+                          className="w-full pl-10 pr-4 py-3 rounded-2xl border-2 border-slate-200 focus:border-blue-500 font-bold text-slate-800 text-sm outline-none transition"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowDirectRechargeModal(false)}
+                        className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl transition"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isSubmittingDirectRecharge}
+                        className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl shadow-lg shadow-blue-500/30 transition disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {isSubmittingDirectRecharge ? 'Procesando...' : 'Acreditar Saldo'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
