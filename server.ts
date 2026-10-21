@@ -67,7 +67,7 @@ async function getGameSettings(gameId: number | string, tenantId?: string) {
   } catch (e: any) {
     // ignored
   }
-  return cached ? cached.value : {};
+  return cached ? cached.value : { maintenance_mode: false };
 }
 
 const settingsUpdateQueue = new Map<string, Promise<any>>();
@@ -1001,6 +1001,7 @@ app.post('/api/tenants', async (req, res) => {
       logo_url: logo_url || null,
       banner_url: banner_url || null,
       plan: 'pro',
+      is_active: true,
       max_cards_per_game: 20000,
       admin_email: cleanAdminEmail,
       admin_password: hashedAdminPassword,
@@ -1026,19 +1027,45 @@ app.post('/api/tenants', async (req, res) => {
     }
 
     let tenantRecord = tenantPayload;
-    const { data: createdTenant, error: insertError } = await supabase
+    let { data: createdTenant, error: insertError } = await supabase
       .from('tenants')
       .insert(tenantPayload)
       .select()
       .single();
 
     if (insertError) {
-      console.warn('[CreateTenant] Supabase notice (tabla tenants pendiente de migración):', insertError.message);
-      // Fallback a memoria para desarrollo y tolerancia inmediata
-      tenantsCache.set(slug, { tenant: tenantPayload, timestamp: Date.now() });
-    } else if (createdTenant) {
-      tenantRecord = createdTenant;
-      tenantsCache.set(slug, { tenant: createdTenant, timestamp: Date.now() });
+      console.warn('[CreateTenant] Notice insertando con payload completo en tenants:', insertError.message);
+      // Fallback a campos mínimos requeridos en caso de diferencias de esquema
+      const minimalPayload = {
+        id: slug,
+        name: name.trim(),
+        slug: slug,
+        subdomain: slug,
+        access_code: accessCode,
+        primary_color: primary_color || '#2563eb',
+        plan: 'pro',
+        is_active: true
+      };
+      const retry = await supabase.from('tenants').insert(minimalPayload).select().single();
+      if (!retry.error && retry.data) {
+        createdTenant = retry.data;
+        insertError = null;
+      }
+    }
+
+    if (createdTenant) {
+      tenantRecord = { ...tenantPayload, ...createdTenant };
+    }
+    tenantsCache.set(slug, { tenant: tenantRecord, timestamp: Date.now() });
+
+    // Inicializar explícitamente los ajustes de la nueva sala con MODO MANTENIMIENTO DESACTIVADO (false)
+    try {
+      await saveGameSettings('global', {
+        maintenance_mode: false,
+        maintenance_message: ''
+      }, slug);
+    } catch (settErr: any) {
+      console.warn(`[CreateTenant] Notice inicializando ajustes de sala ${slug}:`, settErr?.message);
     }
 
     // Clonar inmediatamente los patrones estándar del sistema para que esta sala tenga sus figuras independientes
@@ -12751,121 +12778,6 @@ app.get('/api/admin/games-stats-history', requireAdmin, async (req, res) => {
   }
 });
 
-app.use('/api', (req, res) => {
-  res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
-});
-
-async function startServer() {
-  const isProduction = process.env.NODE_ENV === 'production';
-  const distExists = fs.existsSync(path.join(process.cwd(), 'dist'));
-
-  console.log('Starting server in', isProduction ? 'production' : 'development', 'mode');
-
-  // Start the background game loop
-  startBackgroundGameLoop();
-
-  // Load global autoplay interval if set
-  try {
-    const settings = await getGameSettings('global');
-    if (settings.autoplay_interval) {
-      serverAutoplay.intervalMs = Number(settings.autoplay_interval) * 1000;
-      console.log(`[Autoplay] Loaded global interval from settings: ${settings.autoplay_interval}s`);
-    }
-  } catch (err) {
-    console.warn('[Autoplay] Could not load global settings on start');
-  }
-
-  // Run migration in background to avoid blocking the server startup
-  migratePhoneNumbers().then(() => {
-    console.log('Phone number migration completed.');
-  }).catch(err => {
-
-  });
-
-  if (distExists) {
-    console.log('Production build found: Serving static assets and SPA routes from dist folder.');
-    app.use(express.static(path.join(process.cwd(), 'dist'), {
-      setHeaders: (res, filePath) => {
-        if (filePath.endsWith('index.html')) {
-          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-          res.setHeader('Pragma', 'no-cache');
-          res.setHeader('Expires', '0');
-        } else if (filePath.includes(path.sep + 'assets' + path.sep) || filePath.includes('/assets/')) {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        }
-      }
-    }));
-
-    // CRÍTICO: Si un archivo estático (.js, .css, .map, etc.) de assets no existe en dist,
-    // devolver 404 inmediatamente. NUNCA devolver index.html para archivos .js/.css,
-    // ya que esto provoca "TypeError: Failed to fetch dynamically imported module".
-    app.use('/assets', (req, res) => {
-      res.status(404).json({ error: 'Asset no encontrado (puede pertenecer a una versión previa).' });
-    });
-    app.use((req, res, next) => {
-      if (req.path.match(/\.(js|css|map|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot)$/i)) {
-        return res.status(404).send('Archivo no encontrado');
-      }
-      next();
-    });
-
-    app.get('*', (req, res) => {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
-      res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
-    });
-  } else {
-    console.log('Dist folder not found: Initializing Vite development middleware mode.');
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: false,
-      },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  }
-
-  // Global error handler for debugging
-  app.use((err: any, req: any, res: any, next: any) => {
-
-    res.status(500).json({
-      error: err.message || 'Internal Server Error',
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-    });
-  });
-
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Bingo Server is ACTIVE and listening on port ${PORT}`);
-    console.log(`Targeting host: 0.0.0.0`);
-    if (!supabase) {
-      console.log('WARNING: Supabase client is NOT initialized. Check your environment variables.');
-    } else {
-      console.log('Supabase client initialized.');
-    }
-    if (!process.env.GEMINI_API_KEY) {
-      console.log('WARNING: GEMINI_API_KEY is missing. AI Voice features will NOT work.');
-    }
-  });
-
-  server.on('error', (e: any) => {
-    if (e.code === 'EADDRINUSE') {
-      console.log(`Port ${PORT} is already in use. Assuming server is already running.`);
-    } else {
-
-    }
-  });
-
-  process.on('unhandledRejection', (reason, promise) => {
-    console.log('Unhandled Rejection at:', promise, 'reason:', reason);
-  });
-
-  process.on('uncaughtException', (err) => {
-    console.log('Uncaught Exception thrown:', err);
-  });
-}
-
 // ============================================================================
 // SUPER ADMIN PANEL API — Only accessible to isSuperAdmin accounts
 // ============================================================================
@@ -12880,8 +12792,19 @@ app.get('/api/superadmin/rooms', requireSuperAdmin, async (req, res) => {
 
     if (error) throw error;
 
+    const dbTenants: any[] = tenants || [];
+    const dbSlugs = new Set(dbTenants.map((t: any) => (t.slug || t.id).toLowerCase()));
+
+    // Incluir cualquier sala creada en caché de memoria que no haya persistido en BD
+    for (const [slugKey, entry] of tenantsCache.entries()) {
+      if (entry?.tenant && !dbSlugs.has(slugKey.toLowerCase())) {
+        dbTenants.push(entry.tenant);
+        dbSlugs.add(slugKey.toLowerCase());
+      }
+    }
+
     // Enrich with player counts per room
-    const enriched = await Promise.all((tenants || []).map(async (t: any) => {
+    const enriched = await Promise.all(dbTenants.map(async (t: any) => {
       try {
         const [{ count: playerCount }, { count: pendingCount }, { count: gameCount }] = await Promise.all([
           supabase.from('players').select('*', { count: 'exact', head: true }).eq('tenant_id', t.slug || t.id),
@@ -13156,6 +13079,119 @@ app.get('/api/superadmin/rooms/:slug/players', requireSuperAdmin, async (req, re
   }
 });
 
-// ============================================================================
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.method} ${req.originalUrl}` });
+});
+
+async function startServer() {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const distExists = fs.existsSync(path.join(process.cwd(), 'dist'));
+
+  console.log('Starting server in', isProduction ? 'production' : 'development', 'mode');
+
+  // Start the background game loop
+  startBackgroundGameLoop();
+
+  // Load global autoplay interval if set
+  try {
+    const settings = await getGameSettings('global');
+    if (settings.autoplay_interval) {
+      serverAutoplay.intervalMs = Number(settings.autoplay_interval) * 1000;
+      console.log(`[Autoplay] Loaded global interval from settings: ${settings.autoplay_interval}s`);
+    }
+  } catch (err) {
+    console.warn('[Autoplay] Could not load global settings on start');
+  }
+
+  // Run migration in background to avoid blocking the server startup
+  migratePhoneNumbers().then(() => {
+    console.log('Phone number migration completed.');
+  }).catch(err => {
+
+  });
+
+  if (distExists) {
+    console.log('Production build found: Serving static assets and SPA routes from dist folder.');
+    app.use(express.static(path.join(process.cwd(), 'dist'), {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('index.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        } else if (filePath.includes(path.sep + 'assets' + path.sep) || filePath.includes('/assets/')) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        }
+      }
+    }));
+
+    // CRÍTICO: Si un archivo estático (.js, .css, .map, etc.) de assets no existe en dist,
+    // devolver 404 inmediatamente. NUNCA devolver index.html para archivos .js/.css,
+    // ya que esto provoca "TypeError: Failed to fetch dynamically imported module".
+    app.use('/assets', (req, res) => {
+      res.status(404).json({ error: 'Asset no encontrado (puede pertenecer a una versión previa).' });
+    });
+    app.use((req, res, next) => {
+      if (req.path.match(/\.(js|css|map|png|jpg|jpeg|gif|svg|ico|webp|woff|woff2|ttf|eot)$/i)) {
+        return res.status(404).send('Archivo no encontrado');
+      }
+      next();
+    });
+
+    app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
+    });
+  } else {
+    console.log('Dist folder not found: Initializing Vite development middleware mode.');
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  }
+
+  // Global error handler for debugging
+  app.use((err: any, req: any, res: any, next: any) => {
+
+    res.status(500).json({
+      error: err.message || 'Internal Server Error',
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  });
+
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Bingo Server is ACTIVE and listening on port ${PORT}`);
+    console.log(`Targeting host: 0.0.0.0`);
+    if (!supabase) {
+      console.log('WARNING: Supabase client is NOT initialized. Check your environment variables.');
+    } else {
+      console.log('Supabase client initialized.');
+    }
+    if (!process.env.GEMINI_API_KEY) {
+      console.log('WARNING: GEMINI_API_KEY is missing. AI Voice features will NOT work.');
+    }
+  });
+
+  server.on('error', (e: any) => {
+    if (e.code === 'EADDRINUSE') {
+      console.log(`Port ${PORT} is already in use. Assuming server is already running.`);
+    } else {
+
+    }
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.log('Unhandled Rejection at:', promise, 'reason:', reason);
+  });
+
+  process.on('uncaughtException', (err) => {
+    console.log('Uncaught Exception thrown:', err);
+  });
+}
 
 startServer();
