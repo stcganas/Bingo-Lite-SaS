@@ -427,15 +427,14 @@ async function getGiftStatsMap(targetGameId?: number) {
 async function findSpecificPlayer(rawPhone: string, targetTenant?: string): Promise<any | null> {
   const phone = normalizePhone(rawPhone);
   if (!phone) return null;
-  const normTenant = (targetTenant || 'default').toLowerCase();
+  const rawTenant = (targetTenant || 'bingo-lite').toLowerCase();
+  const normTenant = rawTenant === 'default' ? 'demo' : rawTenant;
 
   try {
     // 1. Intentar buscar coincidencia exacta con el tenant especificado
     let q = supabase.from('players').select('*').eq('phone', phone);
-    if (normTenant !== 'default' && normTenant !== 'bingo-lite') {
+    if (normTenant && normTenant !== 'global') {
       q = q.eq('tenant_id', normTenant);
-    } else {
-      q = q.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
     }
     const { data: rows } = await q.order('created_at', { ascending: false }).limit(1);
     if (rows && rows.length > 0) return rows[0];
@@ -453,13 +452,12 @@ async function findSpecificPlayer(rawPhone: string, targetTenant?: string): Prom
 async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
   if (!phone) return 0;
-  const targetTenant = (tenantId || 'default').toLowerCase();
+  const rawTenant = (tenantId || 'bingo-lite').toLowerCase();
+  const targetTenant = rawTenant === 'default' ? 'demo' : rawTenant;
   try {
     let query = supabase.from('wallets').select('balance, tenant_id').eq('phone', phone);
-    if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
+    if (targetTenant && targetTenant !== 'global') {
       query = query.eq('tenant_id', targetTenant);
-    } else {
-      query = query.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
     }
     const { data: rows, error } = await query.order('updated_at', { ascending: false });
     if (error) {
@@ -468,7 +466,7 @@ async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<nu
     }
     if (rows && rows.length > 0) {
       // Priorizar coincidencia exacta con targetTenant
-      const exactMatch = rows.find(r => (r.tenant_id || 'default').toLowerCase() === targetTenant);
+      const exactMatch = rows.find(r => (r.tenant_id || 'bingo-lite').toLowerCase() === targetTenant);
       if (exactMatch) return Number(exactMatch.balance) || 0;
       const positiveRow = rows.find(r => Number(r.balance) > 0);
       return positiveRow ? Number(positiveRow.balance) : Number(rows[0].balance) || 0;
@@ -486,7 +484,8 @@ const walletUpdateQueues = new Map<string, Promise<any>>();
 async function updateWalletBalance(rawPhone: string, amount: number, description: string = 'Transacción de billetera', type: string = 'other', tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
   if (!phone) throw new Error('Número de teléfono inválido para transacción de billetera.');
-  const targetTenant = (tenantId || 'default').toLowerCase();
+  const rawTenant = (tenantId || 'bingo-lite').toLowerCase();
+  const targetTenant = rawTenant === 'default' ? 'demo' : rawTenant;
   const queueKey = `${targetTenant}:${phone}`;
 
   const currentQueue = walletUpdateQueues.get(queueKey) || Promise.resolve();
@@ -502,19 +501,6 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
 
     // 2. Determinar el tenant_id efectivo para la clave compuesta (phone, tenant_id)
     let effectiveTenant = targetTenant;
-    if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-      const { data: existingRows } = await supabase.from('wallets')
-        .select('tenant_id')
-        .eq('phone', phone)
-        .or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null')
-        .order('updated_at', { ascending: false })
-        .limit(1);
-      if (existingRows && existingRows.length > 0 && existingRows[0].tenant_id) {
-        effectiveTenant = existingRows[0].tenant_id;
-      } else {
-        effectiveTenant = 'bingo-lite';
-      }
-    }
 
     // Asegurar que effectiveTenant exista en tenants (por id o slug) para respetar la foreign key
     try {
@@ -526,10 +512,10 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       if (tenantCheck && tenantCheck.id) {
         effectiveTenant = tenantCheck.id;
       } else {
-        effectiveTenant = 'default';
+        effectiveTenant = 'bingo-lite';
       }
     } catch (tErr) {
-      effectiveTenant = 'default';
+      effectiveTenant = 'bingo-lite';
     }
 
     const payload = {
@@ -840,19 +826,20 @@ function getTenantIdFromRequest(req: express.Request): string {
     }
   }
 
-  return 'default';
+  return 'bingo-lite';
 }
 
 async function getTenantInfo(tenantId: string) {
-  const normId = (tenantId || 'default').toLowerCase();
+  const rawId = (tenantId || 'bingo-lite').toLowerCase();
+  const normId = rawId === 'default' ? 'demo' : rawId;
   const cached = tenantsCache.get(normId);
   const now = Date.now();
   if (cached && (now - cached.timestamp < TENANTS_CACHE_TTL)) {
     return cached.tenant;
   }
 
-  // Si es la sala oficial 'bingo-lite' o 'default'
-  if (normId === 'bingo-lite' || normId === 'default') {
+  // 1. Sala oficial 'bingo-lite'
+  if (normId === 'bingo-lite') {
     const defaultTenant = {
       id: 'bingo-lite',
       name: 'Bingo Lite Oficial',
@@ -865,6 +852,22 @@ async function getTenantInfo(tenantId: string) {
     };
     tenantsCache.set(normId, { tenant: defaultTenant, timestamp: now });
     return defaultTenant;
+  }
+
+  // 2. Sala interactiva 'demo' (Visitantes)
+  if (normId === 'demo') {
+    const demoTenant = {
+      id: 'demo',
+      name: 'Sala Demo Visitantes',
+      slug: 'demo',
+      primary_color: '#7c3aed',
+      plan: 'trial',
+      access_code: 'DEMO2026',
+      max_cards_per_game: 2000,
+      description: 'Sala interactiva de demostración para visitantes y nuevos organizadores. Prueba el juego en vivo y las dinámicas.'
+    };
+    tenantsCache.set(normId, { tenant: demoTenant, timestamp: now });
+    return demoTenant;
   }
 
   try {
@@ -898,9 +901,25 @@ async function getTenantInfo(tenantId: string) {
 // Canales de tiempo real estrictamente aislados por Tenant / Sala
 function getChannel(tenantId?: string) {
   const norm = (tenantId || '').trim().toLowerCase();
-  const primaryChannel = norm && norm !== 'default' && norm !== 'bingo-lite' && norm !== 'global'
-    ? `bingo-tenant-${norm}`
-    : 'bingo-channel';
+  if (norm === 'global' || norm === 'bingo-global') {
+    const globalChannel = 'bingo-global';
+    return ably ? {
+      publish: async (name: string, data: any) => {
+        try {
+          await ably.channels.get(globalChannel).publish(name, data);
+        } catch (e) {
+          console.warn(`[Ably] Error publicando en ${globalChannel}:`, e);
+        }
+      }
+    } : {
+      publish: async (name: string, data: any) => {
+        console.warn(`Ably not configured. Skipping publish of ${name}`);
+      }
+    } as any;
+  }
+
+  const tenantKey = norm === 'default' ? 'demo' : (norm || 'bingo-lite');
+  const primaryChannel = `bingo-tenant-${tenantKey}`;
 
   return ably ? {
     publish: async (name: string, data: any) => {
@@ -1865,7 +1884,8 @@ app.get('/api/wallet', async (req, res) => {
     const phone = normalizePhone(rawPhone as string);
     if (!phone) return res.status(400).json({ error: 'Phone is required' });
 
-    const tenantId = (qTenantId as string) || (req as any).tenantId || 'default';
+    const rawTenantId = (qTenantId as string) || (req as any).tenantId || 'bingo-lite';
+    const cleanTenant = rawTenantId === 'default' ? 'demo' : rawTenantId.toLowerCase();
 
     // Touch player presence
     touchPlayerPresence(phone);
@@ -1874,10 +1894,8 @@ app.get('/api/wallet', async (req, res) => {
 
     // Check if player already exists in this tenant and has a password
     let playerQ = supabase.from('players').select('id, password, tenant_id').eq('phone', phone);
-    if (tenantId !== 'default' && tenantId !== 'bingo-lite') {
-      playerQ = playerQ.eq('tenant_id', tenantId);
-    } else {
-      playerQ = playerQ.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+    if (cleanTenant && cleanTenant !== 'global') {
+      playerQ = playerQ.eq('tenant_id', cleanTenant);
     }
     const { data: player } = await playerQ.maybeSingle();
     const hasPassword = !!(player?.password && player.password.trim() !== '');
@@ -1886,11 +1904,9 @@ app.get('/api/wallet', async (req, res) => {
     const authUser = await getAuthenticatedUser(req);
     let canViewBalance = false;
     if (authUser) {
-      const userTenant = (authUser.tenant_id || 'default').toLowerCase();
-      const reqTenant = (tenantId || 'default').toLowerCase();
-      const isSameTenant = userTenant === reqTenant ||
-        (userTenant === 'bingo-lite' && reqTenant === 'default') ||
-        (userTenant === 'default' && reqTenant === 'bingo-lite');
+      const rawUserTenant = (authUser.tenant_id || 'bingo-lite').toLowerCase();
+      const userTenant = rawUserTenant === 'default' ? 'demo' : rawUserTenant;
+      const isSameTenant = userTenant === cleanTenant;
 
       if (authUser.role === 'admin') {
         if (authUser.isSuperAdmin || isSameTenant) {
@@ -1919,7 +1935,7 @@ app.get('/api/wallet', async (req, res) => {
       });
     }
 
-    const balance = await getWalletBalance(phone, tenantId);
+    const balance = await getWalletBalance(phone, cleanTenant);
     res.json({ balance, activated, hasPassword, authenticated: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Internal server error' });
@@ -1930,7 +1946,8 @@ app.get('/api/wallet/history', async (req, res) => {
   const { phone: rawPhone, tenantId: qTenantId } = req.query;
   if (!rawPhone || typeof rawPhone !== 'string') return res.status(400).json({ error: 'Favor proporcionar un número de teléfono válido' });
   const phone = normalizePhone(rawPhone);
-  const tenantId = (qTenantId as string) || (req as any).tenantId || 'default';
+  const rawTenantId = (qTenantId as string) || (req as any).tenantId || 'bingo-lite';
+  const tenantId = rawTenantId === 'default' ? 'demo' : rawTenantId.toLowerCase();
 
   // CONTROL DE ACCESO ESTRICTO: Solo el titular autenticado o un administrador autorizado pueden ver el historial
   const authUser = await getAuthenticatedUser(req);
@@ -2022,11 +2039,8 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
     // 1. Obtener jugadores registrados respetando tenant
     let query = supabase.from('players').select('id, name, phone, tenant_id, created_at');
     if (targetTenant && targetTenant !== 'global') {
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        query = query.eq('tenant_id', targetTenant);
-      }
+      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
+      query = query.eq('tenant_id', cleanTenant);
     }
     const { data: players, error } = await query.order('created_at', { ascending: false });
     if (error) throw error;
@@ -2095,12 +2109,8 @@ app.get('/api/admin/winners', requireAdmin, async (req, res) => {
     // Si pertenece a una sala específica, obtener primero los juegos de su sala
     let allowedGameIds: number[] | null = null;
     if (targetTenant && targetTenant !== 'global') {
-      let gQuery = supabase.from('game').select('id');
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        gQuery = gQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        gQuery = gQuery.eq('tenant_id', targetTenant);
-      }
+      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
+      let gQuery = supabase.from('game').select('id').eq('tenant_id', cleanTenant);
       const { data: tenantGames } = await gQuery;
       allowedGameIds = (tenantGames || []).map(g => g.id);
       if (allowedGameIds.length === 0) {
@@ -2778,11 +2788,8 @@ app.get('/api/admin/sellers', requireAdmin, async (req, res) => {
     let query = supabase.from('sellers').select('*').order('created_at', { ascending: false });
 
     if (targetTenant && targetTenant !== 'global') {
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        query = query.eq('tenant_id', targetTenant);
-      }
+      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
+      query = query.eq('tenant_id', cleanTenant);
     }
 
     const { data: sellers, error } = await query;
@@ -3318,10 +3325,10 @@ app.post('/api/players/login', async (req, res) => {
       .select('*')
       .eq('phone', phone);
 
-    if (targetTenantId && targetTenantId !== 'default' && targetTenantId !== 'bingo-lite') {
-      playerQuery = playerQuery.eq('tenant_id', targetTenantId);
-    } else {
-      playerQuery = playerQuery.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    const rawTargetTenant = (targetTenantId || 'bingo-lite').toLowerCase();
+    const cleanTenant = rawTargetTenant === 'default' ? 'demo' : rawTargetTenant;
+    if (cleanTenant && cleanTenant !== 'global') {
+      playerQuery = playerQuery.eq('tenant_id', cleanTenant);
     }
 
     let { data: player, error: fetchError } = await playerQuery.maybeSingle();
@@ -3478,11 +3485,8 @@ app.get('/api/games', async (req, res) => {
       .order('id', { ascending: false });
 
     if (targetTenant && targetTenant !== 'global') {
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        gamesQuery = gamesQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        gamesQuery = gamesQuery.eq('tenant_id', targetTenant);
-      }
+      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
+      gamesQuery = gamesQuery.eq('tenant_id', cleanTenant);
     }
 
     const { data, error } = await gamesQuery;
@@ -3599,11 +3603,8 @@ async function persistFreeGamePrize(prize: {
         .eq('pattern_id', prize.patternId)
         .eq('player_id', prize.playerId);
 
-      if (normTenant === 'default' || normTenant === 'bingo-lite') {
-        q = q.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        q = q.eq('tenant_id', normTenant);
-      }
+      const cleanTenant = normTenant === 'default' ? 'demo' : normTenant;
+      q = q.eq('tenant_id', cleanTenant);
       const { data: existing } = await q.maybeSingle();
 
       if (existing) {
@@ -3722,16 +3723,15 @@ async function recordPaidGameParticipation(playerId: number, gameId: number, ten
 app.get('/api/free-games/leaderboard', async (req, res) => {
   try {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    const targetTenant = ((req.query.tenantId as string) || (req.query.tenant as string) || (req.query.slug as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
+    const rawTargetTenant = ((req.query.tenantId as string) || (req.query.tenant as string) || (req.query.slug as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+    const targetTenant = rawTargetTenant === 'default' ? 'demo' : rawTargetTenant;
 
     // 1. Obtener juegos de esta sala específica para detectar cuáles son gratis y pagos
     let gamesQuery = supabase
       .from('game')
       .select('id, name, is_free, card_value, created_at, status, tenant_id');
 
-    if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-      gamesQuery = gamesQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-    } else {
+    if (targetTenant && targetTenant !== 'global') {
       gamesQuery = gamesQuery.eq('tenant_id', targetTenant);
     }
 
@@ -3774,9 +3774,7 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
     const dbFreePrizesList: any[] = [];
     try {
       let fpQuery = supabase.from('free_game_prizes').select('*');
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        fpQuery = fpQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
+      if (targetTenant && targetTenant !== 'global') {
         fpQuery = fpQuery.eq('tenant_id', targetTenant);
       }
       const { data: dbFreePrizes } = await fpQuery;
@@ -3860,9 +3858,7 @@ app.get('/api/free-games/leaderboard', async (req, res) => {
     // 6b. De la tabla player_paid_game_participations filtrada por esta sala
     try {
       let partQ = supabase.from('player_paid_game_participations').select('player_id, game_id');
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        partQ = partQ.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
+      if (targetTenant && targetTenant !== 'global') {
         partQ = partQ.eq('tenant_id', targetTenant);
       }
       const { data: dbParts } = await partQ;
@@ -4728,13 +4724,12 @@ async function doActivateGame(gameId: number) {
   const tenantFilter = (targetGame?.tenant_id || 'default').toLowerCase();
 
   // End all currently active games ONLY for this tenant
+  const cleanTenantFilter = tenantFilter === 'default' ? 'demo' : tenantFilter;
   let prevGamesQ = supabase.from('game')
     .select('id')
     .in('status', ['waiting', 'playing', 'paused']);
-  if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
-    prevGamesQ = prevGamesQ.eq('tenant_id', tenantFilter);
-  } else {
-    prevGamesQ = prevGamesQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+  if (cleanTenantFilter && cleanTenantFilter !== 'global') {
+    prevGamesQ = prevGamesQ.eq('tenant_id', cleanTenantFilter);
   }
   const { data: previousGames } = await prevGamesQ;
 
@@ -4747,10 +4742,8 @@ async function doActivateGame(gameId: number) {
       card_count: 0,
       status: 'pending'
     }).neq('phone', '0000000000');
-    if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
-      playerResetQ = playerResetQ.eq('tenant_id', tenantFilter);
-    } else {
-      playerResetQ = playerResetQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    if (cleanTenantFilter && cleanTenantFilter !== 'global') {
+      playerResetQ = playerResetQ.eq('tenant_id', cleanTenantFilter);
     }
     await playerResetQ;
   }
@@ -4758,10 +4751,8 @@ async function doActivateGame(gameId: number) {
   let endGamesQ = supabase.from('game')
     .update({ status: 'ended' })
     .in('status', ['waiting', 'playing', 'paused']);
-  if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
-    endGamesQ = endGamesQ.eq('tenant_id', tenantFilter);
-  } else {
-    endGamesQ = endGamesQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+  if (cleanTenantFilter && cleanTenantFilter !== 'global') {
+    endGamesQ = endGamesQ.eq('tenant_id', cleanTenantFilter);
   }
   await endGamesQ;
 
@@ -4808,13 +4799,12 @@ app.post('/api/games/:id/activate', requireAdmin, async (req, res) => {
     const tenantFilter = (targetGame.tenant_id || 'default').toLowerCase();
 
     // End all currently active games ONLY for this tenant
+    const cleanTenantFilter = tenantFilter === 'default' ? 'demo' : tenantFilter;
     let prevGamesQ = supabase.from('game')
       .select('id')
       .in('status', ['waiting', 'playing', 'paused']);
-    if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
-      prevGamesQ = prevGamesQ.eq('tenant_id', tenantFilter);
-    } else {
-      prevGamesQ = prevGamesQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    if (cleanTenantFilter && cleanTenantFilter !== 'global') {
+      prevGamesQ = prevGamesQ.eq('tenant_id', cleanTenantFilter);
     }
     const { data: previousGames } = await prevGamesQ;
 
@@ -4827,10 +4817,8 @@ app.post('/api/games/:id/activate', requireAdmin, async (req, res) => {
         card_count: 0,
         status: 'pending'
       }).neq('phone', '0000000000');
-      if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
-        playerResetQ = playerResetQ.eq('tenant_id', tenantFilter);
-      } else {
-        playerResetQ = playerResetQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+      if (cleanTenantFilter && cleanTenantFilter !== 'global') {
+        playerResetQ = playerResetQ.eq('tenant_id', cleanTenantFilter);
       }
       await playerResetQ;
     }
@@ -4838,10 +4826,8 @@ app.post('/api/games/:id/activate', requireAdmin, async (req, res) => {
     let endGamesQ = supabase.from('game')
       .update({ status: 'ended' })
       .in('status', ['waiting', 'playing', 'paused']);
-    if (tenantFilter !== 'default' && tenantFilter !== 'bingo-lite') {
-      endGamesQ = endGamesQ.eq('tenant_id', tenantFilter);
-    } else {
-      endGamesQ = endGamesQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    if (cleanTenantFilter && cleanTenantFilter !== 'global') {
+      endGamesQ = endGamesQ.eq('tenant_id', cleanTenantFilter);
     }
     await endGamesQ;
 
@@ -4870,11 +4856,8 @@ async function getActiveGame(tenantId?: string) {
     // Helper para aplicar filtro estricto de sala/tenant a cualquier consulta de juego
     const applyTenantFilter = (q: any) => {
       if (normTenant && normTenant !== 'global') {
-        if (normTenant === 'default' || normTenant === 'bingo-lite') {
-          return q.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-        } else {
-          return q.eq('tenant_id', normTenant);
-        }
+        const cleanTenant = normTenant === 'default' ? 'demo' : normTenant;
+        return q.eq('tenant_id', cleanTenant);
       }
       return q;
     };
@@ -5138,8 +5121,9 @@ async function seedRoomPatterns(tenantId: string) {
 app.get('/api/patterns', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const rawTargetTenant = getTenantIdFromRequest(req);
-  const targetTenant = (rawTargetTenant || 'default').toLowerCase();
-  const isMainTenant = targetTenant === 'default' || targetTenant === 'bingo-lite' || targetTenant === 'global';
+  const rawTenant = (rawTargetTenant || 'bingo-lite').toLowerCase();
+  const targetTenant = rawTenant === 'default' ? 'demo' : rawTenant;
+  const isMainTenant = targetTenant === 'bingo-lite' || targetTenant === 'global';
 
   const now = Date.now();
   const cached = cachedPatternsByTenant.get(targetTenant);
@@ -5148,10 +5132,10 @@ app.get('/api/patterns', async (req, res) => {
   }
 
   try {
-    // 1. Consultar patrones asignados a esta sala específica (o todas las figuras globales si es la sala principal)
+    // 1. Consultar patrones asignados a esta sala específica
     let query = supabase.from('patterns').select('*');
     if (isMainTenant) {
-      query = query.or('tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null');
+      query = query.or('tenant_id.eq.bingo-lite,tenant_id.is.null');
     } else {
       query = query.eq('tenant_id', targetTenant);
     }
@@ -5171,7 +5155,7 @@ app.get('/api/patterns', async (req, res) => {
     if (!data || data.length === 0) {
       const { data: globalPatterns } = await supabase.from('patterns')
         .select('*')
-        .or('tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null')
+        .or('tenant_id.eq.bingo-lite,tenant_id.is.null')
         .order('name', { ascending: true });
       data = globalPatterns;
     }
@@ -8754,10 +8738,9 @@ app.post('/api/players/claim-free-cards', async (req, res) => {
 
     // Check if player exists in this tenant
     let playerQuery = supabase.from('players').select('*').eq('phone', phone);
-    if (targetTenant && targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-      playerQuery = playerQuery.eq('tenant_id', targetTenant);
-    } else {
-      playerQuery = playerQuery.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    const cleanTenant = targetTenant === 'default' ? 'demo' : (targetTenant || 'bingo-lite');
+    if (cleanTenant && cleanTenant !== 'global') {
+      playerQuery = playerQuery.eq('tenant_id', cleanTenant);
     }
     let { data: player } = await playerQuery.maybeSingle();
 
@@ -9157,10 +9140,9 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       .select('*')
       .eq('phone', phone);
 
-    if (effectiveTenant && effectiveTenant !== 'default' && effectiveTenant !== 'bingo-lite') {
-      selectPlayerQuery = selectPlayerQuery.eq('tenant_id', effectiveTenant);
-    } else {
-      selectPlayerQuery = selectPlayerQuery.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    const cleanTenant = effectiveTenant === 'default' ? 'demo' : (effectiveTenant || 'bingo-lite');
+    if (cleanTenant && cleanTenant !== 'global') {
+      selectPlayerQuery = selectPlayerQuery.eq('tenant_id', cleanTenant);
     }
 
     let { data: existingPlayer, error: selectError } = await selectPlayerQuery.maybeSingle();
@@ -9616,11 +9598,8 @@ app.get('/api/admin/all-players', requireAdmin, async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (targetTenant && targetTenant !== 'global') {
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        query = query.eq('tenant_id', targetTenant);
-      }
+      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
+      query = query.eq('tenant_id', cleanTenant);
     }
 
     const { data: players, error } = await query;
@@ -9772,12 +9751,10 @@ app.delete('/api/admin/players/:id', requireAdmin, async (req, res) => {
       let delReceipts = supabase.from('receipts').delete().eq('player_phone', phone);
       let delClaims = supabase.from('bingo_claims').delete().eq('player_phone', phone);
 
-      if (pTenant && pTenant !== 'default' && pTenant !== 'bingo-lite') {
-        delReceipts = delReceipts.eq('tenant_id', pTenant);
-        delClaims = delClaims.eq('tenant_id', pTenant);
-      } else {
-        delReceipts = delReceipts.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-        delClaims = delClaims.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
+      const cleanPTenant = pTenant === 'default' ? 'demo' : (pTenant || 'bingo-lite');
+      if (cleanPTenant && cleanPTenant !== 'global') {
+        delReceipts = delReceipts.eq('tenant_id', cleanPTenant);
+        delClaims = delClaims.eq('tenant_id', cleanPTenant);
       }
 
       await Promise.all([
@@ -9829,11 +9806,8 @@ app.get('/api/players', async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (targetTenant && targetTenant !== 'global') {
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        playersQuery = playersQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        playersQuery = playersQuery.eq('tenant_id', targetTenant);
-      }
+      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
+      playersQuery = playersQuery.eq('tenant_id', cleanTenant);
     }
 
     if (game?.id) {
@@ -10053,11 +10027,8 @@ app.post('/api/admin/players/approve-all', requireAdmin, async (req, res) => {
     let query = supabase.from('players').select('id, tenant_id').eq('status', 'pending');
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const adminTenant = adminUser.tenant_id.toLowerCase();
-      if (adminTenant === 'default' || adminTenant === 'bingo-lite') {
-        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        query = query.eq('tenant_id', adminTenant);
-      }
+      const cleanTenant = adminTenant === 'default' ? 'demo' : adminTenant;
+      query = query.eq('tenant_id', cleanTenant);
     }
     const { data: pendingPlayers, error: fetchErr } = await query;
 
@@ -10232,11 +10203,8 @@ app.get('/api/admin/recharge-requests', requireAdmin, async (req, res) => {
       .select('id, name, phone, receipt_url, created_at, tenant_id');
 
     if (targetTenant && targetTenant !== 'global') {
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        query = query.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        query = query.eq('tenant_id', targetTenant);
-      }
+      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
+      query = query.eq('tenant_id', cleanTenant);
     }
 
     const { data: players, error } = await query.order('created_at', { ascending: false });
@@ -10544,10 +10512,9 @@ app.get('/api/players/:phone/cards', async (req, res) => {
     const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || '').toLowerCase();
 
     let playerQuery = supabase.from('players').select('*').eq('phone', phone);
-    if (targetTenant && targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-      playerQuery = playerQuery.eq('tenant_id', targetTenant);
-    } else {
-      playerQuery = playerQuery.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+    const cleanTenant = targetTenant === 'default' ? 'demo' : (targetTenant || 'bingo-lite');
+    if (cleanTenant && cleanTenant !== 'global') {
+      playerQuery = playerQuery.eq('tenant_id', cleanTenant);
     }
 
     let { data: player, error: playerErr } = await playerQuery.maybeSingle();
@@ -10704,10 +10671,9 @@ app.post('/api/bingo', async (req, res) => {
   const targetTenant = ((qTenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
 
   let playerQ = supabase.from('players').select('*').eq('phone', phone);
-  if (targetTenant && targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-    playerQ = playerQ.eq('tenant_id', targetTenant);
-  } else {
-    playerQ = playerQ.or('tenant_id.eq.default,tenant_id.eq.bingo-lite,tenant_id.is.null');
+  const cleanTenant = targetTenant === 'default' ? 'demo' : (targetTenant || 'bingo-lite');
+  if (cleanTenant && cleanTenant !== 'global') {
+    playerQ = playerQ.eq('tenant_id', cleanTenant);
   }
   const { data: player } = await playerQ.maybeSingle();
 
@@ -12073,11 +12039,8 @@ app.post('/api/admin/game/autoplay/start', requireAdmin, async (req, res) => {
         .limit(1);
 
       if (targetTenant && targetTenant !== 'global') {
-        if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-          schedQuery = schedQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-        } else {
-          schedQuery = schedQuery.eq('tenant_id', targetTenant.toLowerCase());
-        }
+        const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant.toLowerCase();
+        schedQuery = schedQuery.eq('tenant_id', cleanTenant);
       }
 
       const { data: schedGame } = await schedQuery.maybeSingle();
@@ -12277,11 +12240,8 @@ app.post('/api/admin/game/schedule', requireAdmin, async (req, res) => {
           .limit(1);
 
         if (targetTenant && targetTenant !== 'global') {
-          if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-            schedQuery = schedQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-          } else {
-            schedQuery = schedQuery.eq('tenant_id', targetTenant.toLowerCase());
-          }
+          const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant.toLowerCase();
+          schedQuery = schedQuery.eq('tenant_id', cleanTenant);
         }
 
         const { data: schedGame } = await schedQuery.maybeSingle();
@@ -12362,11 +12322,8 @@ app.post('/api/admin/game/schedule/cancel', requireAdmin, async (req, res) => {
         .limit(1);
 
       if (targetTenant && targetTenant !== 'global') {
-        if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-          schedQuery = schedQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-        } else {
-          schedQuery = schedQuery.eq('tenant_id', targetTenant.toLowerCase());
-        }
+        const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant.toLowerCase();
+        schedQuery = schedQuery.eq('tenant_id', cleanTenant);
       }
 
       const { data: schedGame } = await schedQuery.maybeSingle();
@@ -12726,13 +12683,9 @@ app.get('/api/admin/games-stats-history', requireAdmin, async (req, res) => {
       .select('id, name, phone, created_at, status, tenant_id');
 
     if (targetTenant && targetTenant !== 'global') {
-      if (targetTenant === 'default' || targetTenant === 'bingo-lite') {
-        gamesQuery = gamesQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-        playersQuery = playersQuery.or('tenant_id.is.null,tenant_id.eq.default,tenant_id.eq.bingo-lite');
-      } else {
-        gamesQuery = gamesQuery.eq('tenant_id', targetTenant);
-        playersQuery = playersQuery.eq('tenant_id', targetTenant);
-      }
+      const cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant;
+      gamesQuery = gamesQuery.eq('tenant_id', cleanTenant);
+      playersQuery = playersQuery.eq('tenant_id', cleanTenant);
     }
 
     const { data: games, error: gamesError } = await gamesQuery;

@@ -27,6 +27,17 @@ const DEFAULT_TENANT: Tenant = {
   max_cards_per_game: 20000
 };
 
+const DEMO_TENANT: Tenant = {
+  id: 'demo',
+  name: 'Sala Demo Visitantes',
+  slug: 'demo',
+  primary_color: '#7c3aed',
+  plan: 'trial',
+  access_code: 'DEMO2026',
+  description: 'Sala interactiva de demostración para visitantes y nuevos organizadores. Prueba el juego en vivo y las dinámicas.',
+  max_cards_per_game: 2000
+};
+
 interface TenantContextType {
   tenant: Tenant;
   tenantSlug: string | null;
@@ -52,26 +63,31 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     // Detectar si la URL comienza con /sala/:slug
     const match = location.pathname.match(/^\/sala\/([a-zA-Z0-9_-]+)/);
-    const slug = match ? match[1].toLowerCase() : null;
+    const rawSlug = match ? match[1].toLowerCase() : null;
+    const slug = rawSlug === 'default' ? 'demo' : rawSlug;
     
     setTenantSlug(slug);
 
     if (slug) {
+      const fallbackForSlug = slug === 'demo' ? DEMO_TENANT : (slug === 'bingo-lite' ? DEFAULT_TENANT : { ...DEFAULT_TENANT, name: slug.replace(/-/g, ' ').toUpperCase(), slug });
       setLoading(true);
       apiFetch(`/api/tenant/info?slug=${encodeURIComponent(slug)}`)
         .then(res => res.json())
         .then(data => {
           if (data && data.id) {
-            setTenant(data);
+            setTenant({
+              ...data,
+              description: data.description || data.notes || fallbackForSlug.description
+            });
             // Actualizar título de la pestaña con el nombre de la sala
             document.title = `${data.name} | Bingo en Vivo Online`;
           } else {
-            setTenant({ ...DEFAULT_TENANT, name: slug.replace(/-/g, ' ').toUpperCase(), slug });
+            setTenant(fallbackForSlug);
           }
         })
         .catch(err => {
           console.warn('[TenantProvider] Error cargando sala:', err);
-          setTenant({ ...DEFAULT_TENANT, name: slug.replace(/-/g, ' ').toUpperCase(), slug });
+          setTenant(fallbackForSlug);
         })
         .finally(() => setLoading(false));
     } else {

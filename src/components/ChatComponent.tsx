@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import clsx from 'clsx';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { useAuth } from '../AuthContext';
+import { useTenant } from '../TenantContext';
 import { getBingoChannel } from '../ably';
 
 interface Message {
@@ -34,7 +35,8 @@ export default function ChatComponent({
   onClose
 }: ChatComponentProps) {
   const { user } = useAuth();
-  const channel = getBingoChannel();
+  const { tenantSlug } = useTenant();
+  const channel = getBingoChannel(tenantSlug || undefined);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [replyingToUser, setReplyingToUser] = useState<string | null>(null);

@@ -221,10 +221,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               const currentPath = window.location.pathname;
               const salaMatch = currentPath.match(/^\/sala\/([^\/]+)/);
               const urlTenant = salaMatch ? salaMatch[1].toLowerCase() : null;
-              const playerTenant = (player.tenant_id || 'default').toLowerCase();
+              const cleanUrlTenant = urlTenant === 'default' ? 'demo' : urlTenant;
+              const rawPlayerTenant = (player.tenant_id || 'bingo-lite').toLowerCase();
+              const playerTenant = rawPlayerTenant === 'default' ? 'demo' : rawPlayerTenant;
 
-              if (urlTenant && playerTenant !== urlTenant && !(urlTenant === 'bingo-lite' && playerTenant === 'default')) {
-                console.log(`[Auth] Sesión guardada pertenece a "${playerTenant}", no a "${urlTenant}". Requiere login en esta sala.`);
+              if (cleanUrlTenant && playerTenant !== cleanUrlTenant) {
+                console.log(`[Auth] Sesión guardada pertenece a "${playerTenant}", no a "${cleanUrlTenant}". Requiere login en esta sala.`);
                 setUser(null);
                 setLoading(false);
                 return;

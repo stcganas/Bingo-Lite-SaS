@@ -527,8 +527,9 @@ function PlayerProtectedRoute({ children }: { children: React.ReactNode }) {
   const salaMatch = location.pathname.match(/^\/sala\/([^\/]+)/);
   if (salaMatch) {
     const routeSlug = salaMatch[1].toLowerCase();
-    const userTenant = (user.tenant_id || 'default').toLowerCase();
-    if (userTenant !== routeSlug && !(routeSlug === 'bingo-lite' && userTenant === 'default')) {
+    const rawUserTenant = (user.tenant_id || 'bingo-lite').toLowerCase();
+    const userTenant = rawUserTenant === 'default' ? 'demo' : rawUserTenant;
+    if (userTenant !== routeSlug) {
       // El usuario pertenece a otra sala. Impedir acceso a sala ajena y redirigir al login de esta sala
       return <Navigate to={`/sala/${routeSlug}`} replace />;
     }
@@ -617,7 +618,7 @@ function MaintenanceWrapper({ children }: { children: React.ReactNode }) {
     apiFetch(`/api/maintenance-status?slug=${currentRoomSlug}`)
       .then(res => res.json())
       .then(data => {
-        if (data && (data.tenant_id === currentRoomSlug || !data.tenant_id || currentRoomSlug === 'bingo-lite')) {
+        if (data && (data.tenant_id === currentRoomSlug || (!data.tenant_id && currentRoomSlug === 'bingo-lite'))) {
           setMaintenance({ active: Boolean(data.maintenance_mode), message: data.maintenance_message || '' });
         }
       })
@@ -628,7 +629,7 @@ function MaintenanceWrapper({ children }: { children: React.ReactNode }) {
     const handleMaintenanceUpdate = (msg: any) => {
       if (msg.data) {
         const msgTenant = (msg.data.tenant_id || '').toLowerCase();
-        if (!msgTenant || msgTenant === currentRoomSlug || (currentRoomSlug === 'bingo-lite' && msgTenant === 'default')) {
+        if (msgTenant === currentRoomSlug || (!msgTenant && currentRoomSlug === 'bingo-lite')) {
           setMaintenance({
             active: Boolean(msg.data.maintenance_mode),
             message: msg.data.maintenance_message || ''
@@ -731,6 +732,10 @@ export default function App() {
                   <PlayerDashboard />
                 </PlayerProtectedRoute>
               } />
+
+              {/* Redirección retrocompatible de /sala/default a la Sala Demo oficial */}
+              <Route path="/sala/default" element={<Navigate to="/sala/demo" replace />} />
+              <Route path="/sala/default/*" element={<Navigate to="/sala/demo" replace />} />
 
               {/* Rutas Multi-Tenant por Sala (https://bingolite.click/sala/:slug) */}
               <Route path="/sala/:slug" element={<Home />} />

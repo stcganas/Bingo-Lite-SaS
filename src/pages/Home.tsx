@@ -157,13 +157,10 @@ export default function Home() {
         roomCode.trim().toUpperCase(), 
         tenantSlug || ''
       );
-      const targetSlug = data.room_slug || tenantSlug;
-      toast.success(`¡Acceso concedido a la sala ${tenant?.name || targetSlug || ''}!`);
-      if (targetSlug && targetSlug !== 'default' && targetSlug !== 'bingo-lite') {
-        navigate(`/sala/${targetSlug}/player`);
-      } else {
-        navigate(tenantPrefix ? `${tenantPrefix}/player` : '/player');
-      }
+      const targetSlug = data.room_slug || tenantSlug || 'bingo-lite';
+      const cleanSlug = targetSlug === 'default' ? 'demo' : targetSlug;
+      toast.success(`¡Acceso concedido a la sala ${tenant?.name || cleanSlug}!`);
+      navigate(`/sala/${cleanSlug}/player`);
     } catch (error: any) {
       const msg = error.message || 'Error al iniciar sesión';
       if (msg.includes('No estás registrado en la sala') || msg.includes('notRegisteredInRoom') || msg.includes('Usuario no encontrado')) {
@@ -183,10 +180,12 @@ export default function Home() {
   // Redirigir únicamente si el usuario pertenece estrictamente a esta sala
   useEffect(() => {
     if (user && user.role === 'player') {
-      const userTenant = (user.tenant_id || 'default').toLowerCase();
-      const currentTenant = (tenantSlug || 'default').toLowerCase();
-      if (userTenant === currentTenant || (!tenantSlug && (userTenant === 'default' || userTenant === 'bingo-lite'))) {
-        navigate(tenantPrefix ? `${tenantPrefix}/player` : '/player');
+      const rawUserTenant = (user.tenant_id || 'bingo-lite').toLowerCase();
+      const userTenant = rawUserTenant === 'default' ? 'demo' : rawUserTenant;
+      const rawCurrentTenant = (tenantSlug || 'bingo-lite').toLowerCase();
+      const currentTenant = rawCurrentTenant === 'default' ? 'demo' : rawCurrentTenant;
+      if (userTenant === currentTenant) {
+        navigate(tenantPrefix ? `${tenantPrefix}/player` : `/sala/${currentTenant}/player`);
       }
     }
   }, [user, navigate, tenantPrefix, tenantSlug]);

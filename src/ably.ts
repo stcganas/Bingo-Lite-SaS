@@ -59,10 +59,11 @@ export const resolveCurrentTenantId = (explicitTenantId?: string): string => {
 // Obtiene el nombre del canal aislado para la sala
 export const getBingoChannelName = (explicitTenantId?: string): string => {
   const normTenant = resolveCurrentTenantId(explicitTenantId);
-  if (normTenant && normTenant !== 'default' && normTenant !== 'bingo-lite' && normTenant !== 'global') {
-    return `bingo-tenant-${normTenant}`;
+  if (normTenant === 'global' || normTenant === 'bingo-global') {
+    return 'bingo-global';
   }
-  return 'bingo-channel';
+  const cleanTenant = normTenant === 'default' ? 'demo' : (normTenant || 'bingo-lite');
+  return `bingo-tenant-${cleanTenant}`;
 };
 
 // Get the main bingo channel with isolated tenant scoping

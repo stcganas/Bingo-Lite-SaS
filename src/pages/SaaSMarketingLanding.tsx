@@ -143,12 +143,15 @@ export default function SaaSMarketingLanding() {
             </div>
           </div>
 
-          <nav className="hidden md:flex items-center gap-8 text-sm font-semibold text-slate-300">
+          <nav className="hidden md:flex items-center gap-6 text-sm font-semibold text-slate-300">
             <a href="#modulos" className="hover:text-blue-400 transition">Módulos</a>
             <a href="#capacidad" className="hover:text-blue-400 transition">Capacidad (20k)</a>
             <a href="#calculadora" className="hover:text-blue-400 transition">Calculadora</a>
+            <Link to="/sala/demo" className="flex items-center gap-1.5 text-purple-400 hover:text-purple-300 transition font-bold px-3 py-1 rounded-full bg-purple-500/10 border border-purple-500/30">
+              <Sparkles size={14} className="text-purple-400" /> Sala Demo
+            </Link>
             <Link to="/sala/bingo-lite" className="flex items-center gap-1.5 text-amber-400 hover:text-amber-300 transition font-bold">
-              <Play size={14} className="fill-amber-400" /> Sala pública "Entrar"
+              <Play size={14} className="fill-amber-400" /> Sala Oficial
             </Link>
           </nav>
 
@@ -183,20 +186,27 @@ export default function SaaSMarketingLanding() {
             La solución SaaS más avanzada de sorteos de bingo en vivo: locución autónoma con Inteligencia Artificial, billetera digital segura, código de acceso exclusivo por sala y resumen automático enviado al WhatsApp del jugador.
           </p>
 
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 max-w-md mx-auto mb-16">
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 max-w-2xl mx-auto mb-16">
             <button
               onClick={() => setShowCreateModal(true)}
-              className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-base shadow-xl shadow-blue-500/25 transition transform active:scale-95 flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-7 py-4 rounded-2xl bg-gradient-to-r from-blue-600 via-blue-500 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold text-base shadow-xl shadow-blue-500/25 transition transform active:scale-95 flex items-center justify-center gap-2"
             >
-              <span>Crear mi Sala Gratis</span>
+              <span>Crear mi Sala</span>
               <ArrowRight size={18} />
             </button>
             <Link
+              to="/sala/demo"
+              className="w-full sm:w-auto px-6 py-4 rounded-2xl bg-purple-950/80 hover:bg-purple-900/90 text-purple-200 border border-purple-700/60 font-bold text-base transition flex items-center justify-center gap-2 shadow-lg shadow-purple-950/40"
+            >
+              <Sparkles size={16} className="text-purple-300" />
+              <span>Sala Demo (Visitantes)</span>
+            </Link>
+            <Link
               to="/sala/bingo-lite"
-              className="w-full sm:w-auto px-7 py-4 rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 font-bold text-base transition flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-6 py-4 rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 font-bold text-base transition flex items-center justify-center gap-2"
             >
               <Play size={16} className="text-amber-400 fill-amber-400" />
-              <span>Sala pública "Entrar"</span>
+              <span>Sala Oficial</span>
             </Link>
           </div>
 
@@ -400,9 +410,10 @@ export default function SaaSMarketingLanding() {
             Bingo Lite &copy; {new Date().getFullYear()} — Plataforma de Bingo Virtual Multi-tenant. Todos los derechos reservados.
           </p>
           <div className="flex justify-center items-center flex-wrap gap-4 sm:gap-6 font-medium">
-            <Link to="/sala/bingo-lite" className="hover:text-blue-400 transition">Sala Oficial</Link>
-            <Link to="/admin/login" className="hover:text-blue-400 transition">Acceso Administrador</Link>
-            <Link to="/seller" className="hover:text-blue-400 transition">Portal Revendedores</Link>
+            <Link to="/sala/demo" className="text-purple-400 hover:text-purple-300 font-bold transition">Sala Demo (Visitantes)</Link>
+            <Link to="/sala/bingo-lite" className="text-blue-400 hover:text-blue-300 font-bold transition">Sala Oficial (Bingo Lite)</Link>
+            <Link to="/admin/login" className="hover:text-slate-300 transition">Acceso Administrador</Link>
+            <Link to="/seller" className="hover:text-slate-300 transition">Portal Revendedores</Link>
             <span className="text-slate-800 hidden sm:inline">•</span>
             <Link to="/superadmin" className="text-indigo-400 hover:text-indigo-300 font-bold transition inline-flex items-center gap-1.5 bg-indigo-950/60 border border-indigo-900/80 px-3 py-1 rounded-full">
               <Lock size={12} /> Super Admin
