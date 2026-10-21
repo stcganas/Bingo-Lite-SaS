@@ -1388,12 +1388,14 @@ export default function AdminDashboard() {
     winning_pattern: 'full',
     type: 'paid', // 'paid' | 'free'
     prize_type: 'wallet', // 'wallet' | 'cash'
-    active_lottery: true,
+    active_lottery: false,
     active_draw: false,
     lottery_name: '',
     lottery_date: '',
     lottery_time: '',
-    lottery_digits: '3'
+    lottery_digits: '3',
+    lottery_prize_type: 'cash',
+    lottery_prize_value: ''
   });
 
   const fetchData = async () => {
@@ -2236,8 +2238,9 @@ export default function AdminDashboard() {
       return;
     }
     
-    // Check if at least one cell is marked
-    const hasMarkedCell = newPatternGrid.some(row => row.some(cell => cell));
+    // Normalizar a cuadrícula 5x5 segura antes de validar y enviar
+    const safeGrid = getSafePatternGrid(newPatternGrid);
+    const hasMarkedCell = safeGrid.some(row => row.some(cell => cell));
     if (!hasMarkedCell) {
       toast.error('Debes marcar al menos una casilla en el patrón');
       return;
@@ -2249,8 +2252,8 @@ export default function AdminDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           id: editingPatternId,
-          name: newPatternName, 
-          grid: newPatternGrid,
+          name: newPatternName.trim(), 
+          grid: safeGrid,
           is_active: newPatternIsActive
         }),
       });
@@ -2272,9 +2275,10 @@ export default function AdminDashboard() {
 
   const editPattern = (pattern: any) => {
     setEditingPatternId(pattern.id);
-    setNewPatternName(pattern.name);
-    setNewPatternGrid(pattern.grid);
-    setNewPatternIsActive(!!pattern.is_active);
+    setNewPatternName(pattern.name || '');
+    // Normalizar explícitamente la cuadrícula a matriz 5x5 booleana para evitar que arrays 1D rompan el componente
+    setNewPatternGrid(getSafePatternGrid(pattern.grid));
+    setNewPatternIsActive(pattern.is_active !== false);
     setActiveTab('patterns');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -2287,7 +2291,7 @@ export default function AdminDashboard() {
         body: JSON.stringify({ 
           id: pattern.id,
           name: pattern.name, 
-          grid: pattern.grid,
+          grid: getSafePatternGrid(pattern.grid),
           is_active: !pattern.is_active
         }),
       });
@@ -2314,8 +2318,8 @@ export default function AdminDashboard() {
 
   const togglePatternCell = (r: number, c: number) => {
     if (r === 2 && c === 2) return; // FREE space
-    const newGrid = [...newPatternGrid];
-    newGrid[r] = [...newGrid[r]];
+    const safeGrid = getSafePatternGrid(newPatternGrid);
+    const newGrid = safeGrid.map(row => [...row]);
     newGrid[r][c] = !newGrid[r][c];
     setNewPatternGrid(newGrid);
   };
@@ -2324,9 +2328,30 @@ export default function AdminDashboard() {
     e.preventDefault();
     
     if (gameWizardStep === 1) {
-      if (!newGame.name || !newGame.start_time || !newGame.card_value || !newGame.prize) {
-        toast.error('Completa los datos del juego');
+      if (!newGame.name?.trim()) {
+        toast.error('Ingresa el nombre del juego');
         return;
+      }
+      if (!newGame.start_time) {
+        toast.error('Selecciona la fecha y hora de inicio');
+        return;
+      }
+      if (newGame.type === 'paid') {
+        const valNum = Number(String(newGame.card_value || '').replace(/\D/g, ''));
+        if (!valNum || valNum <= 0) {
+          toast.error('Ingresa un valor válido para el cartón');
+          return;
+        }
+      }
+      if (!newGame.prize?.trim()) {
+        toast.error('Ingresa los premios a repartir');
+        return;
+      }
+      if (newGame.active_lottery) {
+        if (!newGame.lottery_name?.trim() || !newGame.lottery_prize_value?.trim()) {
+          toast.error('Completa el nombre y premio de la lotería, o desactiva la opción.');
+          return;
+        }
       }
       setGameWizardStep(2);
       return;
@@ -2347,13 +2372,22 @@ export default function AdminDashboard() {
     }
 
     if (gameWizardStep === 4) {
-      const isoString = new Date(newGame.start_time).toISOString();
+      let isoString = new Date().toISOString();
+      try {
+        if (newGame.start_time) {
+          isoString = new Date(newGame.start_time).toISOString();
+        }
+      } catch (e) {
+        isoString = new Date().toISOString();
+      }
+
       try {
         const res = await apiFetch('/api/games', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             ...newGame, 
+            card_value: newGame.type === 'free' ? 0 : newGame.card_value,
             start_time: isoString,
             patterns: gameWizardPatterns,
             rematchPatterns: gameWizardRematchPatterns
@@ -2363,7 +2397,23 @@ export default function AdminDashboard() {
           const createdGame = await res.json();
           setGames(prev => [createdGame, ...prev]);
           toast.success('Juego programado correctamente');
-          setNewGame({ name: '', start_time: '', prize: '', card_value: '', winning_pattern: 'full', type: 'paid', prize_type: 'wallet', active_lottery: true, active_draw: false, lottery_name: '', lottery_date: '', lottery_time: '', lottery_digits: '3' });
+          setNewGame({ 
+            name: '', 
+            start_time: '', 
+            prize: '', 
+            card_value: '', 
+            winning_pattern: 'full', 
+            type: 'paid', 
+            prize_type: 'wallet', 
+            active_lottery: false, 
+            active_draw: false, 
+            lottery_name: '', 
+            lottery_date: '', 
+            lottery_time: '', 
+            lottery_digits: '3',
+            lottery_prize_type: 'cash',
+            lottery_prize_value: ''
+          });
           setGameWizardStep(1);
           setGameWizardPatterns([]);
           setGameWizardRematchPatterns([]);
@@ -2371,7 +2421,7 @@ export default function AdminDashboard() {
           // Add a small delay robustly for the replica DB update
           setTimeout(() => {
             fetchData();
-          }, 1500);
+          }, 1000);
         } else {
           try {
             const data = await res.json();
@@ -2380,8 +2430,8 @@ export default function AdminDashboard() {
             toast.error('Error al crear el juego (Estado: ' + res.status + ')');
           }
         }
-      } catch (err) {
-        toast.error('Error al crear el juego');
+      } catch (err: any) {
+        toast.error(err?.message || 'Error al crear el juego');
       }
     }
   };
@@ -3892,7 +3942,6 @@ export default function AdminDashboard() {
                               <div>
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Nombre de la Lotería</label>
                                 <input 
-                                  required={newGame.active_lottery}
                                   type="text" 
                                   value={newGame.lottery_name || ''} 
                                   onChange={e => setNewGame({...newGame, lottery_name: e.target.value})} 
@@ -3929,7 +3978,6 @@ export default function AdminDashboard() {
                               <div>
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Premio al Ganador</label>
                                 <input 
-                                  required={newGame.active_lottery}
                                   type="text" 
                                   value={newGame.lottery_prize_value || ''} 
                                   onChange={e => setNewGame({...newGame, lottery_prize_value: e.target.value})} 
@@ -3943,7 +3991,6 @@ export default function AdminDashboard() {
                               <div>
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Fecha del Sorteo</label>
                                 <input 
-                                  required={newGame.active_lottery}
                                   type="text" 
                                   value={newGame.lottery_date || ''} 
                                   onChange={e => setNewGame({...newGame, lottery_date: e.target.value})} 
@@ -3954,7 +4001,6 @@ export default function AdminDashboard() {
                               <div>
                                 <label className="block text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Hora del Sorteo</label>
                                 <input 
-                                  required={newGame.active_lottery}
                                   type="text" 
                                   value={newGame.lottery_time || ''} 
                                   onChange={e => setNewGame({...newGame, lottery_time: e.target.value})} 

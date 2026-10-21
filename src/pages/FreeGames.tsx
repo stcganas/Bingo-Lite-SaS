@@ -12,7 +12,7 @@ import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
 export default function FreeGames() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { tenantPrefix } = useTenant();
+  const { tenantPrefix, tenantSlug } = useTenant();
   const [currentView, setCurrentView] = useState<'games' | 'leaderboard'>('games');
   const [freeGames, setFreeGames] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);

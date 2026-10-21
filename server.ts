@@ -4430,12 +4430,15 @@ app.patch('/api/games/:id', requireAdmin, async (req, res) => {
     const adminUser = (req as any).adminUser;
     const targetTenant = (existingGame.tenant_id || 'default').toLowerCase();
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
-      if (targetTenant !== adminUser.tenant_id.toLowerCase()) {
+      const userTenant = adminUser.tenant_id.toLowerCase();
+      const isMainTenant = (targetTenant === 'default' || targetTenant === 'bingo-lite') && 
+                           (userTenant === 'default' || userTenant === 'bingo-lite');
+      if (!isMainTenant && targetTenant !== userTenant) {
         return res.status(403).json({ error: 'Acceso denegado: Este juego pertenece a otra sala.' });
       }
     }
 
-    const { name, start_time, prize, card_value } = req.body;
+    const { name, start_time, prize, card_value, type, prize_type } = req.body;
 
     // Only update fields allowed to be updated without breaking existing sold cards
     const updateData: any = {};
@@ -4445,11 +4448,27 @@ app.patch('/api/games/:id', requireAdmin, async (req, res) => {
     if (card_value !== undefined) {
       updateData.card_value = Number(String(card_value).replace(/[^0-9.]/g, '')) || 0;
     }
+    if (type !== undefined) {
+      updateData.is_free = type === 'free';
+    }
 
     const { data: updatedGame, error } = await supabase.from('game').update(updateData).eq('id', id).select().single();
 
     if (error) {
       return res.status(500).json({ error: error.message });
+    }
+
+    // Guardar configuraciones adicionales asociadas al juego
+    if (type !== undefined || prize_type !== undefined) {
+      const settingsUpdates: any = {};
+      if (type !== undefined) {
+        settingsUpdates.type = type;
+        settingsUpdates.is_free = type === 'free';
+      }
+      if (prize_type !== undefined) {
+        settingsUpdates.prize_type = prize_type;
+      }
+      await saveGameSettings(updatedGame.id, settingsUpdates, targetTenant);
     }
 
     invalidateGameCaches();
@@ -4494,9 +4513,13 @@ app.delete('/api/games/:id', requireAdmin, async (req, res) => {
     if (!gameToDelete) return res.status(404).json({ error: 'Juego no encontrado' });
 
     const adminUser = (req as any).adminUser;
+    const targetTenant = (gameToDelete.tenant_id || (req as any).tenantId || getTenantIdFromRequest(req) || 'default').toLowerCase();
     if (!adminUser.isSuperAdmin && adminUser.tenant_id) {
       const gTenant = (gameToDelete.tenant_id || 'default').toLowerCase();
-      if (gTenant !== adminUser.tenant_id.toLowerCase()) {
+      const userTenant = adminUser.tenant_id.toLowerCase();
+      const isMainTenant = (gTenant === 'default' || gTenant === 'bingo-lite') && 
+                           (userTenant === 'default' || userTenant === 'bingo-lite');
+      if (!isMainTenant && gTenant !== userTenant) {
         return res.status(403).json({ error: 'Acceso denegado: Este juego pertenece a otra sala.' });
       }
     }
@@ -5000,7 +5023,10 @@ async function seedRoomPatterns(tenantId: string) {
 
 app.get('/api/patterns', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  const targetTenant = getTenantIdFromRequest(req);
+  const rawTargetTenant = getTenantIdFromRequest(req);
+  const targetTenant = (rawTargetTenant || 'default').toLowerCase();
+  const isMainTenant = targetTenant === 'default' || targetTenant === 'bingo-lite' || targetTenant === 'global';
+
   const now = Date.now();
   const cached = cachedPatternsByTenant.get(targetTenant);
   if (cached && (now - cached.timestamp < PATTERNS_CACHE_TTL)) {
@@ -5008,14 +5034,17 @@ app.get('/api/patterns', async (req, res) => {
   }
 
   try {
-    // 1. Consultar patrones asignados a esta sala específica
-    let { data, error } = await supabase.from('patterns')
-      .select('*')
-      .eq('tenant_id', targetTenant)
-      .order('name', { ascending: true });
+    // 1. Consultar patrones asignados a esta sala específica (o todas las figuras globales si es la sala principal)
+    let query = supabase.from('patterns').select('*');
+    if (isMainTenant) {
+      query = query.or('tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null');
+    } else {
+      query = query.eq('tenant_id', targetTenant);
+    }
+    let { data, error } = await query.order('name', { ascending: true });
 
-    // 2. Si la sala aún no tiene patrones propios creados, sembrar inmediatamente los del sistema
-    if (!error && (!data || data.length === 0)) {
+    // 2. Si la sala aún no tiene patrones propios creados y no es sala principal, sembrar los del sistema
+    if (!error && (!data || data.length === 0) && !isMainTenant) {
       await seedRoomPatterns(targetTenant);
       const { data: seededData } = await supabase.from('patterns')
         .select('*')
@@ -5024,7 +5053,7 @@ app.get('/api/patterns', async (req, res) => {
       data = seededData;
     }
 
-    // 3. Si aún así está vacío (ej. sala default), buscar patrones globales del sistema
+    // 3. Si aún así está vacío, buscar figuras del sistema
     if (!data || data.length === 0) {
       const { data: globalPatterns } = await supabase.from('patterns')
         .select('*')
@@ -5046,12 +5075,44 @@ app.get('/api/patterns', async (req, res) => {
 // Create/Update Pattern (Aislado por Sala / Tenant)
 app.post('/api/patterns', requireAdmin, async (req, res) => {
   const { id, name, grid, is_active } = req.body;
-  const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+  const adminUser = (req as any).adminUser;
+  const rawTargetTenant = (req as any).tenantId || getTenantIdFromRequest(req) || adminUser?.tenant_id || 'default';
+  const targetTenant = rawTargetTenant === 'global' ? 'default' : rawTargetTenant.toLowerCase();
+  
   cachedPatternsByTenant.delete(targetTenant);
   cachedPatternsByTenant.delete('default');
+  cachedPatternsByTenant.delete('bingo-lite');
 
   if (id) {
-    let updatePayload: any = { name, grid, is_active: is_active ?? true, tenant_id: targetTenant };
+    const { data: existingPattern } = await supabase.from('patterns').select('*').eq('id', id).maybeSingle();
+    if (!existingPattern) {
+      return res.status(404).json({ error: 'Patrón no encontrado' });
+    }
+
+    if (!adminUser?.isSuperAdmin) {
+      const pTenant = (existingPattern.tenant_id || 'default').toLowerCase();
+      const isMainTenant = (pTenant === 'default' || pTenant === 'bingo-lite') && (targetTenant === 'default' || targetTenant === 'bingo-lite');
+      if (!isMainTenant && pTenant !== targetTenant) {
+        return res.status(403).json({ error: 'Acceso denegado: Este patrón pertenece a otra sala.' });
+      }
+    }
+
+    const cleanName = String(name || '').trim();
+    if (!cleanName) {
+      return res.status(400).json({ error: 'El patrón debe tener un nombre válido' });
+    }
+
+    let updatePayload: any = { 
+      name: cleanName, 
+      grid, 
+      is_active: is_active ?? true 
+    };
+    if (existingPattern.tenant_id) {
+      updatePayload.tenant_id = existingPattern.tenant_id;
+    } else {
+      updatePayload.tenant_id = targetTenant;
+    }
+
     let { data, error } = await supabase.from('patterns')
       .update(updatePayload)
       .eq('id', id)
@@ -5059,7 +5120,7 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
       .single();
 
     if (error && error.message && (error.message.includes('tenant_id') || error.message.includes('is_active'))) {
-      const fallbackPayload: any = { name, grid };
+      const fallbackPayload: any = { name: cleanName, grid };
       if (is_active !== undefined) fallbackPayload.is_active = is_active;
       const fallback = await supabase.from('patterns')
         .update(fallbackPayload)
@@ -5073,14 +5134,24 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
     if (error) return res.status(500).json({ error: error.message });
     return res.json(data);
   } else {
-    let newPattern: any = { name, grid, is_active: is_active ?? true, tenant_id: targetTenant };
+    const cleanName = String(name || '').trim();
+    if (!cleanName) {
+      return res.status(400).json({ error: 'El patrón debe tener un nombre válido' });
+    }
+
+    let newPattern: any = { 
+      name: cleanName, 
+      grid, 
+      is_active: is_active ?? true, 
+      tenant_id: targetTenant 
+    };
     let { data, error } = await supabase.from('patterns')
       .insert(newPattern)
       .select()
       .single();
 
     if (error && error.message && (error.message.includes('tenant_id') || error.message.includes('is_active'))) {
-      const fallbackPayload: any = { name, grid };
+      const fallbackPayload: any = { name: cleanName, grid };
       if (is_active !== undefined) fallbackPayload.is_active = is_active;
       const fallback = await supabase.from('patterns')
         .insert(fallbackPayload)
@@ -5097,16 +5168,23 @@ app.post('/api/patterns', requireAdmin, async (req, res) => {
 
 // Delete Pattern (Hard delete con protección de pertenencia a sala)
 app.delete('/api/patterns/:id', requireAdmin, async (req, res) => {
-  const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
   const adminUser = (req as any).adminUser;
+  const rawTargetTenant = (req as any).tenantId || getTenantIdFromRequest(req) || adminUser?.tenant_id || 'default';
+  const targetTenant = rawTargetTenant === 'global' ? 'default' : rawTargetTenant.toLowerCase();
+
   cachedPatternsByTenant.delete(targetTenant);
   cachedPatternsByTenant.delete('default');
+  cachedPatternsByTenant.delete('bingo-lite');
 
   // Si no es Super Admin, verificar que el patrón pertenezca a su sala
   if (!adminUser?.isSuperAdmin) {
     const { data: existingPattern } = await supabase.from('patterns').select('id, tenant_id').eq('id', req.params.id).maybeSingle();
-    if (existingPattern && existingPattern.tenant_id && existingPattern.tenant_id !== targetTenant && existingPattern.tenant_id !== 'default') {
-      return res.status(403).json({ error: 'Acceso denegado: Este patrón pertenece a otra sala.' });
+    if (existingPattern && existingPattern.tenant_id) {
+      const pTenant = existingPattern.tenant_id.toLowerCase();
+      const isMainTenant = (pTenant === 'default' || pTenant === 'bingo-lite') && (targetTenant === 'default' || targetTenant === 'bingo-lite');
+      if (!isMainTenant && pTenant !== targetTenant) {
+        return res.status(403).json({ error: 'Acceso denegado: Este patrón pertenece a otra sala.' });
+      }
     }
   }
 
