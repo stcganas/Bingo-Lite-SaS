@@ -691,6 +691,7 @@ export default function AdminDashboard() {
   const lastAiChatUpdateRef = useRef<number>(0);
 
   // Countdown state
+  const [timeLeft, setTimeLeft] = useState<{ days: number, hours: number, minutes: number, seconds: number } | null>(null);
   const [timeToStart, setTimeToStart] = useState<string | null>(null);
   const [autoStartTimer, setAutoStartTimer] = useState<number | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -1758,21 +1759,25 @@ export default function AdminDashboard() {
       .catch(() => {});
   }, []);
 
-  // Countdown and Auto-start logic
+  // Countdown and Auto-start logic sincronizado con jugadores
   useEffect(() => {
     const timer = setInterval(() => {
-      if (gameState?.status === 'waiting' && gameState?.start_time) {
+      if ((gameState?.status === 'waiting' || gameState?.status === 'scheduled') && gameState?.start_time) {
         const now = new Date().getTime();
         const start = new Date(gameState.start_time).getTime();
         const diff = start - now;
 
         if (diff > 0) {
-          const hours = Math.floor(diff / (1000 * 60 * 60));
+          const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+          const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
           const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
           const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-          setTimeToStart(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
+
+          setTimeLeft({ days, hours, minutes, seconds });
+          setTimeToStart(`${days > 0 ? `${days}d ` : ''}${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
           setAutoStartTimer(null);
         } else {
+          setTimeLeft(null);
           setTimeToStart(null);
           // If server already activated the game or autoplay is active, clear local timer and avoid dual-trigger
           if (gameState?.status === 'playing' || autoplay) {
@@ -1786,7 +1791,7 @@ export default function AdminDashboard() {
             setAutoStartTimer(prev => (prev !== null ? prev - 1 : null));
           } else if (autoStartTimer === 0) {
             setAutoStartTimer(null);
-            if (gameState?.status === 'waiting') {
+            if (gameState?.status === 'waiting' || gameState?.status === 'scheduled') {
               updateGameStatus('playing');
               apiFetch('/api/admin/game/autoplay/start', {
                 method: 'POST',
@@ -1797,13 +1802,14 @@ export default function AdminDashboard() {
           }
         }
       } else {
+        setTimeLeft(null);
         setTimeToStart(null);
         setAutoStartTimer(null);
       }
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [gameState?.status, gameState?.start_time, autoStartTimer]);
+  }, [gameState?.status, gameState?.start_time, autoStartTimer, autoplay, autoplayInterval]);
 
   const [isPreGameCountdown, setIsPreGameCountdown] = useState(false);
   const [preGameTime, setPreGameTime] = useState(5);
@@ -3320,35 +3326,70 @@ export default function AdminDashboard() {
                         </button>
                       </div>
 
-                      {/* Countdown UI */}
-                      <div className="w-full mb-4 h-10 flex flex-col items-center justify-center">
+                      {/* Countdown UI Sincronizado sobre la Balota Saliente Oficial */}
+                      <div className="w-full mb-4 flex flex-col items-center justify-center">
                         <AnimatePresence>
-                          {timeToStart && (
+                          {timeLeft && (
                             <motion.div 
-                              initial={{ opacity: 0, y: 10 }}
-                              animate={{ opacity: 1, y: 0 }}
-                              exit={{ opacity: 0, y: -10 }}
-                              className="flex items-center gap-1.5 text-blue-600 font-black text-sm bg-blue-50 px-3 py-1 rounded-full border border-blue-100 shadow-sm"
+                              initial={{ opacity: 0, scale: 0.95 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              exit={{ opacity: 0, scale: 0.95 }}
+                              className="w-full bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 border-2 border-indigo-500/40 text-white rounded-2xl p-3 shadow-xl flex flex-col items-center text-center"
                             >
-                              <Clock size={14} className="animate-pulse" />
-                              <span>Inicia en: {timeToStart}</span>
+                              <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-indigo-300 mb-2">
+                                <Clock size={14} className="animate-pulse" />
+                                <span>Iniciación del Juego (Sincronizado)</span>
+                              </div>
+                              
+                              <div className="flex items-center justify-center gap-1.5 sm:gap-2">
+                                {timeLeft.days > 0 && (
+                                  <div className="flex flex-col items-center">
+                                    <span className="bg-white/10 px-2 py-1 rounded-lg text-base sm:text-lg font-black text-amber-300 border border-white/10 min-w-[36px]">
+                                      {String(timeLeft.days).padStart(2, '0')}
+                                    </span>
+                                    <span className="text-[8px] font-bold uppercase text-slate-400 mt-0.5">Días</span>
+                                  </div>
+                                )}
+                                <div className="flex flex-col items-center">
+                                  <span className="bg-white/10 px-2 py-1 rounded-lg text-base sm:text-lg font-black text-white border border-white/10 min-w-[36px]">
+                                    {String(timeLeft.hours).padStart(2, '0')}
+                                  </span>
+                                  <span className="text-[8px] font-bold uppercase text-slate-400 mt-0.5">Hrs</span>
+                                </div>
+                                <span className="text-indigo-400 font-black text-base sm:text-lg">:</span>
+                                <div className="flex flex-col items-center">
+                                  <span className="bg-white/10 px-2 py-1 rounded-lg text-base sm:text-lg font-black text-white border border-white/10 min-w-[36px]">
+                                    {String(timeLeft.minutes).padStart(2, '0')}
+                                  </span>
+                                  <span className="text-[8px] font-bold uppercase text-slate-400 mt-0.5">Min</span>
+                                </div>
+                                <span className="text-indigo-400 font-black text-base sm:text-lg">:</span>
+                                <div className="flex flex-col items-center">
+                                  <span className="bg-white/10 px-2 py-1 rounded-lg text-base sm:text-lg font-black text-emerald-400 border border-white/10 min-w-[36px]">
+                                    {String(timeLeft.seconds).padStart(2, '0')}
+                                  </span>
+                                  <span className="text-[8px] font-bold uppercase text-slate-400 mt-0.5">Seg</span>
+                                </div>
+                              </div>
                             </motion.div>
                           )}
                           {autoStartTimer !== null && (
                             <motion.div 
                               initial={{ opacity: 0, scale: 0.9 }}
                               animate={{ opacity: 1, scale: 1 }}
-                              className="flex flex-col items-center text-center w-full max-w-[200px]"
+                              exit={{ opacity: 0, scale: 0.9 }}
+                              className="w-full bg-red-950/90 border-2 border-red-500 text-white rounded-2xl p-3 shadow-xl flex flex-col items-center text-center mt-2"
                             >
-                              <span className="text-red-600 font-black text-[10px] uppercase tracking-tight leading-none mb-1">
-                                El juego iniciará en {autoStartTimer}s automáticamente
+                              <span className="text-red-300 font-black text-xs uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                                <Clock size={12} className="animate-spin text-red-400" />
+                                Inicio Automático en {autoStartTimer}s
                               </span>
-                              <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden border border-slate-300 shadow-inner">
+                              <div className="w-full bg-black/40 h-2 rounded-full overflow-hidden border border-red-500/40 mt-1">
                                 <motion.div 
                                   initial={{ width: '100%' }}
                                   animate={{ width: `${(autoStartTimer / 30) * 100}%` }}
                                   transition={{ duration: 1, ease: "linear" }}
-                                  className="h-full bg-red-500"
+                                  className="h-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]"
                                 />
                               </div>
                             </motion.div>

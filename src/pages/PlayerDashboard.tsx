@@ -24,7 +24,7 @@ import { announceBall } from '../utils/speech';
 import { playMarkSound, playUnmarkSound, playErrorSound, playChatOpenSound, playChatCloseSound, playSynthesizedDJEffect, getAudioContext, setGlobalFxVolume, getGlobalFxVolume, playBase64PCM, playFxFromUrl } from '../utils/sound';
 import { Gift, Send, Info } from 'lucide-react';
 import { apiFetch } from '../utils/api';
-import { checkCardPatternMatch, getAllWinningCellsForCard, getSafeCardGrid } from '../utils/bingo';
+import { checkCardPatternMatch, getAllWinningCellsForCard, getSafeCardGrid, getSafePatternGrid } from '../utils/bingo';
 import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
 import { ReceiptScanner, ReceiptScanningModal } from '../components/ReceiptScanner';
 import celebratingBingoBg from '../assets/images/celebrating_bingo_bg_1791949145658.jpg';
@@ -2678,12 +2678,65 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                       const isWinnerCard = (cardNumStr !== '' && winningCards.has(cardNumStr)) || 
                                            (card?.card_number != null && !isNaN(Number(card.card_number)) && winningCards.has(String(Number(card.card_number))));
 
-                      const { hasWonPattern } = getAllWinningCellsForCard(
+                      const { hasWonPattern, winningCells: activeWinningCells } = getAllWinningCellsForCard(
                         card,
                         gameState?.patterns || [],
-                        gameState?.drawn_balls || []
+                        currentDrawnBalls
                       );
                       const isWinner = isWinnerCard || hasWonPattern;
+
+                      // Identificar los cuadros exactos que conforman el patrón ganado por este cartón/jugador
+                      const wonPatternCells = (() => {
+                        const set = new Set<string>();
+                        const currentPid = player?.id || user?.uid;
+
+                        // A. Patrones en la partida ganados por este cartón
+                        (gameState?.patterns || []).forEach((p: any) => {
+                          if (!p?.grid) return;
+                          const isWonByThisCard = 
+                            (p.winner_card_number != null && (String(p.winner_card_number) === cardNumStr || String(p.winner_card_number).toLowerCase().includes('múltiple'))) ||
+                            (currentPid && p.winner_player_id === currentPid && (p.winner_card_number == null || String(p.winner_card_number) === cardNumStr));
+
+                          if (isWonByThisCard) {
+                            const pGrid = getSafePatternGrid(p.grid);
+                            for (let r = 0; r < 5; r++) {
+                              for (let c = 0; c < 5; c++) {
+                                if (pGrid[r][c]) set.add(`${r}-${c}`);
+                              }
+                            }
+                          }
+                        });
+
+                        // B. Patrones que el cartón tiene completados en juego
+                        if (activeWinningCells && (isWinnerCard || hasWonPattern)) {
+                          activeWinningCells.forEach((c: string) => set.add(c));
+                        }
+
+                        // C. Si hay evento/modal activo de ganador para este cartón
+                        if (winner) {
+                          const isWinnerAnnounced = String(winner.card_number) === cardNumStr ||
+                            (winner.winners && Array.isArray(winner.winners) && winner.winners.some((w: any) => String(w.card_number) === cardNumStr || (currentPid && w.player_id === currentPid)));
+                          if (isWinnerAnnounced) {
+                            if (Array.isArray(winner.marked_cells)) {
+                              winner.marked_cells.forEach((mc: any) => {
+                                if (mc && typeof mc.r === 'number' && typeof mc.c === 'number') {
+                                  set.add(`${mc.r}-${mc.c}`);
+                                }
+                              });
+                            }
+                            if (winner.pattern_grid || winner.grid) {
+                              const pGrid = getSafePatternGrid(winner.pattern_grid || winner.grid);
+                              for (let r = 0; r < 5; r++) {
+                                for (let c = 0; c < 5; c++) {
+                                  if (pGrid[r][c]) set.add(`${r}-${c}`);
+                                }
+                              }
+                            }
+                          }
+                        }
+
+                        return set;
+                      })();
 
                       const isCompact = cards.length >= 3;
 
@@ -2706,6 +2759,12 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                               )}>
                                 CARTÓN #{card.card_number}
                               </span>
+                              {wonPatternCells.size > 0 && (
+                                <span className="px-2 py-0.5 rounded-full text-[8px] sm:text-[9px] font-black uppercase tracking-wider bg-amber-400 text-slate-900 shadow-sm flex items-center gap-1 animate-pulse">
+                                  <Trophy size={10} className="text-amber-900" />
+                                  Figura Ganada
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-1.5 sm:gap-2 relative z-10">
                               <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full animate-pulse bg-green-500" />
@@ -2780,6 +2839,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                                     const isMarked = markedCells[`${card.id}-${rIdx}-${cIdx}`];
                                     const isWinner = winner !== null;
                                     const shouldShowCell = !isWinner || isMarked || isFree;
+                                    const isPatternWonCell = wonPatternCells.has(`${rIdx}-${cIdx}`);
                                     
                                     return (
                                       <button
@@ -2791,13 +2851,24 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                                           isCompact 
                                             ? "text-sm sm:text-xl md:text-2xl rounded-lg sm:rounded-2xl border sm:border-2" 
                                             : "text-2xl rounded-2xl border-2",
+                                          // Borde diferencial para los cuadros que conforman el patrón ganado (sin resaltar completamente el fondo):
+                                          isPatternWonCell 
+                                            ? "ring-4 ring-amber-400 border-2 border-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.75)] z-20" 
+                                            : "",
                                           isFree ? "bg-yellow-400 text-yellow-900 border-yellow-500" :
                                           isMarked ? "bg-blue-600 text-white border-blue-700 scale-95 shadow-inner" :
                                           (isDrawn && !isWinner) ? "bg-green-100 text-green-800 border-green-300" :
+                                          (isDrawn && isWinner && !isPatternWonCell) ? "bg-green-50 text-green-900 border-green-200" :
                                           "bg-white text-slate-800 border-slate-200 hover:bg-slate-100"
                                         )}
                                       >
                                         {isFree ? (isCompact ? '★' : 'FREE') : (shouldShowCell ? cell : '')}
+                                        {isPatternWonCell && (
+                                          <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5 sm:h-3 sm:w-3 z-30 pointer-events-none">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                                            <span className="relative inline-flex rounded-full h-full w-full bg-amber-500 border border-white" />
+                                          </span>
+                                        )}
                                         {isMarked && !isFree && (
                                           <div className="absolute inset-0 flex items-center justify-center opacity-20">
                                             <div className="w-4/5 h-4/5 rounded-full bg-black" />
