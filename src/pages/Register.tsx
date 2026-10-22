@@ -222,8 +222,8 @@ export default function Register() {
       return;
     }
     
-    // Si no es gratuito ni regalo ni solo registro y el método es recibo, mostramos la advertencia primero
-    if (hasActiveGame && !isFreeGame && !invitedBy && !isRegisterOnly && paymentMethod === 'receipt' && !showConfirmModal) {
+    // Si no es gratuito ni regalo ni solo registro y el método es recibo con comprobante adjunto, mostramos la advertencia primero
+    if (hasActiveGame && !isFreeGame && !invitedBy && !isRegisterOnly && paymentMethod === 'receipt' && file && formData.card_count > 0 && !showConfirmModal) {
       setShowConfirmModal(true);
       return;
     }
@@ -950,10 +950,10 @@ ${roomDirectUrl}
                 </div>
                 <div>
                   <h3 className="text-base font-black uppercase tracking-tight">
-                    {isFreeGame ? 'Aviso del Registro' : 'Venta No Aprobada'}
+                    {isFreeGame || isRegisterOnly || !hasActiveGame || !file ? 'Aviso del Registro' : 'Venta No Aprobada'}
                   </h3>
                   <p className="text-xs text-red-100 font-semibold">
-                    {isFreeGame ? 'Registro Gratuito' : 'Auditoría de Comprobante de Pago'}
+                    {isFreeGame || isRegisterOnly || !hasActiveGame || !file ? 'Registro de Usuario' : 'Auditoría de Comprobante de Pago'}
                   </p>
                 </div>
               </div>
@@ -974,8 +974,8 @@ ${roomDirectUrl}
                 onClick={handleCloseErrorModal}
                 className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-black text-sm uppercase tracking-wider hover:from-blue-700 hover:to-indigo-700 transition shadow-md active:scale-98 flex items-center justify-center gap-2"
               >
-                <Upload size={16} />
-                {isFreeGame ? 'Entendido' : 'Entendido, subir nuevo comprobante'}
+                {!(isFreeGame || isRegisterOnly || !hasActiveGame || !file) && <Upload size={16} />}
+                {isFreeGame || isRegisterOnly || !hasActiveGame || !file ? 'Entendido' : 'Entendido, subir nuevo comprobante'}
               </button>
             </div>
           </div>
@@ -1017,10 +1017,20 @@ ${roomDirectUrl}
         </div>
       )}
 
-      {/* Modal de Simulación y Verificación de Escaneo en Tiempo Real */}
+      {/* Modal de Simulación y Verificación de Escaneo en Tiempo Real: SOLO se abre si hay comprobante adjunto y se compran cartones */}
       <ReceiptScanningModal 
-        isOpen={loading && paymentMethod === 'receipt' && !isFreeGame} 
-        expectedAmount={cardPriceNumber * formData.card_count} 
+        isOpen={Boolean(
+          loading && 
+          file && 
+          hasActiveGame && 
+          !isFreeGame && 
+          !isRegisterOnly && 
+          !invitedBy && 
+          paymentMethod === 'receipt' && 
+          formData.card_count > 0 && 
+          cardPriceNumber > 0
+        )} 
+        expectedAmount={cardPriceNumber * (formData.card_count || 1)} 
       />
     </div>
   );
