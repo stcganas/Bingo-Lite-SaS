@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link, useParams, useSearchParams } from 'react-router-dom';
-import { Upload, Home as HomeIcon, Loader2, Wallet, CreditCard, Gift, Info, Clock, QrCode, Copy, Check, MessageCircle, Mail, Lock, ShieldCheck, Eye, EyeOff, Key, Sparkles } from 'lucide-react';
+import { Upload, Home as HomeIcon, Loader2, Wallet, CreditCard, Gift, Info, Clock, QrCode, Copy, Check, MessageCircle, Mail, Lock, ShieldCheck, Eye, EyeOff, Key, Sparkles, Ticket } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../AuthContext';
 import { useTenant } from '../TenantContext';
