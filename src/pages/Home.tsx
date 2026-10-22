@@ -29,11 +29,57 @@ export default function Home() {
   const [timeLeft, setTimeLeft] = useState<{ days: number, hours: number, minutes: number, seconds: number } | null>(null);
   const phoneInputRef = React.useRef<HTMLInputElement>(null);
 
-  // Estados para búsqueda inteligente de salas
-  const [searchRoomQuery, setSearchRoomQuery] = useState('');
-  const [roomSearchResults, setRoomSearchResults] = useState<any[]>([]);
-  const [isSearchingRooms, setIsSearchingRooms] = useState(false);
-  const [showRoomResults, setShowRoomResults] = useState(false);
+  // Estados para solicitud técnica de recuperación de contraseña
+  const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
+  const [resetPhone, setResetPhone] = useState('');
+  const [resetName, setResetName] = useState('');
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetMessage, setResetMessage] = useState('');
+  const [isSubmittingReset, setIsSubmittingReset] = useState(false);
+
+  const handlePasswordResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanP = resetPhone.replace(/\D/g, '');
+    if (!cleanP || cleanP.length !== 10) {
+      toast.error('Por favor ingresa un número de WhatsApp válido de 10 dígitos.');
+      return;
+    }
+    if (!resetName.trim()) {
+      toast.error('Por favor ingresa tu nombre de registro.');
+      return;
+    }
+
+    setIsSubmittingReset(true);
+    try {
+      const res = await apiFetch('/api/support/tickets/password-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: cleanP,
+          name: resetName,
+          email: resetEmail,
+          message: resetMessage,
+          tenant_id: tenantSlug || tenant?.slug || 'bingo-lite'
+        })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Error al enviar la solicitud');
+      }
+
+      toast.success('¡Solicitud técnica enviada! Tu contraseña se restablecerá temporalmente a 123456.', { duration: 6000 });
+      setShowPasswordResetModal(false);
+      setResetPhone('');
+      setResetName('');
+      setResetEmail('');
+      setResetMessage('');
+    } catch (err: any) {
+      toast.error(err.message || 'Error al enviar la solicitud técnica');
+    } finally {
+      setIsSubmittingReset(false);
+    }
+  };
 
   // Auto scroll to top on load
   useEffect(() => {
@@ -46,34 +92,6 @@ export default function Home() {
       setRoomCode(tenant.access_code);
     }
   }, [tenant?.access_code]);
-
-  // Búsqueda inteligente de salas con debounce
-  useEffect(() => {
-    const query = searchRoomQuery.trim();
-    if (!query) {
-      setRoomSearchResults([]);
-      setIsSearchingRooms(false);
-      return;
-    }
-
-    setIsSearchingRooms(true);
-    const timer = setTimeout(async () => {
-      try {
-        const res = await apiFetch(`/api/tenants/search?q=${encodeURIComponent(query)}`);
-        if (res.ok) {
-          const data = await res.json();
-          setRoomSearchResults(Array.isArray(data) ? data : []);
-          setShowRoomResults(true);
-        }
-      } catch (err) {
-        console.warn('Error al buscar salas:', err);
-      } finally {
-        setIsSearchingRooms(false);
-      }
-    }, 250);
-
-    return () => clearTimeout(timer);
-  }, [searchRoomQuery]);
 
   const checkIsFree = (g: any) => {
     if (!g) return false;
@@ -334,113 +352,6 @@ export default function Home() {
       {/* Main Content Area */}
       <div className="flex-1 px-4 -mt-12 relative z-10 max-w-lg mx-auto w-full space-y-6">
         
-        {/* Buscador Inteligente de Salas de Juegos */}
-        <div className="bg-white/95 backdrop-blur-md rounded-3xl p-5 shadow-2xl border-2 border-blue-500/30 relative">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
-                <Search size={18} className="stroke-[2.5]" />
-              </div>
-              <div>
-                <h3 className="font-black text-slate-800 text-sm sm:text-base uppercase tracking-tight flex items-center gap-1.5">
-                  Buscar mi Sala de Juegos <Sparkles size={14} className="text-amber-500 fill-amber-400" />
-                </h3>
-                <p className="text-[10px] text-slate-500 font-bold">Ingresa el código o nombre de tu sala</p>
-              </div>
-            </div>
-            {tenantSlug && (
-              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-black text-[9px] uppercase tracking-wider">
-                Activa: {tenant.name}
-              </span>
-            )}
-          </div>
-
-          <div className="relative mt-2">
-            <input 
-              type="text"
-              placeholder="Ej: Bingo Ganador, BL-2026, demo..."
-              value={searchRoomQuery}
-              onChange={(e) => {
-                setSearchRoomQuery(e.target.value);
-                setShowRoomResults(true);
-              }}
-              onFocus={() => {
-                if (roomSearchResults.length > 0) setShowRoomResults(true);
-              }}
-              className="w-full pl-10 pr-9 py-3 bg-slate-50 border-2 border-slate-200 focus:border-blue-500 focus:bg-white rounded-2xl outline-none font-bold text-slate-800 text-sm transition placeholder:text-slate-400"
-            />
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            {isSearchingRooms ? (
-              <Loader2 className="absolute right-3.5 top-1/2 -translate-y-1/2 text-blue-500 animate-spin" size={16} />
-            ) : searchRoomQuery ? (
-              <button 
-                type="button"
-                onClick={() => {
-                  setSearchRoomQuery('');
-                  setRoomSearchResults([]);
-                  setShowRoomResults(false);
-                }}
-                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full"
-              >
-                <X size={14} />
-              </button>
-            ) : null}
-          </div>
-
-          {/* Desplegable de resultados de salas inteligentes */}
-          {showRoomResults && searchRoomQuery.trim() && (
-            <div className="mt-3 bg-white rounded-2xl border-2 border-slate-100 shadow-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto z-30">
-              {roomSearchResults.length > 0 ? (
-                roomSearchResults.map((room) => (
-                  <div
-                    key={room.id}
-                    onClick={() => {
-                      setShowRoomResults(false);
-                      setSearchRoomQuery('');
-                      if (room.slug === 'bingo-lite' || room.slug === 'default') {
-                        navigate('/');
-                      } else {
-                        navigate(`/sala/${room.slug}`);
-                      }
-                    }}
-                    className="p-3 hover:bg-blue-50 transition flex items-center justify-between gap-3 cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white font-black text-sm flex items-center justify-center shrink-0 shadow-md">
-                        {room.logo_url ? (
-                          <img src={room.logo_url} alt={room.name} className="w-full h-full object-cover rounded-xl" />
-                        ) : (
-                          room.name.slice(0, 2).toUpperCase()
-                        )}
-                      </div>
-                      <div className="truncate">
-                        <p className="font-black text-slate-800 text-sm truncate group-hover:text-blue-600 transition">
-                          {room.name}
-                        </p>
-                        <p className="text-[10px] text-slate-500 font-bold flex items-center gap-1.5">
-                          <span className="text-emerald-600 font-black">PIN: {room.access_code}</span>
-                          <span>•</span>
-                          <span className="text-slate-400">/sala/{room.slug}</span>
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="px-3 py-1.5 bg-blue-600 group-hover:bg-blue-700 text-white rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-1 shadow-sm shrink-0"
-                    >
-                      Entrar <ArrowRight size={13} />
-                    </button>
-                  </div>
-                ))
-              ) : !isSearchingRooms ? (
-                <div className="p-4 text-center text-slate-400 text-xs font-bold">
-                  No se encontraron salas con "{searchRoomQuery}". Intenta con el nombre o PIN.
-                </div>
-              ) : null}
-            </div>
-          )}
-        </div>
-        
         {/* Quick Bingo Indicator */}
         <QuickBingoIndicator onBuyCard={scrollToLogin} />
 
@@ -667,17 +578,12 @@ export default function Home() {
               style={{ opacity: 1 - (settings?.login_bg_opacity ?? 0.6) }}
             />
 
-            <div className="text-left mb-8 relative z-10 px-2">
-              <div className="flex items-center gap-3 mb-3">
-                <div className="p-2 bg-emerald-500/20 backdrop-blur-md rounded-xl border border-white/20 shadow-inner shrink-0">
-                  <LogIn className="text-emerald-400" size={18} />
-                </div>
-                <h3 className="text-xl sm:text-2xl font-black text-white uppercase tracking-tighter drop-shadow-lg leading-tight">
-                  ¿Ya tienes tus cartones?
-                </h3>
-              </div>
+            <div className="text-left mb-6 relative z-10 px-1 w-full">
+              <h3 className="text-xl sm:text-2xl font-black text-white tracking-tight drop-shadow-lg leading-tight mb-2">
+                Ingresa tus datos de Registro si ya te haz registrado
+              </h3>
               <p className="text-white/90 font-bold text-xs sm:text-sm drop-shadow-md leading-relaxed">
-                Ingresa con tu número para gestionar tus juegos y marcar tus números en vivo.
+                Ingresa telefono y contraseña.
               </p>
             </div>
           
@@ -721,6 +627,20 @@ export default function Home() {
                 className="absolute inset-y-0 right-3 flex items-center text-white/60 hover:text-white transition z-20"
               >
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
+
+            {/* Opción Recuperar Contraseña */}
+            <div className="w-full flex justify-end -mt-1 mb-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setResetPhone(phone);
+                  setShowPasswordResetModal(true);
+                }}
+                className="text-xs text-yellow-300 hover:text-yellow-200 font-bold underline underline-offset-4 transition cursor-pointer"
+              >
+                ¿Olvidaste tu contraseña? Recuperar aquí
               </button>
             </div>
 
@@ -987,6 +907,129 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Solicitud Técnica de Cambio de Contraseña */}
+      <AnimatePresence>
+        {showPasswordResetModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowPasswordResetModal(false)}
+              className="absolute inset-0 bg-slate-950/80 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-3xl p-6 sm:p-7 shadow-2xl border-2 border-amber-300 overflow-hidden text-left z-10"
+            >
+              <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 bg-amber-100 text-amber-800 rounded-xl">
+                    <Key size={20} />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-slate-800 text-base sm:text-lg leading-tight">Solicitud Técnica</h4>
+                    <p className="text-[11px] text-slate-500 font-bold">Recuperación de Contraseña</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordResetModal(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full transition"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-300/80 rounded-2xl p-3.5 mb-4 space-y-1">
+                <p className="text-xs font-black text-amber-900 flex items-center gap-1.5">
+                  ⚠️ Advertencia Importante
+                </p>
+                <p className="text-[11px] text-amber-950 font-semibold leading-relaxed">
+                  Al enviar esta solicitud técnica, tu contraseña será restablecida temporalmente a: <b className="bg-amber-200 px-1.5 py-0.5 rounded text-amber-950 font-black">123456</b> por el administrador. Una vez que ingreses a tu panel de jugador, deberás personalizarla inmediatamente por una contraseña más segura.
+                </p>
+              </div>
+
+              <form onSubmit={handlePasswordResetSubmit} className="space-y-3.5">
+                <div>
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                    Número de Teléfono (WhatsApp) *
+                  </label>
+                  <input
+                    required
+                    type="tel"
+                    value={resetPhone}
+                    onChange={(e) => setResetPhone(e.target.value)}
+                    placeholder="Ej: 3001234567 (10 dígitos)"
+                    className="w-full p-3 bg-slate-50 border-2 border-slate-200 focus:border-amber-500 rounded-xl font-bold text-sm text-slate-800 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                    Nombre con el que te Registraste *
+                  </label>
+                  <input
+                    required
+                    type="text"
+                    value={resetName}
+                    onChange={(e) => setResetName(e.target.value)}
+                    placeholder="Tu nombre completo de registro"
+                    className="w-full p-3 bg-slate-50 border-2 border-slate-200 focus:border-amber-500 rounded-xl font-bold text-sm text-slate-800 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                    Correo Electrónico (Opcional)
+                  </label>
+                  <input
+                    type="email"
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    placeholder="tucorreo@ejemplo.com"
+                    className="w-full p-3 bg-slate-50 border-2 border-slate-200 focus:border-amber-500 rounded-xl font-medium text-sm text-slate-800 outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-slate-700 uppercase tracking-wider mb-1">
+                    Mensaje Adicional (Opcional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={resetMessage}
+                    onChange={(e) => setResetMessage(e.target.value)}
+                    placeholder="Detalles adicionales sobre tu cuenta..."
+                    className="w-full p-3 bg-slate-50 border-2 border-slate-200 focus:border-amber-500 rounded-xl font-medium text-sm text-slate-800 outline-none"
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={isSubmittingReset}
+                    className="flex-1 py-3 px-4 bg-amber-500 hover:bg-amber-600 active:scale-95 text-white font-black text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                  >
+                    {isSubmittingReset ? <Loader2 size={16} className="animate-spin" /> : <Key size={16} />}
+                    <span>{isSubmittingReset ? 'Enviando...' : 'Enviar Solicitud Técnica'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPasswordResetModal(false)}
+                    className="py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm rounded-xl transition cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}

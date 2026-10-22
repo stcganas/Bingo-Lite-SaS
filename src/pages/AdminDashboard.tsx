@@ -29,7 +29,7 @@ import VirtualMixer from '../components/VirtualMixer';
 import AIVoiceStudio from '../components/AIVoiceStudio';
 import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
 
-type Tab = 'sellers' | 'control' | 'auto_draws' | 'games' | 'patterns' | 'users' | 'all_users' | 'settings' | 'wallet' | 'notifications' | 'winners_history' | 'free_winners' | 'dj_board' | 'virtual_mixer' | 'statistics_history' | 'lottery_numbers' | 'ai_voice_studio';
+type Tab = 'sellers' | 'control' | 'auto_draws' | 'games' | 'patterns' | 'users' | 'all_users' | 'settings' | 'wallet' | 'notifications' | 'tickets' | 'winners_history' | 'free_winners' | 'dj_board' | 'virtual_mixer' | 'statistics_history' | 'lottery_numbers' | 'ai_voice_studio';
 
 const getBallLetter = (ball: number) => {
   if (ball >= 1 && ball <= 15) return 'B';
@@ -72,6 +72,12 @@ export default function AdminDashboard() {
   const [gameCountdown, setGameCountdown] = useState<number | null>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const [patterns, setPatterns] = useState<any[]>([]);
+
+  // Tickets de recuperación de clave
+  const [supportTickets, setSupportTickets] = useState<any[]>([]);
+  const [isLoadingTickets, setIsLoadingTickets] = useState(false);
+  const [resettingTicketId, setResettingTicketId] = useState<string | null>(null);
+  const [ticketFilter, setTicketFilter] = useState<'all' | 'pending' | 'resolved'>('all');
 
   // Online and accounting stats states
   const [onlinePlayersCount, setOnlinePlayersCount] = useState(0);
@@ -1229,6 +1235,47 @@ export default function AdminDashboard() {
     }
   };
 
+  const fetchSupportTickets = useCallback(async () => {
+    setIsLoadingTickets(true);
+    try {
+      const tenantParam = currentTenant ? `?tenantId=${encodeURIComponent(currentTenant)}` : '';
+      const res = await apiFetch(`/api/admin/support/tickets${tenantParam}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSupportTickets(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Error fetching support tickets:', err);
+    } finally {
+      setIsLoadingTickets(false);
+    }
+  }, [currentTenant]);
+
+  const handleResetPasswordTicket = async (ticket: any) => {
+    if (!window.confirm(`¿Confirmas restablecer la contraseña de ${ticket.name} (${ticket.phone}) a 123456? Se le enviará una notificación push a su teléfono inmediatamente.`)) {
+      return;
+    }
+    setResettingTicketId(ticket.id);
+    try {
+      const res = await apiFetch(`/api/admin/support/tickets/${encodeURIComponent(ticket.id)}/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ defaultPassword: '123456' })
+      });
+      const result = await res.json();
+      if (res.ok && result.success) {
+        toast.success(`Contraseña de ${ticket.name} restablecida a 123456 y notificación push enviada.`);
+        fetchSupportTickets();
+      } else {
+        toast.error(result.error || 'Error al restablecer contraseña.');
+      }
+    } catch (err) {
+      toast.error('Error al conectar con el servidor.');
+    } finally {
+      setResettingTicketId(null);
+    }
+  };
+
   const fetchRechargeRequests = async (isBackground = false) => {
     if (isFetchingRechargeRef.current) return;
     isFetchingRechargeRef.current = true;
@@ -1344,6 +1391,12 @@ export default function AdminDashboard() {
       };
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'tickets') {
+      fetchSupportTickets();
+    }
+  }, [activeTab, fetchSupportTickets]);
 
   const handleRecharge = async (phone: string) => {
     if (!rechargeAmount || isNaN(parseFloat(rechargeAmount))) {
@@ -1788,6 +1841,16 @@ export default function AdminDashboard() {
     };
     channel.subscribe('recharge_request_submitted', onRechargeRequestSubmitted);
 
+    const onTicketCreated = (msg: any) => {
+      toast('Nueva solicitud de recuperación de contraseña', { icon: '🔐' });
+      fetchSupportTickets();
+    };
+    const onTicketResolved = (msg: any) => {
+      fetchSupportTickets();
+    };
+    channel.subscribe('ticket_created', onTicketCreated);
+    channel.subscribe('ticket_resolved', onTicketResolved);
+
     return () => {
       channel.unsubscribe('game_update', onGameUpdate);
       channel.unsubscribe('games_updated', onGamesUpdated);
@@ -1803,8 +1866,10 @@ export default function AdminDashboard() {
       channel.unsubscribe('wallet_updated', onWalletUpdated);
       channel.unsubscribe('server_autoplay_updated', onServerAutoplayUpdated);
       channel.unsubscribe('recharge_request_submitted', onRechargeRequestSubmitted);
+      channel.unsubscribe('ticket_created', onTicketCreated);
+      channel.unsubscribe('ticket_resolved', onTicketResolved);
     };
-  }, [channel]);
+  }, [channel, fetchSupportTickets]);
 
   // Sync server autoplay status on mount
   useEffect(() => {
@@ -2822,6 +2887,7 @@ export default function AdminDashboard() {
               { id: 'sellers', icon: <Users size={16} />, label: 'Sellers', color: 'bg-blue-600' },
               { id: 'wallet', icon: <Wallet size={16} />, label: 'Billeteras', color: 'bg-blue-600' },
               { id: 'notifications', icon: <BellRing size={16} />, label: 'Push', color: 'bg-indigo-600' },
+              { id: 'tickets', icon: <Key size={16} />, label: 'Tickets Claves 🔐', color: 'bg-amber-600' },
               { id: 'winners_history', icon: <Trophy size={16} />, label: 'Ganadores', color: 'bg-yellow-600' },
               { id: 'free_winners', icon: <Gift size={16} />, label: 'Premios Gratis $300K', color: 'bg-gradient-to-r from-amber-500 to-yellow-600' },
               { id: 'lottery_numbers', icon: <Gift size={16} />, label: 'Lotería', color: 'bg-amber-600' },
@@ -5191,6 +5257,182 @@ export default function AdminDashboard() {
           {activeTab === 'notifications' && (
             <div className="space-y-6 max-w-4xl mx-auto">
               <NotificationAdmin />
+            </div>
+          )}
+
+          {/* TICKETS DE RECUPERACIÓN DE CONTRASEÑA */}
+          {activeTab === 'tickets' && (
+            <div className="space-y-6 max-w-5xl mx-auto">
+              <div className="bg-white p-6 rounded-3xl shadow-xl border border-slate-200">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 border-b border-slate-100 pb-4">
+                  <div>
+                    <h2 className="text-2xl font-black text-slate-800 flex items-center gap-3">
+                      <div className="p-3 bg-amber-100 rounded-2xl text-amber-600">
+                        <Key size={24} />
+                      </div>
+                      Tickets: Recuperación de Claves
+                    </h2>
+                    <p className="text-slate-500 text-sm mt-1">
+                      Gestiona solicitudes técnicas de jugadores que olvidaron su contraseña.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={fetchSupportTickets}
+                      disabled={isLoadingTickets}
+                      className="flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs uppercase tracking-wider rounded-xl transition disabled:opacity-50"
+                    >
+                      <RefreshCcw size={14} className={isLoadingTickets ? "animate-spin" : ""} />
+                      Actualizar
+                    </button>
+                  </div>
+                </div>
+
+                {/* Banner de Instrucción / Advertencia */}
+                <div className="bg-amber-50 border border-amber-200 p-4 rounded-2xl mb-6 text-amber-900 text-xs sm:text-sm flex items-start gap-3">
+                  <Key className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-black uppercase tracking-wider block mb-0.5 text-amber-800">
+                      Instrucción del Procedimiento
+                    </span>
+                    Al presionar <strong>"Restablecer a 123456"</strong>, la contraseña del jugador se actualizará automáticamente a <strong>123456</strong>, el ticket quedará resuelto y se enviará una <strong>notificación push inmediata</strong> al teléfono del jugador indicándole que su contraseña se restableció a 123456 y debe personalizarla lo más pronto posible.
+                  </div>
+                </div>
+
+                {/* Filtros */}
+                <div className="flex gap-2 mb-6">
+                  {(['all', 'pending', 'resolved'] as const).map((filter) => {
+                    const count = filter === 'all' 
+                      ? supportTickets.length 
+                      : supportTickets.filter(t => t.status === filter).length;
+                    const labels = { all: 'Todos', pending: 'Pendientes', resolved: 'Resueltos' };
+                    return (
+                      <button
+                        key={filter}
+                        onClick={() => setTicketFilter(filter)}
+                        className={clsx(
+                          "px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition flex items-center gap-2",
+                          ticketFilter === filter 
+                            ? "bg-slate-900 text-white shadow" 
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        )}
+                      >
+                        {labels[filter]}
+                        <span className={clsx(
+                          "px-2 py-0.5 rounded-full text-[10px]",
+                          ticketFilter === filter ? "bg-amber-500 text-slate-950 font-black" : "bg-slate-200 text-slate-700 font-bold"
+                        )}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Lista de Tickets */}
+                {isLoadingTickets && supportTickets.length === 0 ? (
+                  <div className="py-12 flex flex-col items-center justify-center text-slate-400 gap-3">
+                    <Loader2 size={32} className="animate-spin text-amber-500" />
+                    <p className="text-sm font-bold">Cargando solicitudes...</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {supportTickets
+                      .filter(t => ticketFilter === 'all' || t.status === ticketFilter)
+                      .map((ticket) => {
+                        const isPending = ticket.status === 'pending';
+                        const isResetting = resettingTicketId === ticket.id;
+                        return (
+                          <div 
+                            key={ticket.id} 
+                            className={clsx(
+                              "p-5 rounded-2xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4",
+                              isPending 
+                                ? "bg-amber-50/40 border-amber-200 hover:border-amber-300 shadow-sm" 
+                                : "bg-slate-50 border-slate-200 opacity-80"
+                            )}
+                          >
+                            <div className="space-y-2 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-black text-slate-900 text-base">
+                                  {ticket.name}
+                                </span>
+                                <span className={clsx(
+                                  "px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider",
+                                  isPending ? "bg-amber-500 text-white animate-pulse" : "bg-emerald-500 text-white"
+                                )}>
+                                  {isPending ? 'Pendiente' : 'Resuelto'}
+                                </span>
+                                <span className="text-xs text-slate-400">
+                                  {new Date(ticket.created_at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })}
+                                </span>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-4 text-xs font-bold text-slate-600">
+                                <div className="flex items-center gap-1.5">
+                                  <Smartphone size={14} className="text-emerald-600" />
+                                  <span>Teléfono: <strong>{ticket.phone}</strong></span>
+                                </div>
+                                {ticket.email && (
+                                  <div className="flex items-center gap-1.5">
+                                    <Mail size={14} className="text-blue-500" />
+                                    <span>{ticket.email}</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {ticket.message && (
+                                <div className="text-xs text-slate-700 bg-white/80 p-2.5 rounded-xl border border-slate-200/60 mt-1.5">
+                                  <span className="font-bold text-slate-500 mr-1.5">Mensaje del jugador:</span>
+                                  "{ticket.message}"
+                                </div>
+                              )}
+
+                              {!isPending && ticket.resolved_at && (
+                                <p className="text-[11px] text-emerald-700 font-semibold">
+                                  ✓ Resuelto el {new Date(ticket.resolved_at).toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' })} (Clave restablecida a 123456 y push enviado)
+                                </p>
+                              )}
+                            </div>
+
+                            {/* Botón de Restablecimiento */}
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                onClick={() => handleResetPasswordTicket(ticket)}
+                                disabled={isResetting}
+                                className={clsx(
+                                  "w-full md:w-auto px-5 py-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-md transition transform active:scale-95",
+                                  isPending
+                                    ? "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-amber-500/25"
+                                    : "bg-slate-200 hover:bg-slate-300 text-slate-700"
+                                )}
+                              >
+                                {isResetting ? (
+                                  <>
+                                    <Loader2 size={16} className="animate-spin" />
+                                    <span>Restableciendo...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Key size={16} />
+                                    <span>{isPending ? 'Restablecer a 123456' : 'Volver a Restablecer (123456)'}</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                    {supportTickets.filter(t => ticketFilter === 'all' || t.status === ticketFilter).length === 0 && (
+                      <div className="text-center py-12 bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-400">
+                        <CheckCircle2 size={36} className="mx-auto mb-2 text-slate-300" />
+                        <p className="font-bold text-sm">No hay solicitudes en esta categoría.</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

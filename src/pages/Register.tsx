@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link, useParams, useSearchParams } from 'react-router-dom';
-import { Upload, Home as HomeIcon, Loader2, Wallet, CreditCard, Gift, Info, Clock, QrCode, Copy, Check, MessageCircle, Mail, Lock, ShieldCheck, Eye, EyeOff, Key } from 'lucide-react';
+import { Upload, Home as HomeIcon, Loader2, Wallet, CreditCard, Gift, Info, Clock, QrCode, Copy, Check, MessageCircle, Mail, Lock, ShieldCheck, Eye, EyeOff, Key, Sparkles } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../AuthContext';
 import { useTenant } from '../TenantContext';
@@ -30,6 +30,7 @@ export default function Register() {
   const cleanTenant = rawTenantCandidate === 'default' ? 'demo' : rawTenantCandidate;
 
   const cardPriceNumber = Math.max(0, Number(String(activeGame?.card_value ?? '').replace(/[^0-9.-]+/g, "")) || 0);
+  const hasActiveGame = Boolean(activeGame && activeGame.id);
   const isFreeGame = Boolean(
     isFreeQuery || 
     invitedBy ||
@@ -48,7 +49,7 @@ export default function Register() {
     city: '',
     seller_code: urlRef,
     player_ref: playerRef,
-    card_count: isFreeGame ? 2 : 6,
+    card_count: isFreeGame ? 2 : 1,
     password: '',
     room_code: tenant.access_code || 'LITE777',
   });
@@ -206,13 +207,13 @@ export default function Register() {
       return;
     }
 
-    if (!isFreeGame && !invitedBy && paymentMethod === 'receipt' && !file) {
+    if (hasActiveGame && !isFreeGame && !invitedBy && paymentMethod === 'receipt' && !file) {
       setErrorMsg('Por favor, adjunta el comprobante de pago.');
       return;
     }
     
     // Si no es gratuito ni regalo y el método es recibo, mostramos la advertencia primero
-    if (!isFreeGame && !invitedBy && paymentMethod === 'receipt' && !showConfirmModal) {
+    if (hasActiveGame && !isFreeGame && !invitedBy && paymentMethod === 'receipt' && !showConfirmModal) {
       setShowConfirmModal(true);
       return;
     }
@@ -225,8 +226,8 @@ export default function Register() {
     setErrorMsg(null);
     setLoading(true);
     const normalizedPhone = normalizePhone(formData.phone);
-    const finalMethod = isFreeGame ? 'free' : (invitedBy ? 'gift' : paymentMethod);
-    const finalCards = isFreeGame ? 2 : (invitedBy ? 1 : formData.card_count);
+    const finalMethod = !hasActiveGame ? 'free' : (isFreeGame ? 'free' : (invitedBy ? 'gift' : paymentMethod));
+    const finalCards = !hasActiveGame ? 0 : (isFreeGame ? 2 : (invitedBy ? 1 : formData.card_count));
     const data = new FormData();
     data.append('name', formData.name);
     data.append('phone', normalizedPhone);
@@ -612,6 +613,16 @@ ${roomDirectUrl}
                 <span>1 Cartón de Regalo (Gratis)</span>
               </div>
             </div>
+          ) : !hasActiveGame ? (
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-2xl border-2 border-blue-200 shadow-sm space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Sparkles size={18} className="text-blue-600 shrink-0" />
+                <span className="text-sm font-black text-blue-900 uppercase tracking-tight">Registro General en la Sala</span>
+              </div>
+              <p className="text-xs text-blue-800 font-medium leading-relaxed">
+                No hay un juego activo en este momento. Al completar tu registro tendrás tu cuenta lista; una vez el organizador programe y active el próximo juego, se te cargarán tus <b>2 cartones gratuitos</b> (si el juego es gratis) o podrás comprarlos fácilmente desde tu panel.
+              </p>
+            </div>
           ) : isFreeGame ? (
             <div>
               <label className="block text-sm font-bold text-slate-700 mb-1">Cantidad de cartones</label>
@@ -637,8 +648,8 @@ ${roomDirectUrl}
             </div>
           )}
 
-          {/* Payment Method & Proof of Payment (ONLY for paid games with real cost > 0) */}
-          {!isFreeGame && cardPriceNumber > 0 && paymentMethod !== 'gift' && paymentMethod !== 'free' && (
+          {/* Payment Method & Proof of Payment (ONLY for paid games with real cost > 0 and active game) */}
+          {hasActiveGame && !isFreeGame && cardPriceNumber > 0 && paymentMethod !== 'gift' && paymentMethod !== 'free' && (
             <div className="space-y-3">
               <label className="block text-sm font-bold text-slate-700 mb-1">Método de Pago</label>
               <div className="grid grid-cols-2 gap-3">

@@ -3727,6 +3727,204 @@ app.post('/api/players/change-password', async (req, res) => {
   }
 });
 
+// ==========================================
+// MÓDULO DE TICKETS DE RECUPERACIÓN DE CONTRASEÑA
+// ==========================================
+interface PasswordResetTicket {
+  id: string;
+  tenant_id: string;
+  phone: string;
+  name: string;
+  email?: string;
+  message?: string;
+  status: 'pending' | 'resolved' | 'cancelled';
+  created_at: string;
+  resolved_at?: string;
+  resolved_by?: string;
+}
+
+const memoryPasswordResetTickets: PasswordResetTicket[] = [];
+
+// Crear solicitud técnica de recuperación de contraseña (público)
+app.post('/api/support/tickets/password-reset', async (req, res) => {
+  try {
+    const { phone: rawPhone, name, email, message, tenant_id } = req.body;
+    const phone = normalizePhone(rawPhone);
+
+    if (!phone || phone.length !== 10) {
+      return res.status(400).json({ error: 'Número de WhatsApp de 10 dígitos requerido.' });
+    }
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Nombre de registro requerido.' });
+    }
+
+    const rawTenant = (tenant_id || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite').toString().toLowerCase();
+    const cleanTenant = rawTenant === 'default' ? 'demo' : rawTenant;
+
+    const ticketId = `ticket-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const newTicket: PasswordResetTicket = {
+      id: ticketId,
+      tenant_id: cleanTenant,
+      phone,
+      name: name.trim(),
+      email: email ? String(email).trim() : undefined,
+      message: message ? String(message).trim() : undefined,
+      status: 'pending',
+      created_at: new Date().toISOString()
+    };
+
+    // Intentar guardar en Supabase (si existe la tabla)
+    try {
+      await supabase.from('password_reset_tickets').insert({
+        id: ticketId,
+        tenant_id: cleanTenant,
+        phone,
+        name: name.trim(),
+        email: email ? String(email).trim() : null,
+        message: message ? String(message).trim() : null,
+        status: 'pending'
+      });
+    } catch (dbErr) {
+      console.warn('[Tickets] Tabla password_reset_tickets no disponible en Supabase, usando persistencia en memoria.');
+    }
+
+    // Persistencia asegurada en memoria
+    memoryPasswordResetTickets.unshift(newTicket);
+
+    // Notificar en tiempo real al admin de la sala
+    getChannel(cleanTenant).publish('ticket_created', newTicket);
+
+    res.json({
+      success: true,
+      ticket_id: ticketId,
+      message: 'Solicitud técnica enviada correctamente. El administrador restablecerá tu contraseña a 123456.'
+    });
+  } catch (err: any) {
+    console.error('Error al crear ticket de soporte:', err);
+    res.status(500).json({ error: 'No se pudo enviar la solicitud de recuperación' });
+  }
+});
+
+// Listar tickets de recuperación para el panel de administración
+app.get('/api/admin/support/tickets', requireAdmin, async (req, res) => {
+  try {
+    const adminUser = (req as any).adminUser;
+    const rawTenant = (!adminUser?.isSuperAdmin && adminUser?.tenant_id)
+      ? adminUser.tenant_id
+      : (req.query.tenantId as string || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite');
+    const cleanTenant = rawTenant === 'default' ? 'demo' : String(rawTenant).toLowerCase();
+
+    // Intentar consultar Supabase primero
+    let dbTickets: any[] = [];
+    try {
+      const { data, error } = await supabase
+        .from('password_reset_tickets')
+        .select('*')
+        .eq('tenant_id', cleanTenant)
+        .order('created_at', { ascending: false });
+      if (!error && Array.isArray(data)) {
+        dbTickets = data;
+      }
+    } catch {
+      // Ignorado, fallback a memoria
+    }
+
+    // Fusionar con memoria deduplicando por ID
+    const ticketMap = new Map<string, PasswordResetTicket>();
+    dbTickets.forEach(t => ticketMap.set(t.id, t));
+    memoryPasswordResetTickets
+      .filter(t => t.tenant_id === cleanTenant)
+      .forEach(t => {
+        if (!ticketMap.has(t.id)) ticketMap.set(t.id, t);
+      });
+
+    const combined = Array.from(ticketMap.values()).sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+
+    res.json({ success: true, tickets: combined });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Error al obtener tickets de recuperación' });
+  }
+});
+
+// Restablecer contraseña del jugador a 123456 desde el panel del admin
+app.post('/api/admin/support/tickets/:id/reset-password', requireAdmin, async (req, res) => {
+  try {
+    const ticketId = req.params.id;
+    const adminUser = (req as any).adminUser;
+    const targetTenant = (adminUser?.tenant_id || req.body.tenant_id || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+
+    // Buscar el ticket
+    let ticket = memoryPasswordResetTickets.find(t => t.id === ticketId);
+    if (!ticket) {
+      try {
+        const { data } = await supabase.from('password_reset_tickets').select('*').eq('id', ticketId).maybeSingle();
+        if (data) ticket = data;
+      } catch {}
+    }
+
+    if (!ticket) {
+      return res.status(404).json({ error: 'Ticket de soporte no encontrado' });
+    }
+
+    const playerPhone = normalizePhone(ticket.phone);
+    const defaultPassword = '123456';
+    const secureHash = hashPassword(defaultPassword);
+
+    // 1. Actualizar contraseña en la tabla players
+    const { error: updatePlayerErr } = await supabase
+      .from('players')
+      .update({ password: secureHash })
+      .eq('phone', playerPhone);
+
+    if (updatePlayerErr) {
+      console.error('[Reset Password Ticket] Error al actualizar clave del jugador:', updatePlayerErr);
+      return res.status(500).json({ error: 'No se pudo actualizar la contraseña del jugador' });
+    }
+
+    // 2. Marcar el ticket como resuelto
+    ticket.status = 'resolved';
+    ticket.resolved_at = new Date().toISOString();
+    ticket.resolved_by = adminUser?.email || 'admin';
+
+    try {
+      await supabase.from('password_reset_tickets').update({
+        status: 'resolved',
+        resolved_at: ticket.resolved_at,
+        resolved_by: ticket.resolved_by
+      }).eq('id', ticketId);
+    } catch {}
+
+    // 3. Enviar notificación PUSH OneSignal al jugador a su teléfono
+    try {
+      await sendPushNotification({
+        recipient: 'single',
+        phone: playerPhone,
+        title: '🔐 Seguridad: Contraseña Restablecida',
+        message: 'su contraseña se restablecio a 123456 personalicela lo mas pronto.',
+        tenantId: targetTenant
+      });
+    } catch (pushErr) {
+      console.warn('[Reset Password Ticket] Error al enviar push:', pushErr);
+    }
+
+    // Invalidar cachés
+    invalidatePlayersCaches(targetTenant);
+
+    // Notificar en tiempo real al canal de la sala
+    getChannel(targetTenant).publish('ticket_resolved', { id: ticketId, phone: playerPhone });
+
+    res.json({
+      success: true,
+      message: `Contraseña de ${ticket.name} (${playerPhone}) restablecida con éxito a 123456. Notificación push enviada.`
+    });
+  } catch (err: any) {
+    console.error('Error al restablecer contraseña desde ticket:', err);
+    res.status(500).json({ error: 'Error al procesar el restablecimiento de contraseña' });
+  }
+});
+
 app.get('/api/games', async (req, res) => {
   const targetTenant = ((req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || '').toLowerCase();
   const now = Date.now();
@@ -9504,14 +9702,25 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       game = await getActiveGame(effectiveTenant);
     }
 
-    if (!game) {
-      return res.status(400).json({ error: 'No hay juego activo en esta sala.' });
-    }
+    const hasActiveGame = Boolean(game && game.id);
+    const cleanTenant = (game?.tenant_id ? (game.tenant_id === 'default' ? 'demo' : game.tenant_id) : effectiveTenant).toLowerCase();
+    let settings: any = {};
+    let isFreeGame = false;
 
-    const cleanTenant = (game.tenant_id ? (game.tenant_id === 'default' ? 'demo' : game.tenant_id) : effectiveTenant).toLowerCase();
-    const settings = await getGameSettings(game.id);
-    const cardValNum = parseAmountWithDecimals(game.card_value || '0') || 0;
-    const isFreeGame = (game.is_free === true || game.type === 'free' || settings.is_free === true || settings.type === 'free' || cardValNum === 0 || (typeof game.card_value === 'string' && game.card_value.toLowerCase().includes('gratis'))) && !(game.is_free === false && cardValNum > 0);
+    if (hasActiveGame) {
+      settings = await getGameSettings(game.id);
+      const cardValNum = parseAmountWithDecimals(game.card_value || '0') || 0;
+      isFreeGame = (game.is_free === true || game.type === 'free' || settings.is_free === true || settings.type === 'free' || cardValNum === 0 || (typeof game.card_value === 'string' && game.card_value.toLowerCase().includes('gratis'))) && !(game.is_free === false && cardValNum > 0);
+    } else {
+      if (payment_method === 'receipt' && req.file) {
+        return res.status(400).json({
+          error: 'No hay juego activo programado',
+          message: 'No hay un juego activo programado en este momento para comprar cartones. Puedes registrarte sin adjuntar comprobante y adquirir tus cartones cuando el juego esté activo.'
+        });
+      }
+      finalCardCount = 0;
+      finalStatus = 'approved';
+    }
 
     if (payment_method === 'gift' || invited_by) {
       const cleanInvitedBy = normalizePhone(invited_by);
@@ -9883,12 +10092,14 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         return res.status(500).json({ error: `Error de base de datos: ${updateError.message}` });
       }
 
-      if (status === 'approved') {
+      if (status === 'approved' && hasActiveGame && game?.id) {
         const cardsToMake = isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount);
-        console.log(`Debug: Generating ${cardsToMake} cards for updated player ${updatedPlayer.id} for game ${game.id} in tenant ${cleanTenant}`);
-        await generateCardsForPlayer(updatedPlayer.id, game.id, cardsToMake, false, isGiftReg, cleanTenant);
-        if (payment_method !== 'gift' && payment_method !== 'free') {
-          payReferralCommission(updatedPlayer, game, finalCardCount).catch(console.error);
+        if (cardsToMake > 0) {
+          console.log(`Debug: Generating ${cardsToMake} cards for updated player ${updatedPlayer.id} for game ${game.id} in tenant ${cleanTenant}`);
+          await generateCardsForPlayer(updatedPlayer.id, game.id, cardsToMake, false, isGiftReg, cleanTenant);
+          if (payment_method !== 'gift' && payment_method !== 'free') {
+            payReferralCommission(updatedPlayer, game, finalCardCount).catch(console.error);
+          }
         }
       }
 
@@ -9957,12 +10168,14 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       return res.status(500).json({ error: `Error de base de datos: ${insertError.message}` });
     }
 
-    if (status === 'approved') {
+    if (status === 'approved' && hasActiveGame && game?.id) {
       const cardsToMake = isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount);
-      console.log(`Debug: Generating ${cardsToMake} cards for new player ${newPlayer.id} for game ${game.id} in tenant ${cleanTenant}`);
-      await generateCardsForPlayer(newPlayer.id, game.id, cardsToMake, false, isGiftReg, cleanTenant);
-      if (payment_method !== 'gift' && payment_method !== 'free') {
-        payReferralCommission(newPlayer, game, finalCardCount).catch(console.error);
+      if (cardsToMake > 0) {
+        console.log(`Debug: Generating ${cardsToMake} cards for new player ${newPlayer.id} for game ${game.id} in tenant ${cleanTenant}`);
+        await generateCardsForPlayer(newPlayer.id, game.id, cardsToMake, false, isGiftReg, cleanTenant);
+        if (payment_method !== 'gift' && payment_method !== 'free') {
+          payReferralCommission(newPlayer, game, finalCardCount).catch(console.error);
+        }
       }
     }
 

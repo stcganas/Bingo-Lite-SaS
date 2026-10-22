@@ -417,6 +417,12 @@ ${refUrl}
     cardPriceNumber === 0 ||
     (typeof gameState?.card_value === 'string' && gameState?.card_value.toLowerCase().includes('gratis'))
   );
+  const hasActiveGame = Boolean(
+    gameState && 
+    gameState.id &&
+    (gameState.status === 'waiting' || gameState.status === 'in_progress' || gameState.status === 'scheduled')
+  );
+  const canBuyCards = Boolean(hasActiveGame && !isFreeGame);
   const hasFreeCards = Boolean(
     (isFreeGame && cards && cards.length > 0) ||
     (player?.receipt_url && typeof player.receipt_url === 'string' && player.receipt_url.includes('FREE_GAME') && cards && cards.length > 0)
@@ -1827,18 +1833,31 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
             </button>
 
             <button 
-              onClick={() => navigate("/register")}
-              disabled={hasFreeCards}
+              onClick={() => {
+                if (!hasActiveGame) {
+                  toast('No hay un juego activo programado en este momento.', { icon: '⏳' });
+                  return;
+                }
+                if (isFreeGame) {
+                  toast('Este es un juego gratuito. Tus 2 cartones ya fueron asignados.', { icon: '🎁' });
+                  return;
+                }
+                navigate("/register");
+              }}
+              disabled={!canBuyCards || hasFreeCards}
               className={clsx(
                 "flex flex-col items-center justify-center py-2 px-1.5 sm:px-2.5 rounded-xl transition shadow-md border font-black text-center",
-                hasFreeCards 
-                  ? "bg-slate-700 text-slate-400 border-slate-600 cursor-not-allowed" 
-                  : "bg-green-600 text-white hover:bg-green-700 border-green-400"
+                (!canBuyCards || hasFreeCards)
+                  ? "bg-slate-700/60 text-slate-400 border-slate-600/50 cursor-not-allowed opacity-50 shadow-none" 
+                  : "bg-green-600 text-white hover:bg-green-700 border-green-400 cursor-pointer"
               )}
+              title={!hasActiveGame ? "No hay juegos activos para comprar cartones" : isFreeGame ? "Juego gratuito" : "Comprar cartones"}
             >
               <div className="flex items-center gap-1">
                 <Plus size={14} />
-                <span className="text-[10px] sm:text-xs uppercase tracking-wider">{hasFreeCards ? "Obtenido" : "Comprar"}</span>
+                <span className="text-[10px] sm:text-xs uppercase tracking-wider">
+                  {!hasActiveGame ? "Sin Juego" : hasFreeCards ? "Obtenido" : "Comprar"}
+                </span>
               </div>
               <span className="text-[8px] sm:text-[9px] text-white/80 font-bold uppercase mt-0.5">Cartones</span>
             </button>
@@ -2487,10 +2506,22 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                       Actualmente no tienes cartones asignados. Si ya pagaste, espera a que el administrador los apruebe. Si el juego anterior terminó, debes registrarte nuevamente para el próximo juego.
                     </p>
                     <button 
-                      onClick={() => navigate("/register")}
-                      className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white font-black text-xl rounded-2xl shadow-lg transition active:scale-95 flex items-center justify-center gap-2 uppercase tracking-widest"
+                      onClick={() => {
+                        if (!canBuyCards) {
+                          toast('No hay un juego de pago activo programado en este momento.', { icon: '⏳' });
+                          return;
+                        }
+                        navigate("/register");
+                      }}
+                      disabled={!canBuyCards}
+                      className={clsx(
+                        "w-full py-4 text-white font-black text-xl rounded-2xl shadow-lg transition flex items-center justify-center gap-2 uppercase tracking-widest",
+                        !canBuyCards 
+                          ? "bg-slate-400 text-slate-200 cursor-not-allowed opacity-60 shadow-none" 
+                          : "bg-blue-600 hover:bg-blue-700 active:scale-95 cursor-pointer"
+                      )}
                     >
-                      <Plus size={24} /> Comprar cartón
+                      <Plus size={24} /> {canBuyCards ? "Comprar cartón" : "Sin juego activo para comprar"}
                     </button>
 
                     {gameState?.whatsapp_group_link && (

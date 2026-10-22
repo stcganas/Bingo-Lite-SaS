@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   Sparkles, ShieldCheck, Zap, Users, Trophy, Radio, Wallet, 
   Smartphone, ChevronRight, CheckCircle2, Copy, Check, ExternalLink,
-  ArrowRight, Play, Calculator, Layers, Award, Star, MessageCircle, Lock
+  ArrowRight, Play, Calculator, Layers, Award, Star, MessageCircle, Lock,
+  Search, Loader2, X, Key
 } from 'lucide-react';
 import { apiFetch } from '../utils/api';
 
@@ -14,6 +15,39 @@ export default function SaaSMarketingLanding() {
   const [createdResult, setCreatedResult] = useState<any>(null);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+
+  // Estados para buscador inteligente de salas
+  const [searchRoomQuery, setSearchRoomQuery] = useState('');
+  const [roomSearchResults, setRoomSearchResults] = useState<any[]>([]);
+  const [isSearchingRooms, setIsSearchingRooms] = useState(false);
+  const [showRoomResults, setShowRoomResults] = useState(false);
+
+  useEffect(() => {
+    const query = searchRoomQuery.trim();
+    if (!query) {
+      setRoomSearchResults([]);
+      setIsSearchingRooms(false);
+      return;
+    }
+
+    setIsSearchingRooms(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`/api/tenants/search?q=${encodeURIComponent(query)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setRoomSearchResults(Array.isArray(data) ? data : []);
+          setShowRoomResults(true);
+        }
+      } catch (err) {
+        console.warn('Error al buscar salas:', err);
+      } finally {
+        setIsSearchingRooms(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [searchRoomQuery]);
 
   // Formulario de nueva sala con administrador independiente
   const [roomForm, setRoomForm] = useState({
@@ -210,6 +244,103 @@ export default function SaaSMarketingLanding() {
               <Play size={16} className="text-amber-400 fill-amber-400" />
               <span>Sala Oficial</span>
             </Link>
+          </div>
+
+          {/* Buscador Inteligente de Salas de Juegos (Diseño prudente y compacto) */}
+          <div className="max-w-xl mx-auto mb-14 text-left relative z-30">
+            <div className="bg-slate-900/80 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 border border-slate-800 shadow-xl">
+              <div className="flex items-center justify-between px-2 mb-2">
+                <span className="text-xs font-black text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <Search size={14} className="text-blue-400" /> Buscar mi Sala de Juegos
+                </span>
+                <span className="text-[10px] text-slate-400 font-medium">Por nombre o código PIN</span>
+              </div>
+
+              <div className="relative">
+                <input 
+                  type="text"
+                  value={searchRoomQuery}
+                  onChange={(e) => {
+                    setSearchRoomQuery(e.target.value);
+                    setShowRoomResults(true);
+                  }}
+                  onFocus={() => {
+                    if (roomSearchResults.length > 0) setShowRoomResults(true);
+                  }}
+                  placeholder="Ej: Bingo Ganador, BL-2026, demo..."
+                  className="w-full bg-slate-950/80 border border-slate-800/90 focus:border-blue-500 rounded-xl py-2.5 pl-10 pr-9 text-white font-semibold text-sm outline-none transition placeholder:text-slate-500 shadow-inner"
+                />
+                <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                {isSearchingRooms ? (
+                  <Loader2 size={16} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-blue-400 animate-spin" />
+                ) : searchRoomQuery ? (
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setSearchRoomQuery('');
+                      setRoomSearchResults([]);
+                      setShowRoomResults(false);
+                    }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 rounded-full"
+                  >
+                    <X size={14} />
+                  </button>
+                ) : null}
+              </div>
+
+              {/* Resultados flotantes */}
+              {showRoomResults && searchRoomQuery.trim() && (
+                <div className="absolute left-0 right-0 mt-2 bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden divide-y divide-slate-800/80 max-h-64 overflow-y-auto z-50">
+                  {roomSearchResults.length > 0 ? (
+                    roomSearchResults.map((room) => (
+                      <div
+                        key={room.id}
+                        onClick={() => {
+                          setShowRoomResults(false);
+                          setSearchRoomQuery('');
+                          if (room.slug === 'bingo-lite' || room.slug === 'default') {
+                            navigate('/sala/bingo-lite');
+                          } else {
+                            navigate(`/sala/${room.slug}`);
+                          }
+                        }}
+                        className="p-3 hover:bg-slate-800/70 transition flex items-center justify-between gap-3 cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white font-black text-xs flex items-center justify-center shrink-0 shadow">
+                            {room.logo_url ? (
+                              <img src={room.logo_url} alt={room.name} className="w-full h-full object-cover rounded-xl" />
+                            ) : (
+                              room.name.slice(0, 2).toUpperCase()
+                            )}
+                          </div>
+                          <div className="truncate">
+                            <p className="font-bold text-white text-sm truncate group-hover:text-blue-400 transition">
+                              {room.name}
+                            </p>
+                            <p className="text-[11px] text-slate-400 font-medium flex items-center gap-2">
+                              <span className="text-emerald-400 font-bold">PIN: {room.access_code}</span>
+                              <span>•</span>
+                              <span className="text-slate-400">/sala/{room.slug}</span>
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-black text-xs uppercase tracking-wider flex items-center gap-1 shadow shrink-0"
+                        >
+                          Entrar <ArrowRight size={12} />
+                        </button>
+                      </div>
+                    ))
+                  ) : !isSearchingRooms ? (
+                    <div className="p-3 text-center text-slate-400 text-xs font-semibold">
+                      No se encontraron salas con "{searchRoomQuery}". Intenta con el nombre o código PIN.
+                    </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Badges de Rendimiento */}
