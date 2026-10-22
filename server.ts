@@ -10710,8 +10710,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
 
       if (isAccountOnlyRegistration) {
         return res.status(409).json({
-          error: '¡Ya tienes una cuenta registrada en esta sala!',
-          message: `El número de WhatsApp ${phone} ya está registrado a nombre de "${existingPlayer.name || 'Jugador'}".\n\nPor favor inicia sesión con tu contraseña para continuar. Si olvidaste tu contraseña, pulsa "¿Olvidaste tu contraseña?" para restablecerla.`
+          error: '¡Número de teléfono ya registrado!',
+          message: `El número de WhatsApp ${phone} ya tiene una cuenta registrada en esta sala.\n\nPor favor inicia sesión con tu contraseña para continuar. Si olvidaste tu contraseña, pulsa "¿Olvidaste tu contraseña?" para restablecerla.`
         });
       }
 
