@@ -10417,12 +10417,21 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       finalCardCount = 1;
       receipt_url = `GIFT_INSTRUCTED_BY_${cleanInvitedBy}`;
     } else {
-      finalCardCount = isFreeGame ? 2 : parseInt(card_count);
+      const parsedCardCount = parseInt(card_count || '0', 10);
+      const isRegisterOnly = Boolean(
+        payment_method === 'register_only' ||
+        payment_method === 'none' ||
+        payment_method === 'account_only' ||
+        parsedCardCount === 0 ||
+        (!req.file && payment_method !== 'wallet' && payment_method !== 'gift' && !isFreeGame)
+      );
 
-      if (payment_method === 'wallet') {
-        if (isFreeGame) {
-          return res.status(400).json({ error: 'No es necesario usar la billetera para juegos gratuitos' });
-        }
+      if (isFreeGame) {
+        // Solo juegos gratuitos otorgan 2 cartones gratis
+        finalCardCount = 2;
+        receipt_url = 'FREE_GAME';
+      } else if (payment_method === 'wallet') {
+        finalCardCount = Math.max(1, isNaN(parsedCardCount) ? 1 : parsedCardCount);
 
         const effectiveWalletTenant = normalizeTenant(rawTenantId || (req as any).tenantId || game?.tenant_id);
 
@@ -10466,7 +10475,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         await updateWalletBalance(phone, -totalCost, `Compra de ${finalCardCount} cartones por $${totalCost}`, 'purchase', effectiveWalletTenant);
         receipt_url = 'WALLET_PAYMENT';
       } else if (req.file) {
-        const rawCardVal = game.card_value || settings.card_value || '2000';
+        finalCardCount = Math.max(1, isNaN(parsedCardCount) ? 1 : parsedCardCount);
+        const rawCardVal = game?.card_value || settings.card_value || '2000';
         const cardVal = parseAmountWithDecimals(rawCardVal) || 2000;
         const totalCost = cardVal * (finalCardCount || 1);
 
@@ -10536,8 +10546,6 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
           finalStatus = 'pending';
           console.log('[AI Audit] Inconsistencia en comprobante Nequi. Estado: PENDIENTE. Motivo:', silentReason);
         } else if (!aiFraudEnabled) {
-          // Si la IA está desactivada, dejamos el estado en PENDIENTE para aprobación manual del administrador
-          // tal como lo solicita el usuario (excepto si el juego es gratuito, lo cual se maneja arriba)
           finalStatus = 'pending';
           console.log('[AI Audit] AI Anti-Fraud DESACTIVADO. Estado: PENDIENTE para aprobación manual.');
         } else {
@@ -10546,37 +10554,45 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         }
 
         // Activar la billetera para este juego ÚNICAMENTE si la compra fue legítimamente aprobada
-        if (finalStatus === 'approved') {
+        if (finalStatus === 'approved' && game?.id) {
           await activateWallet(phone, game.id);
         }
-      } else if (!isFreeGame && payment_method !== 'free' && req.body.is_free !== 'true' && req.body.is_free !== true) {
-        return res.status(400).json({ error: 'Por favor, adjunta el comprobante de pago o usa tu billetera.' });
+      } else if (isRegisterOnly) {
+        // Nuevo usuario que solo se registra en la sala sin comprar cartones (esperando nuevo juego)
+        finalCardCount = 0;
+        finalStatus = 'approved';
+        receipt_url = null;
+        console.log(`[Register Only] Usuario ${phone} registrándose sin compra de cartones en sala.`);
       } else {
-        // Free game or free registration, no receipt needed
-        receipt_url = 'FREE_GAME';
+        return res.status(400).json({ error: 'Por favor, adjunta el comprobante de pago o usa tu billetera para comprar cartones, o selecciona registrarte sin compra.' });
       }
     }
 
-    // Free games and gift invitations NEVER require approval - ALWAYS auto-approve with cards!
-    const isFreeRegistration = Boolean(
-      isFreeGame ||
-      payment_method === 'free' ||
-      payment_method === 'gift' ||
-      req.body.is_free === 'true' ||
-      req.body.is_free === true
-    );
+    // REGLA ESTRICTA: Solo los juegos gratuitos (isFreeGame === true) y los regalos válidos (gift) son gratuitos
+    // Los juegos de pago NUNCA son gratuitos ni generan cartones gratis.
+    const isFreeRegistration = Boolean(isFreeGame || payment_method === 'gift');
 
     if (isFreeRegistration) {
       finalStatus = 'approved';
       isSilentlyInvalid = false;
       silentReason = '';
-      if (!receipt_url) {
-        receipt_url = payment_method === 'gift' ? `GIFT_INSTRUCTED_BY_${invited_by || ''}` : 'FREE_GAME';
-      }
-      if (payment_method !== 'gift') {
+      if (payment_method === 'gift') {
+        finalCardCount = 1;
+        if (!receipt_url) {
+          receipt_url = `GIFT_INSTRUCTED_BY_${invited_by || ''}`;
+        }
+      } else {
+        // Solo juegos gratuitos generan 2 cartones gratis para jugar
         finalCardCount = 2;
+        receipt_url = 'FREE_GAME';
       }
-      console.log(`[Free Game Auto-Approval] Player ${phone} set to APPROVED with ${finalCardCount} cards.`);
+      console.log(`[Free/Gift Auto-Approval] Player ${phone} set to APPROVED with ${finalCardCount} cards.`);
+    } else if (finalCardCount === 0) {
+      finalStatus = 'approved';
+      isSilentlyInvalid = false;
+      silentReason = '';
+      receipt_url = null;
+      console.log(`[Register Only Approval] Player ${phone} set to APPROVED with 0 cards (cuenta lista).`);
     }
 
     let selectPlayerQuery = supabase
@@ -10661,13 +10677,14 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       }
 
       const isGiftReg = Boolean(payment_method === 'gift' || invited_by);
+      const calculatedCardCount = isGiftReg ? 1 : (isFreeGame ? 2 : (finalCardCount > 0 ? (existingPlayer.card_count + finalCardCount) : existingPlayer.card_count));
       const updateData: any = {
         seller_code: existingPlayer.seller_code || req.body.seller_code,
         referral_code: referralCode,
         referred_by_player_code: existingPlayer.referred_by_player_code || player_ref || req.body.referred_by || req.body.ref || null,
         name,
         city,
-        card_count: isGiftReg ? 1 : (isFreeRegistration ? 2 : (existingPlayer.card_count + finalCardCount)),
+        card_count: calculatedCardCount,
         receipt_url: JSON.stringify(history),
         status,
         tenant_id: cleanTenant
@@ -10704,7 +10721,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       }
 
       if (status === 'approved' && hasActiveGame && game?.id) {
-        const cardsToMake = isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount);
+        const cardsToMake = isGiftReg ? 1 : (isFreeGame ? 2 : (finalCardCount > 0 ? finalCardCount : 0));
         if (cardsToMake > 0) {
           console.log(`Debug: Generating ${cardsToMake} cards for updated player ${updatedPlayer.id} for game ${game.id} in tenant ${cleanTenant}`);
           await generateCardsForPlayer(updatedPlayer.id, game.id, cardsToMake, false, isGiftReg, cleanTenant);
@@ -10751,6 +10768,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     const status = finalStatus;
     const referralCode = Math.floor(1000 + Math.random() * 9000).toString();
     const isGiftReg = Boolean(payment_method === 'gift' || invited_by);
+    const newPlayerCardCount = isGiftReg ? 1 : (isFreeGame ? 2 : (finalCardCount > 0 ? finalCardCount : 0));
     const newPlayerData: any = {
       seller_code: req.body.seller_code,
       referred_by_player_code: player_ref || req.body.referred_by || req.body.ref || null,
@@ -10758,7 +10776,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       name,
       phone,
       city,
-      card_count: isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount),
+      card_count: newPlayerCardCount,
       receipt_url: currentReceipt ? JSON.stringify([currentReceipt]) : null,
       status,
       tenant_id: cleanTenant
@@ -10794,7 +10812,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     }
 
     if (status === 'approved' && hasActiveGame && game?.id) {
-      const cardsToMake = isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount);
+      const cardsToMake = isGiftReg ? 1 : (isFreeGame ? 2 : (finalCardCount > 0 ? finalCardCount : 0));
       if (cardsToMake > 0) {
         console.log(`Debug: Generating ${cardsToMake} cards for new player ${newPlayer.id} for game ${game.id} in tenant ${cleanTenant}`);
         await generateCardsForPlayer(newPlayer.id, game.id, cardsToMake, false, isGiftReg, cleanTenant);
@@ -10810,8 +10828,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
 
     // Notificar al Administrador de la sala sobre el nuevo usuario registrado (Push + In-App)
     try {
-      const cardsMade = isGiftReg ? 1 : (isFreeRegistration ? 2 : finalCardCount);
-      const cardMsg = cardsMade > 0 ? ` con ${cardsMade} cartón(es)` : '';
+      const cardsMade = isGiftReg ? 1 : (isFreeGame ? 2 : (finalCardCount > 0 ? finalCardCount : 0));
+      const cardMsg = cardsMade > 0 ? ` con ${cardsMade} cartón(es)` : ' (solo registro de cuenta)';
       sendPushNotification({
         recipient: 'admin',
         title: '👤 Nuevo Jugador Registrado',
@@ -11304,8 +11322,9 @@ app.get('/api/players', async (req, res) => {
     // Auto-heal/auto-approve only players who specifically registered for THIS game via gift or free registration
     for (const p of (players || [])) {
       if (p.status === 'pending') {
+        const isGameFree = Boolean(game?.is_free === true || game?.type === 'free' || Number(game?.card_value) === 0);
         const isGiftReceipt = Boolean(p.receipt_url && p.receipt_url.includes('GIFT_') && game?.id && p.receipt_url.includes(String(game.id)));
-        const isFreeReceipt = Boolean(p.receipt_url && (p.receipt_url.includes('FREE_GAME') || p.receipt_url.includes('free')) && game?.id && p.receipt_url.includes(String(game.id)));
+        const isFreeReceipt = Boolean(isGameFree && p.receipt_url && (p.receipt_url.includes('FREE_GAME') || p.receipt_url.includes('free')) && game?.id && p.receipt_url.includes(String(game.id)));
         if (isGiftReceipt || isFreeReceipt) {
           p.status = 'approved';
           const targetCards = isGiftReceipt ? 1 : 2;
@@ -12097,13 +12116,14 @@ app.get('/api/players/:phone/cards', async (req, res) => {
     let game = await getActiveGame(cleanTenant);
 
     // --- AUTO-ASSIGNMENT / SELF-HEALING FOR CARDS ---
+    // REGLA ESTRICTA: Los juegos de pago NUNCA generan cartones gratis. Los usuarios deben comprar sus cartones.
+    // Solo los juegos gratuitos (isFree === true) generan 2 cartones gratis para jugar.
     if (game) {
       const settings = await getGameSettings(game.id);
       const cardValNum = parseAmountWithDecimals(game.card_value || '0') || 0;
       const isFree = (game.is_free === true || game.type === 'free' || settings.is_free === true || settings.type === 'free' || cardValNum === 0 || (typeof game.card_value === 'string' && game.card_value.toLowerCase().includes('gratis'))) && !(game.is_free === false && cardValNum > 0);
-      const isApproved = player.status === 'approved';
 
-      if (isFree || isApproved) {
+      if (isFree) {
         try {
           const { count } = await supabase.from('cards')
             .select('*', { count: 'exact', head: true })
@@ -12111,9 +12131,8 @@ app.get('/api/players/:phone/cards', async (req, res) => {
             .eq('game_id', game.id);
 
           if (count === 0 || count === null) {
-            const isGiftUser = Boolean(player.receipt_url && String(player.receipt_url).includes('GIFT_'));
-            const targetCards = isGiftUser ? 1 : (isFree ? 2 : Math.max(2, player.card_count || 2));
-            console.log(`[Auto-Assign/Healing] Player ${player.phone} has no cards for game ${game.id} in room ${cleanTenant}. Generating ${targetCards} cards.`);
+            const targetCards = 2;
+            console.log(`[Auto-Assign Free Cards] Player ${player.phone} tiene 0 cartones para juego gratis ${game.id} en sala ${cleanTenant}. Generando 2 cartones gratis.`);
             await generateCardsForPlayer(player.id, game.id, targetCards, false, false, cleanTenant);
             
             if (player.status !== 'approved' || (player.card_count || 0) < targetCards) {
@@ -12134,7 +12153,7 @@ app.get('/api/players/:phone/cards', async (req, res) => {
             getChannel(cleanTenant).publish('player_approved', { id: player.id, phone: player.phone });
           }
         } catch (autoErr) {
-          console.error('[Auto-Assign] Error:', autoErr);
+          console.error('[Auto-Assign Free Cards] Error:', autoErr);
         }
       }
     }

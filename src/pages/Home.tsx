@@ -28,6 +28,7 @@ export default function Home() {
   const [showWhatsappModal, setShowWhatsappModal] = useState(false);
   const [showUserNotFound, setShowUserNotFound] = useState(false);
   const [timeLeft, setTimeLeft] = useState<{ days: number, hours: number, minutes: number, seconds: number } | null>(null);
+  const [hasPaidGames, setHasPaidGames] = useState<boolean>(false);
   const phoneInputRef = React.useRef<HTMLInputElement>(null);
 
   // Sistema de plantillas: 'classic' (original por defecto) o 'neon_glow' (neón vip)
@@ -154,6 +155,8 @@ export default function Home() {
         }));
         
         const free = allGames.filter((g: any) => g.is_free && ['waiting', 'scheduled', 'playing', 'paused'].includes(g.status));
+        const paidScheduled = allGames.some((g: any) => !g.is_free && ['waiting', 'scheduled', 'playing', 'paused'].includes(g.status));
+        setHasPaidGames(paidScheduled);
 
         // Featured game selection: priority to active games (playing/paused), then scheduled games (waiting/scheduled), then any game
         const activeGames = allGames.filter((g: any) => ['playing', 'paused'].includes(g.status)).sort((a: any, b: any) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
@@ -802,12 +805,22 @@ export default function Home() {
 
       {/* Sticky Bottom Bar for Mobile */}
       <div className="fixed bottom-0 left-0 w-full bg-white border-t border-slate-200 p-4 shadow-[0_-10px_40px_rgba(0,0,0,0.05)] z-50 md:hidden flex gap-3">
-        <Link 
-          to={tenantPrefix ? `${tenantPrefix}/register` : "/register"} 
-          className="flex-1 py-3.5 bg-yellow-400 text-yellow-950 font-black text-center rounded-xl shadow-sm active:scale-95 transition flex items-center justify-center gap-2"
-        >
-          <Ticket size={18} /> COMPRAR
-        </Link>
+        {hasPaidGames ? (
+          <Link 
+            to={tenantPrefix ? `${tenantPrefix}/register` : "/register"} 
+            className="flex-1 py-3.5 bg-yellow-400 text-yellow-950 font-black text-center rounded-xl shadow-sm active:scale-95 transition flex items-center justify-center gap-2"
+          >
+            <Ticket size={18} /> COMPRAR
+          </Link>
+        ) : (
+          <button 
+            disabled
+            className="flex-1 py-3.5 bg-slate-200 text-slate-400 font-black text-center rounded-xl cursor-not-allowed opacity-60 flex items-center justify-center gap-2 border border-slate-300"
+            title="No hay juegos de pago programados en este momento"
+          >
+            <Ticket size={18} /> COMPRAR
+          </button>
+        )}
         <button 
           onClick={scrollToLogin}
           className="flex-1 py-3.5 bg-emerald-500 text-white font-black text-center rounded-xl shadow-[0_4px_10px_rgba(16,185,129,0.2)] active:scale-95 transition flex items-center justify-center gap-2"

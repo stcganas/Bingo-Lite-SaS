@@ -262,7 +262,27 @@ export default function RegistrationSuccess() {
                 🎉 ¡Vive la emoción del juego y gana desde casa! 🏠🍀
               </div>
             </div>
-          ) : (registrationData.payment_method === 'free' || registrationData.is_free) ? (
+          ) : (registrationData.card_count === 0 || registrationData.payment_method === 'register_only') ? (
+            <div className="bg-gradient-to-br from-blue-50 via-indigo-50 to-slate-100 p-6 rounded-2xl border-2 border-blue-200 space-y-4 shadow-md text-left">
+              <div className="text-center space-y-2">
+                <div className="w-12 h-12 bg-blue-600 text-white rounded-2xl flex items-center justify-center mx-auto shadow-md">
+                  <ShieldCheck size={26} className="text-yellow-300" />
+                </div>
+                <p className="text-[10px] font-black text-blue-700 uppercase tracking-[0.2em] leading-none">🎉 ¡CUENTA CREADA EXITOSAMENTE! 🎉</p>
+                <h3 className="text-base font-black text-slate-900 uppercase tracking-tight leading-snug">
+                  Tu cuenta está activa en la sala
+                </h3>
+              </div>
+              
+              <p className="text-xs text-slate-700 leading-relaxed font-bold text-center">
+                Tu registro en la sala se completó con éxito. Podrás ingresar a tu panel y comprar tus cartones cuando el organizador active un juego de pago, o recibir 2 cartones gratis si el juego programado es gratuito.
+              </p>
+
+              <div className="bg-blue-600 p-3.5 rounded-xl text-center text-xs font-black text-white uppercase tracking-wider shadow-sm">
+                🍀 ¡Bienvenido a la comunidad! 🍀
+              </div>
+            </div>
+          ) : (registrationData.is_free && registrationData.card_count > 0) ? (
             <div className="bg-gradient-to-br from-emerald-50 via-teal-50 to-green-100 p-6 rounded-2xl border-2 border-emerald-300 space-y-4 shadow-md text-left">
               <div className="text-center space-y-2">
                 <div className="w-12 h-12 bg-emerald-600 text-white rounded-2xl flex items-center justify-center mx-auto shadow-md">
@@ -270,12 +290,12 @@ export default function RegistrationSuccess() {
                 </div>
                 <p className="text-[10px] font-black text-emerald-700 uppercase tracking-[0.2em] leading-none">🎉 ¡REGISTRO 100% GRATUITO COMPLETADO! 🎉</p>
                 <h3 className="text-base font-black text-emerald-950 uppercase tracking-tight leading-snug">
-                  Tus cartones gratuitos están activos y listos para jugar
+                  Tus 2 cartones gratuitos están activos y listos para jugar
                 </h3>
               </div>
               
               <p className="text-xs text-slate-700 leading-relaxed font-bold text-center">
-                ¡Felicitaciones! No requieres enviar ningún comprobante ni esperar verificaciones. Tus cartones de cortesía ya están vinculados a tu cuenta para el sorteo.
+                ¡Felicitaciones! No requieres enviar ningún comprobante ni esperar verificaciones. Tus 2 cartones de cortesía ya están vinculados a tu cuenta para el sorteo gratuito.
               </p>
 
               <div className="bg-emerald-600 p-3.5 rounded-xl text-center text-xs font-black text-white uppercase tracking-wider shadow-sm">
@@ -339,9 +359,9 @@ export default function RegistrationSuccess() {
           <div className="grid grid-cols-1 gap-3">
             <Link 
               to={registrationData.gameId ? `${tenantPrefix}/player?gameId=${registrationData.gameId}` : (tenantPrefix ? `${tenantPrefix}/player` : "/player")} 
-              className={`w-full py-4 ${(registrationData.payment_method === 'free' || registrationData.is_free) ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/30' : 'bg-blue-600 hover:bg-blue-700'} text-white font-black text-base md:text-lg rounded-2xl shadow-lg transition active:scale-95 flex items-center justify-center gap-2 uppercase tracking-wide`}
+              className={`w-full py-4 ${(registrationData.is_free && registrationData.card_count > 0) ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/30' : 'bg-blue-600 hover:bg-blue-700'} text-white font-black text-base md:text-lg rounded-2xl shadow-lg transition active:scale-95 flex items-center justify-center gap-2 uppercase tracking-wide`}
             >
-              {(registrationData.payment_method === 'free' || registrationData.is_free) ? '¡IR A JUGAR CON MIS CARTONES GRATIS!' : 'IR A MI PANEL EN LA SALA'} <ArrowRight size={20} />
+              {(registrationData.is_free && registrationData.card_count > 0) ? '¡IR A JUGAR CON MIS CARTONES GRATIS!' : 'IR A MI PANEL EN LA SALA'} <ArrowRight size={20} />
             </Link>
             <Link 
               to={tenantPrefix || "/"} 

@@ -20,11 +20,13 @@ export default function Register() {
   const playerRef = searchParams.get('player_ref') || '';
   const gameId = searchParams.get('gameId') || '';
   const isFreeQuery = searchParams.get('free') === 'true' || searchParams.get('is_free') === 'true' || searchParams.get('type') === 'free';
+  const registerOnlyQuery = searchParams.get('register_only') === 'true' || searchParams.get('mode') === 'register';
   const { user, loginPlayer } = useAuth();
   const { tenant, tenantSlug, tenantPrefix } = useTenant();
   const [loading, setLoading] = useState(false);
   const [activeGame, setActiveGame] = useState<any>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [isRegisterOnly, setIsRegisterOnly] = useState<boolean>(Boolean(registerOnlyQuery));
 
   const rawTenantCandidate = (slug || tenantSlug || tenant?.slug || 'bingo-lite').toLowerCase();
   const cleanTenant = rawTenantCandidate === 'default' ? 'demo' : rawTenantCandidate;
@@ -49,7 +51,7 @@ export default function Register() {
     city: '',
     seller_code: urlRef,
     player_ref: playerRef,
-    card_count: isFreeGame ? 2 : 1,
+    card_count: isFreeGame ? 2 : (registerOnlyQuery ? 0 : 1),
     password: '',
     room_code: tenant.access_code || 'LITE777',
   });
@@ -207,13 +209,13 @@ export default function Register() {
       return;
     }
 
-    if (hasActiveGame && !isFreeGame && !invitedBy && paymentMethod === 'receipt' && !file) {
-      setErrorMsg('Por favor, adjunta el comprobante de pago.');
+    if (hasActiveGame && !isFreeGame && !invitedBy && !isRegisterOnly && paymentMethod === 'receipt' && !file) {
+      setErrorMsg('Por favor, adjunta el comprobante de pago o selecciona la opción de solo registrar tu cuenta.');
       return;
     }
     
-    // Si no es gratuito ni regalo y el método es recibo, mostramos la advertencia primero
-    if (hasActiveGame && !isFreeGame && !invitedBy && paymentMethod === 'receipt' && !showConfirmModal) {
+    // Si no es gratuito ni regalo ni solo registro y el método es recibo, mostramos la advertencia primero
+    if (hasActiveGame && !isFreeGame && !invitedBy && !isRegisterOnly && paymentMethod === 'receipt' && !showConfirmModal) {
       setShowConfirmModal(true);
       return;
     }
@@ -226,8 +228,18 @@ export default function Register() {
     setErrorMsg(null);
     setLoading(true);
     const normalizedPhone = normalizePhone(formData.phone);
-    const finalMethod = !hasActiveGame ? 'free' : (isFreeGame ? 'free' : (invitedBy ? 'gift' : paymentMethod));
-    const finalCards = !hasActiveGame ? 0 : (isFreeGame ? 2 : (invitedBy ? 1 : formData.card_count));
+    const finalMethod = !hasActiveGame 
+      ? 'register_only' 
+      : (isFreeGame 
+          ? 'free' 
+          : (invitedBy 
+              ? 'gift' 
+              : (isRegisterOnly ? 'register_only' : paymentMethod)));
+    const finalCards = (!hasActiveGame || isRegisterOnly) 
+      ? 0 
+      : (isFreeGame 
+          ? 2 
+          : (invitedBy ? 1 : formData.card_count));
     const data = new FormData();
     data.append('name', formData.name);
     data.append('phone', normalizedPhone);
@@ -252,7 +264,7 @@ export default function Register() {
     if (inviteId) {
       data.append('invite_id', inviteId);
     }
-    if (!isFreeGame && file) data.append('receipt', file);
+    if (!isFreeGame && !isRegisterOnly && file) data.append('receipt', file);
 
     try {
       console.log('Enviando registro para:', normalizedPhone, 'en sala:', cleanTenant);
@@ -349,8 +361,8 @@ ${roomDirectUrl}
             registrationData: {
               ...formData,
               gameId: gameId || activeGame?.id,
-              card_count: isFreeGame ? 2 : formData.card_count,
-              receipt_url: isFreeGame ? 'FREE_GAME' : result.player?.receipt_url,
+              card_count: finalCards,
+              receipt_url: isFreeGame ? 'FREE_GAME' : (isRegisterOnly ? null : result.player?.receipt_url),
               payment_method: finalMethod,
               is_free: isFreeGame,
               active_lottery: activeGame?.active_lottery === true,
@@ -407,7 +419,7 @@ ${roomDirectUrl}
                 )}
               </div>
               <h1 className="text-2xl font-black tracking-tight drop-shadow-md uppercase">
-                {isFreeGame ? '🎁 Cartones Gratis' : 'Comprar Cartones'}
+                {isFreeGame ? '🎁 Cartones Gratis' : isRegisterOnly ? '👤 Registro de Cuenta' : 'Comprar Cartones'}
               </h1>
               {activeGame && (
                 <p className={`${isFreeGame ? 'text-emerald-100' : 'text-blue-100'} text-xs font-bold uppercase tracking-wider mt-0.5 drop-shadow-sm`}>
@@ -419,6 +431,53 @@ ${roomDirectUrl}
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5">
+          {hasActiveGame && !isFreeGame && !invitedBy && (
+            <div className="bg-slate-100 p-1.5 rounded-2xl flex gap-1.5 border border-slate-200 shadow-inner mb-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsRegisterOnly(false);
+                  setFormData(prev => ({ ...prev, card_count: prev.card_count > 0 ? prev.card_count : 1 }));
+                }}
+                className={clsx(
+                  "flex-1 py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wide transition flex items-center justify-center gap-1.5 cursor-pointer",
+                  !isRegisterOnly
+                    ? "bg-blue-600 text-white shadow-md"
+                    : "text-slate-600 hover:text-slate-900 bg-white/60"
+                )}
+              >
+                <Ticket size={15} /> Comprar Cartones
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsRegisterOnly(true);
+                  setFormData(prev => ({ ...prev, card_count: 0 }));
+                  clearReceiptFile();
+                }}
+                className={clsx(
+                  "flex-1 py-2.5 px-3 rounded-xl font-black text-xs uppercase tracking-wide transition flex items-center justify-center gap-1.5 cursor-pointer",
+                  isRegisterOnly
+                    ? "bg-slate-800 text-white shadow-md"
+                    : "text-slate-600 hover:text-slate-900 bg-white/60"
+                )}
+              >
+                <Key size={15} /> Solo Crear Cuenta
+              </button>
+            </div>
+          )}
+
+          {isRegisterOnly && !isFreeGame && !invitedBy && (
+            <div className="bg-gradient-to-r from-slate-50 to-blue-50 border-2 border-slate-200 p-4 rounded-2xl space-y-1.5 shadow-xs">
+              <div className="flex items-center gap-2">
+                <Sparkles size={16} className="text-blue-600 shrink-0" />
+                <p className="text-xs font-black text-slate-800 uppercase tracking-tight">Registro de Cuenta Sin Compra</p>
+              </div>
+              <p className="text-[11px] text-slate-600 font-medium leading-relaxed">
+                Crearás tu cuenta oficial en la sala sin comprar cartones ahora. Podrás ingresar a tu panel y comprar tus cartones cuando el organizador active el próximo juego.
+              </p>
+            </div>
+          )}
           {isFreeGame && (
             <div className="bg-indigo-50 border-2 border-indigo-200 p-4 rounded-2xl shadow-sm mb-4">
               <div className="flex gap-3">
@@ -631,6 +690,14 @@ ${roomDirectUrl}
                 <span className="text-base font-black text-emerald-700 uppercase tracking-tight">2 Cartones Asignados (100% Gratis)</span>
               </div>
             </div>
+          ) : isRegisterOnly ? (
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">Cantidad de cartones</label>
+              <div className="bg-slate-50 p-4 rounded-2xl border-2 border-slate-200 text-center flex items-center justify-center gap-2 shadow-sm">
+                <Sparkles size={18} className="text-slate-500 shrink-0" />
+                <span className="text-sm font-black text-slate-700 uppercase tracking-tight">0 Cartones (Solo Registro de Cuenta)</span>
+              </div>
+            </div>
           ) : (
             <div>
               <label className="block text-sm font-bold text-slate-700 mb-1">Cantidad de cartones</label>
@@ -648,8 +715,8 @@ ${roomDirectUrl}
             </div>
           )}
 
-          {/* Payment Method & Proof of Payment (ONLY for paid games with real cost > 0 and active game) */}
-          {hasActiveGame && !isFreeGame && cardPriceNumber > 0 && paymentMethod !== 'gift' && paymentMethod !== 'free' && (
+          {/* Payment Method & Proof of Payment (ONLY for paid games with real cost > 0, active game and NOT register only) */}
+          {hasActiveGame && !isFreeGame && !isRegisterOnly && cardPriceNumber > 0 && paymentMethod !== 'gift' && paymentMethod !== 'free' && (
             <div className="space-y-3">
               <label className="block text-sm font-bold text-slate-700 mb-1">Método de Pago</label>
               <div className="grid grid-cols-2 gap-3">
@@ -848,8 +915,10 @@ ${roomDirectUrl}
                     {invitedBy || paymentMethod === 'gift' 
                       ? "Registrarme y Enviar a WhatsApp" 
                       : isFreeGame 
-                        ? "Recibir Cartones en WhatsApp" 
-                        : "Comprar y Enviar a WhatsApp"}
+                        ? "Recibir 2 Cartones Gratis en WhatsApp" 
+                        : isRegisterOnly || !hasActiveGame
+                          ? "Crear Cuenta y Enviar a WhatsApp"
+                          : "Comprar y Enviar a WhatsApp"}
                   </span>
                 </>
               )}
