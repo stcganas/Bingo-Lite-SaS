@@ -322,16 +322,28 @@ export default function SuperAdminDashboard() {
 
   const handleStatusToggle = async (room: Room) => {
     const action = room.is_active !== false ? 'suspend' : 'activate';
-    if (!window.confirm(action === 'suspend' ? `Suspender "${room.name}"?` : `Activar "${room.name}"?`)) return;
+    if (!window.confirm(action === 'suspend' ? `¿Estás seguro de SUSPENDER la sala "${room.name}"? Los jugadores no podrán ingresar hasta que la reactives.` : `¿Activar y habilitar la sala "${room.name}"?`)) return;
+    
+    // Actualización optimista inmediata en la UI
+    setRooms(prev => prev.map(r => r.id === room.id || r.slug === room.slug ? { ...r, is_active: action === 'activate', subscription_status: action === 'activate' ? 'active' : 'suspended' } : r));
+
     try {
-      const res = await apiFetch(`/api/superadmin/rooms/${room.slug}/status`, { method: 'POST', body: JSON.stringify({ action }) });
+      const res = await apiFetch(`/api/superadmin/rooms/${room.slug}/status`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }) 
+      });
       if (!res.ok) {
         const errData: any = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Error al cambiar estado');
+        throw new Error(errData.error || 'Error al cambiar estado de la sala');
       }
-      toast.success(action === 'suspend' ? 'Sala suspendida' : 'Sala activada');
-      fetchRooms(); fetchStats();
-    } catch (e: any) { toast.error(e.message || 'Error'); }
+      toast.success(action === 'suspend' ? 'Sala suspendida correctamente' : 'Sala activada correctamente');
+      await fetchRooms(); 
+      await fetchStats();
+    } catch (e: any) { 
+      toast.error(e.message || 'Error al cambiar estado');
+      await fetchRooms();
+    }
   };
 
   const handleSaveRoom = async (updates: any) => {

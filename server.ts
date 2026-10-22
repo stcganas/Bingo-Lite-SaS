@@ -1880,8 +1880,10 @@ async function getGameFullState(gameId: number) {
     gamePatterns = [];
   }
 
-  const gameSettings = await getGameSettings(gameId);
-  const globalSettings = await getGameSettings('global');
+  const rawGameTenant = game.tenant_id || 'bingo-lite';
+  const gameTenant = rawGameTenant === 'default' ? 'demo' : String(rawGameTenant).toLowerCase();
+  const gameSettings = await getGameSettings(gameId, gameTenant);
+  const globalSettings = await getGameSettings('global', gameTenant);
   const settings = { ...globalSettings, ...gameSettings };
   const rematchIds = settings.rematch_game_pattern_ids || [];
 
@@ -2740,15 +2742,113 @@ app.post('/api/admin/upload-social-image', requireAdmin, upload.single('social_i
   }
 });
 
+// Endpoint para subir el logo personalizado de la marca blanca de la sala
+app.post('/api/admin/upload-room-logo', requireAdmin, upload.single('logo_image'), async (req: any, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No se recibió ninguna imagen de logo' });
+    }
+    sanitizeUploadedFileMimeType(req.file);
+    await initStorage();
+    const adminUser = req.adminUser;
+    const targetTenant = (adminUser?.tenant_id || req.body?.tenant_id || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+    const fileExt = path.extname(req.file.originalname) || '.png';
+    const fileName = `logo-${targetTenant}-${Date.now()}${fileExt}`;
+    const filePath = `assets/${fileName}`;
+
+    let uploadData: any;
+    let uploadError: any;
+    const { data: bData, error: bError } = await supabase.storage
+      .from(BANNER_BUCKET)
+      .upload(filePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true
+      });
+
+    if (bError) {
+      const { data: rData, error: rError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(filePath, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: true
+        });
+      uploadData = rData;
+      uploadError = rError;
+    } else {
+      uploadData = bData;
+      uploadError = null;
+    }
+
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = supabase.storage
+      .from(uploadData?.path?.startsWith('assets') ? BANNER_BUCKET : BUCKET_NAME)
+      .getPublicUrl(filePath);
+
+    res.json({ url: publicUrl, success: true });
+  } catch (err: any) {
+    console.error('Error al subir logo de sala:', err);
+    res.status(500).json({ error: err.message || 'Error al subir logo de sala' });
+  }
+});
+
+// Endpoint para guardar o actualizar el logo oficial / marca blanca de la sala en tenants y settings
+app.post('/api/admin/settings/room-logo', requireAdmin, async (req, res) => {
+  try {
+    const adminUser = (req as any).adminUser;
+    const { logo_url } = req.body;
+    const rawTenant = (!adminUser?.isSuperAdmin && adminUser?.tenant_id)
+      ? adminUser.tenant_id
+      : (req.body.tenant_id || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite');
+    const targetTenant = (rawTenant === 'default' || rawTenant === 'global' || !rawTenant) ? 'bingo-lite' : String(rawTenant).toLowerCase();
+
+    // 1. Actualizar tabla tenants en Supabase
+    const { error: tenantErr } = await supabase
+      .from('tenants')
+      .update({ logo_url: logo_url || null, updated_at: new Date().toISOString() })
+      .or(`id.eq.${targetTenant},slug.eq.${targetTenant}`);
+
+    if (tenantErr) {
+      console.warn('[Room Logo] Error al actualizar logo en tenants:', tenantErr.message);
+    }
+
+    // 2. Guardar también en game_settings global del tenant
+    await saveGameSettings('global', { logo_url: logo_url || null }, targetTenant);
+
+    // 3. Invalidar cachés locales de tenant
+    tenantsCache.delete(targetTenant);
+    cachedCurrentGameByTenant.delete(targetTenant);
+
+    // 4. Publicar actualización en tiempo real en Ably
+    try {
+      getChannel(targetTenant).publish('room_logo_updated', {
+        logo_url: logo_url || null,
+        tenant_id: targetTenant
+      });
+    } catch (pubErr) {}
+
+    res.json({ success: true, logo_url: logo_url || null, tenant_id: targetTenant });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al guardar logo de sala' });
+  }
+});
+
 // Maintenance & Updates Mode Endpoints (Estrictamente Aislados por Sala / Tenant)
 app.get('/api/maintenance-status', async (req, res) => {
   try {
     const rawTenant = req.query.slug || req.query.tenantId || req.query.tenant || getTenantIdFromRequest(req);
     const targetTenant = (rawTenant === 'default' || rawTenant === 'global' || !rawTenant) ? 'bingo-lite' : String(rawTenant).toLowerCase();
     const settings = await getGameSettings('global', targetTenant);
+    const tenantInfo = await getTenantInfo(targetTenant);
+    const isSuspended = tenantInfo && (tenantInfo.is_active === false || tenantInfo.subscription_status === 'suspended');
+
     res.json({
-      maintenance_mode: settings.maintenance_mode === true,
-      maintenance_message: settings.maintenance_message || 'Esta sala de bingo se encuentra en mantenimiento y actualizaciones. Vuelve pronto.',
+      maintenance_mode: isSuspended || settings.maintenance_mode === true,
+      maintenance_message: isSuspended 
+        ? 'Esta sala de bingo se encuentra temporalmente suspendida o inactiva por administración. Por favor, comunícate con el soporte o administrador.'
+        : (settings.maintenance_message || 'Esta sala de bingo se encuentra en mantenimiento y actualizaciones. Vuelve pronto.'),
+      is_suspended: Boolean(isSuspended),
+      is_active: tenantInfo ? tenantInfo.is_active !== false : true,
       tenant_id: targetTenant
     });
   } catch (err) {
@@ -3867,19 +3967,25 @@ app.post('/api/support/tickets/password-reset', async (req, res) => {
 app.get('/api/admin/support/tickets', requireAdmin, async (req, res) => {
   try {
     const adminUser = (req as any).adminUser;
-    const rawTenant = (!adminUser?.isSuperAdmin && adminUser?.tenant_id)
-      ? adminUser.tenant_id
-      : (req.query.tenantId as string || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite');
-    const cleanTenant = rawTenant === 'default' ? 'demo' : String(rawTenant).toLowerCase();
+    const requestedTenant = (req.query.tenantId as string || (req as any).tenantId || '').toLowerCase();
+    const isSuper = adminUser?.isSuperAdmin || adminUser?.tenant_id === 'global';
+
+    let filterTenant: string | null = null;
+    if (!isSuper) {
+      const rawTenant = adminUser?.tenant_id || requestedTenant || getTenantIdFromRequest(req) || 'bingo-lite';
+      filterTenant = rawTenant === 'default' ? 'demo' : String(rawTenant).toLowerCase();
+    } else if (requestedTenant && requestedTenant !== 'all' && requestedTenant !== 'global') {
+      filterTenant = requestedTenant === 'default' ? 'demo' : requestedTenant;
+    }
 
     // Intentar consultar Supabase primero
     let dbTickets: any[] = [];
     try {
-      const { data, error } = await supabase
-        .from('password_reset_tickets')
-        .select('*')
-        .eq('tenant_id', cleanTenant)
-        .order('created_at', { ascending: false });
+      let query = supabase.from('password_reset_tickets').select('*');
+      if (filterTenant) {
+        query = query.eq('tenant_id', filterTenant);
+      }
+      const { data, error } = await query.order('created_at', { ascending: false });
       if (!error && Array.isArray(data)) {
         dbTickets = data;
       }
@@ -3891,7 +3997,7 @@ app.get('/api/admin/support/tickets', requireAdmin, async (req, res) => {
     const ticketMap = new Map<string, PasswordResetTicket>();
     dbTickets.forEach(t => ticketMap.set(t.id, t));
     memoryPasswordResetTickets
-      .filter(t => t.tenant_id === cleanTenant)
+      .filter(t => !filterTenant || t.tenant_id === filterTenant)
       .forEach(t => {
         if (!ticketMap.has(t.id)) ticketMap.set(t.id, t);
       });
@@ -5661,7 +5767,7 @@ app.get('/api/game', async (req, res) => {
 
     if (!activeGameFull) {
       const tenantInfo = await getTenantInfo(targetTenant);
-      const tenantSettings = await getGameSettings(targetTenant);
+      const tenantSettings = await getGameSettings('global', targetTenant);
       console.log(`GET /api/game returning clean room state for tenant [${targetTenant}]`);
       const guestState = {
         id: null,
@@ -5680,6 +5786,8 @@ app.get('/api/game', async (req, res) => {
         header_opacity: tenantSettings.header_opacity !== undefined ? tenantSettings.header_opacity : 0.4,
         header_title: tenantSettings.header_title || tenantInfo.name || 'BINGO ONLINE',
         header_subtitle: tenantSettings.header_subtitle || 'Juega desde tu celular, gana premios al instante y diviértete en grande.',
+        login_bg_image_url: tenantSettings.login_bg_image_url || null,
+        login_bg_opacity: tenantSettings.login_bg_opacity !== undefined ? tenantSettings.login_bg_opacity : 0.6,
         primary_color: tenantInfo.primary_color || '#2563eb',
         tenant_id: targetTenant,
         patterns: []
@@ -13914,12 +14022,24 @@ app.patch('/api/superadmin/rooms/:slug', requireSuperAdmin, async (req, res) => 
 app.post('/api/superadmin/rooms/:slug/status', requireSuperAdmin, async (req, res) => {
   try {
     const { slug } = req.params;
-    const { action } = req.body; // 'suspend' | 'activate'
+    let action = req.body?.action;
+    if (!action && typeof req.body === 'string') {
+      try { action = JSON.parse(req.body)?.action; } catch {}
+    }
+    if (!action && req.query?.action) {
+      action = String(req.query.action);
+    }
+
+    if (action !== 'activate' && action !== 'suspend') {
+      return res.status(400).json({ error: 'Acción inválida. Debe ser "activate" o "suspend".' });
+    }
+
     const adminUser = (req as any).adminUser;
+    const isActivating = action === 'activate';
 
     const updates = {
-      is_active: action === 'activate',
-      subscription_status: action === 'activate' ? 'active' : 'suspended',
+      is_active: isActivating,
+      subscription_status: isActivating ? 'active' : 'suspended',
       updated_at: new Date().toISOString()
     };
 
@@ -13932,22 +14052,30 @@ app.post('/api/superadmin/rooms/:slug/status', requireSuperAdmin, async (req, re
 
     tenantsCache.delete(slug.toLowerCase());
 
-    // Notify via Ably to the room
+    // Notificar en tiempo real en Ably a la sala
     try {
-      getChannel(slug).publish('room_status_changed', { status: action, by: 'superadmin' });
-    } catch (e) { }
-
-    // Log
-    try {
-      await supabase.from('super_admin_events').insert({
-        admin_email: adminUser?.email || 'superadmin',
-        event_type: action === 'activate' ? 'room_activated' : 'room_suspended',
-        tenant_id: slug,
-        details: { action, by: adminUser?.email }
+      getChannel(slug).publish('room_status_changed', { status: action, is_active: isActivating, by: 'superadmin' });
+      getChannel(slug).publish('maintenance_updated', {
+        maintenance_mode: !isActivating,
+        maintenance_message: !isActivating 
+          ? 'Esta sala de bingo se encuentra temporalmente suspendida o inactiva por administración. Por favor, comunícate con el soporte o administrador.'
+          : '',
+        is_suspended: !isActivating,
+        tenant_id: slug
       });
     } catch (e) { }
 
-    res.json({ success: true, action });
+    // Log en super_admin_events
+    try {
+      await supabase.from('super_admin_events').insert({
+        admin_email: adminUser?.email || 'superadmin',
+        event_type: isActivating ? 'room_activated' : 'room_suspended',
+        tenant_id: slug,
+        details: { action, is_active: isActivating, by: adminUser?.email }
+      });
+    } catch (e) { }
+
+    res.json({ success: true, action, is_active: isActivating });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

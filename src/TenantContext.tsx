@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { apiFetch } from './utils/api';
+import { getBingoChannel } from './ably';
 
 export interface Tenant {
   id: string;
@@ -14,6 +15,8 @@ export interface Tenant {
   access_code?: string;
   description?: string;
   max_cards_per_game: number;
+  is_active?: boolean;
+  subscription_status?: string;
 }
 
 const DEFAULT_TENANT: Tenant = {
@@ -24,7 +27,9 @@ const DEFAULT_TENANT: Tenant = {
   plan: 'pro',
   access_code: 'LITE777',
   description: 'Sala oficial de Bingo en Vivo con sorteos continuos y premios garantizados.',
-  max_cards_per_game: 20000
+  max_cards_per_game: 20000,
+  is_active: true,
+  subscription_status: 'active'
 };
 
 const DEMO_TENANT: Tenant = {
@@ -35,7 +40,9 @@ const DEMO_TENANT: Tenant = {
   plan: 'trial',
   access_code: 'DEMO2026',
   description: 'Sala interactiva de demostración para visitantes y nuevos organizadores. Prueba el juego en vivo y las dinámicas.',
-  max_cards_per_game: 2000
+  max_cards_per_game: 2000,
+  is_active: true,
+  subscription_status: 'active'
 };
 
 interface TenantContextType {
@@ -122,6 +129,30 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         let favicon = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
         if (favicon) favicon.href = '/favicon.png';
       } catch (e) {}
+    }
+
+    if (slug) {
+      const channel = getBingoChannel(slug);
+      const onLogoUpdate = (msg: any) => {
+        if (msg.data && msg.data.logo_url !== undefined) {
+          setTenant(prev => ({ ...prev, logo_url: msg.data.logo_url }));
+        }
+      };
+      const onStatusUpdate = (msg: any) => {
+        if (msg.data && msg.data.is_active !== undefined) {
+          setTenant(prev => ({ 
+            ...prev, 
+            is_active: Boolean(msg.data.is_active),
+            subscription_status: msg.data.status || (msg.data.is_active ? 'active' : 'suspended')
+          }));
+        }
+      };
+      channel.subscribe('room_logo_updated', onLogoUpdate);
+      channel.subscribe('room_status_changed', onStatusUpdate);
+      return () => {
+        channel.unsubscribe('room_logo_updated', onLogoUpdate);
+        channel.unsubscribe('room_status_changed', onStatusUpdate);
+      };
     }
   }, [location.pathname]);
 

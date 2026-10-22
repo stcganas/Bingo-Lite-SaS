@@ -11,7 +11,7 @@ import clsx from 'clsx';
 import { apiFetch } from '../utils/api';
 import { motion, AnimatePresence } from 'motion/react';
 import WhatsAppLogo from '../components/WhatsAppLogo';
-import NeonGlowRoomTemplate from '../components/NeonGlowRoomTemplate';
+import defaultLoginBg from '../assets/images/bingo_player_woman_bg_1782074519120.jpg';
 
 export default function Home() {
   const navigate = useNavigate();
@@ -129,9 +129,10 @@ export default function Home() {
   useEffect(() => {
     const fetchGames = async () => {
       try {
+        const tenantParam = tenantSlug ? `?tenantId=${encodeURIComponent(tenantSlug)}` : '';
         const [gamesRes, settingsRes] = await Promise.all([
-          apiFetch('/api/games').catch(() => null),
-          apiFetch('/api/game').catch(() => null)
+          apiFetch(`/api/games${tenantParam}`).catch(() => null),
+          apiFetch(`/api/game${tenantParam}`).catch(() => null)
         ]);
 
         const fetchedGames = gamesRes && gamesRes.ok ? await gamesRes.json().catch(() => []) : [];
@@ -175,7 +176,7 @@ export default function Home() {
       }
     };
     fetchGames();
-  }, []);
+  }, [tenantSlug]);
 
   useEffect(() => {
     if (!featuredGame?.start_time || (featuredGame.status !== 'waiting' && featuredGame.status !== 'scheduled')) {
@@ -266,87 +267,86 @@ export default function Home() {
     if (loginSection) {
       loginSection.scrollIntoView({ behavior: 'smooth' });
     }
-  }
+  };
+
+  const isCosmic = roomTheme === 'neon_glow';
 
   return (
     <>
       <Toaster position="top-center" />
-      {roomTheme === 'neon_glow' ? (
-        <NeonGlowRoomTemplate
-          tenant={tenant}
-          tenantSlug={tenantSlug}
-          tenantPrefix={tenantPrefix}
-          featuredGame={featuredGame}
-          freeGames={freeGames}
-          timeLeft={timeLeft}
-          settings={settings}
-          user={user}
-          loginPlayer={loginPlayer}
-          phone={phone}
-          setPhone={setPhone}
-          password={password}
-          setPassword={setPassword}
-          showPassword={showPassword}
-          setShowPassword={setShowPassword}
-          loading={loading}
-          handleLogin={handleLogin}
-          phoneInputRef={phoneInputRef}
-          scrollToLogin={scrollToLogin}
-          setShowWhatsappModal={setShowWhatsappModal}
-          setShowPasswordResetModal={setShowPasswordResetModal}
-          checkIsFree={checkIsFree}
-          onSwitchTheme={toggleRoomTheme}
-        />
-      ) : (
-        <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative pb-24">
-          {/* Top Bar (Admin link y botón para alternar a plantilla Neón VIP) */}
-          <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={toggleRoomTheme}
-              className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-full text-xs font-black uppercase tracking-wider shadow-lg flex items-center gap-1.5 transition transform hover:scale-105 active:scale-95 cursor-pointer"
-              title="Cambiar a diseño Neón Glow VIP"
-            >
-              <Sparkles size={13} className="text-yellow-300" />
-              <span>Tema Neón VIP</span>
-            </button>
-
-            {user?.isSuperAdmin && (
-              <Link 
-                to="/super-admin" 
-                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-black uppercase tracking-wider shadow-lg transition flex items-center gap-1.5"
-              >
-                <Shield size={14} /> <span>Super Admin</span>
-              </Link>
+      <div className={clsx(
+        "min-h-screen flex flex-col font-sans relative pb-24 transition-colors duration-500",
+        isCosmic ? "bg-[#09031c] text-slate-100" : "bg-slate-50 text-slate-900"
+      )}>
+        {/* Top Bar (Admin link y botón para alternar a plantilla Cósmica VIP) */}
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleRoomTheme}
+            className={clsx(
+              "px-3 py-1.5 rounded-full text-xs font-black uppercase tracking-wider shadow-lg flex items-center gap-1.5 transition transform hover:scale-105 active:scale-95 cursor-pointer border",
+              isCosmic 
+                ? "bg-slate-900/90 hover:bg-slate-800 text-yellow-300 border-yellow-400/50 shadow-[0_0_15px_rgba(234,179,8,0.3)]"
+                : "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white border-transparent"
             )}
-            <Link 
-              to={tenantSlug ? `/sala/${tenantSlug}/admin/login` : "/admin/login"} 
-              className="px-3 py-1.5 bg-slate-900/80 hover:bg-slate-900 text-amber-300 hover:text-amber-200 border border-amber-400/40 rounded-full text-xs font-black uppercase tracking-wider shadow-lg backdrop-blur-md transition flex items-center gap-1.5 transform hover:scale-105 active:scale-95"
-              title="Acceso al panel administrativo de la sala"
-            >
-              <Shield size={14} className="text-amber-400" />
-              <span>Admin Acceso</span>
-            </Link>
-          </div>
+            title={isCosmic ? "Cambiar a diseño Clásico Original" : "Cambiar a diseño Cósmico VIP"}
+          >
+            <Sparkles size={13} className={isCosmic ? "text-yellow-400" : "text-yellow-300"} />
+            <span>{isCosmic ? 'Tema Clásico 🎲' : 'Tema Cósmico VIP ✨'}</span>
+          </button>
 
-      {/* Hero Section */}
-      <div className="relative bg-blue-700 text-white pt-12 pb-20 px-6 rounded-b-[2.5rem] shadow-2xl overflow-hidden">
-        {/* Header Background Image */}
-        {settings?.header_image_url && (
-          <div 
-            className="absolute inset-0 z-0 bg-cover bg-center transition-opacity duration-1000"
-            style={{ 
-              backgroundImage: `url(${settings.header_image_url})`,
-              opacity: settings.header_opacity ?? 0.4
-            }}
-          />
-        )}
-        
-        <div className="relative z-20 flex flex-col items-center text-center">
-          {tenantSlug ? (
-            <div className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-900/90 backdrop-blur-md text-xs font-black text-amber-300 border border-amber-400/50 shadow-2xl mb-4">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
-              <span>🏢 SALA: {tenant.name.toUpperCase()}</span>
+          {user?.isSuperAdmin && (
+            <Link 
+              to="/super-admin" 
+              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-black uppercase tracking-wider shadow-lg transition flex items-center gap-1.5"
+            >
+              <Shield size={14} /> <span>Super Admin</span>
+            </Link>
+          )}
+          <Link 
+            to={tenantSlug ? `/sala/${tenantSlug}/admin/login` : "/admin/login"} 
+            className="px-3 py-1.5 bg-slate-900/80 hover:bg-slate-900 text-amber-300 hover:text-amber-200 border border-amber-400/40 rounded-full text-xs font-black uppercase tracking-wider shadow-lg backdrop-blur-md transition flex items-center gap-1.5 transform hover:scale-105 active:scale-95"
+            title="Acceso al panel administrativo de la sala"
+          >
+            <Shield size={14} className="text-amber-400" />
+            <span>Admin Acceso</span>
+          </Link>
+        </div>
+
+        {/* Hero Section */}
+        <div className={clsx(
+          "relative text-white pt-12 pb-20 px-6 rounded-b-[2.5rem] shadow-2xl overflow-hidden transition-all duration-500",
+          isCosmic 
+            ? "bg-gradient-to-b from-[#180a3c] via-[#201054] to-[#0c0424] shadow-[0_20px_50px_rgba(139,92,246,0.35)] border-b-2 border-amber-400/40" 
+            : "bg-blue-700 shadow-2xl"
+        )}>
+          {/* Header Background Image */}
+          {settings?.header_image_url && (
+            <div 
+              className="absolute inset-0 z-0 bg-cover bg-center transition-opacity duration-1000"
+              style={{ 
+                backgroundImage: `url(${settings.header_image_url})`,
+                opacity: settings.header_opacity ?? 0.4
+              }}
+            />
+          )}
+          
+          <div className="relative z-20 flex flex-col items-center text-center">
+            {/* Logo personalizado de la sala si está configurado */}
+            {tenant.logo_url && (
+              <div className="mb-4 flex items-center justify-center">
+                <img 
+                  src={tenant.logo_url} 
+                  alt={tenant.name} 
+                  className="h-16 md:h-20 w-auto max-w-[220px] object-contain drop-shadow-xl rounded-2xl bg-white/10 p-2 backdrop-blur-md border border-white/20" 
+                />
+              </div>
+            )}
+
+            {tenantSlug ? (
+              <div className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-900/90 backdrop-blur-md text-xs font-black text-amber-300 border border-amber-400/50 shadow-2xl mb-4">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                <span>🏢 SALA: {tenant.name.toUpperCase()}</span>
               {tenant.access_code && (
                 <button
                   type="button"
@@ -419,18 +419,26 @@ export default function Home() {
 
         {/* Featured Game Promo Card (Free or Paid) */}
         {featuredGame ? (
-          <div className="bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden transform transition hover:scale-[1.01]">
+          <div className={clsx(
+            "rounded-[2.5rem] overflow-hidden transform transition hover:scale-[1.01]",
+            isCosmic 
+              ? "bg-[#140a32] shadow-[0_0_35px_rgba(147,51,234,0.3)] border-2 border-purple-500/40 text-white" 
+              : "bg-white rounded-[2.5rem] shadow-2xl border border-slate-100"
+          )}>
             <div className={clsx(
               "p-6 text-center relative overflow-hidden",
               checkIsFree(featuredGame) 
-                ? "bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-700" 
-                : "bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700"
+                ? (isCosmic ? "bg-gradient-to-br from-emerald-700 via-teal-800 to-slate-950" : "bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-700") 
+                : (isCosmic ? "bg-gradient-to-br from-purple-800 via-indigo-900 to-slate-950" : "bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700")
             )}>
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10"></div>
               <div className="absolute bottom-0 left-0 w-24 h-24 bg-yellow-400/10 rounded-full blur-xl -ml-6 -mb-6"></div>
               
               {/* Aviso de Juego Gratuito / Programado / En Vivo - Agrandado */}
-              <div className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-yellow-400 text-yellow-950 rounded-full text-xs sm:text-sm font-black uppercase tracking-[0.15em] mb-3 border-2 border-yellow-200 shadow-xl animate-pulse">
+              <div className={clsx(
+                "inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full text-xs sm:text-sm font-black uppercase tracking-[0.15em] mb-3 border-2 shadow-xl animate-pulse",
+                isCosmic ? "bg-amber-400 text-slate-950 border-amber-300 shadow-[0_0_20px_rgba(251,191,36,0.4)]" : "bg-yellow-400 text-yellow-950 border-yellow-200"
+              )}>
                 {checkIsFree(featuredGame)
                   ? (featuredGame.status === 'playing' ? '🎉 ¡JUEGO GRATIS EN VIVO!' : '🎉 ¡JUEGO GRATUITO PROGRAMADO!')
                   : (featuredGame.status === 'playing' ? '🔥 ¡JUEGO EN VIVO!' : '⭐ PRÓXIMO JUEGO PREMIUM')}
@@ -449,21 +457,27 @@ export default function Home() {
             
             <div className="p-6">
               <div className="grid grid-cols-2 gap-4 mb-4">
-                <div className="bg-emerald-50 rounded-3xl p-4 text-center border border-emerald-100 shadow-sm relative overflow-hidden group">
+                <div className={clsx(
+                  "rounded-3xl p-4 text-center shadow-sm relative overflow-hidden group",
+                  isCosmic ? "bg-slate-900/90 border border-purple-500/30 text-white" : "bg-emerald-50 border border-emerald-100 text-emerald-700"
+                )}>
                   <div className="absolute inset-0 bg-emerald-100 opacity-0 group-hover:opacity-20 transition-opacity"></div>
-                  <span className="block text-[10px] font-black text-emerald-600 uppercase mb-1 tracking-widest relative z-10">Premio Mayor</span>
-                  <span className="block text-2xl font-black text-emerald-700 flex items-center justify-center gap-1.5 relative z-10">
+                  <span className={clsx("block text-[10px] font-black uppercase mb-1 tracking-widest relative z-10", isCosmic ? "text-amber-400" : "text-emerald-600")}>Premio Mayor</span>
+                  <span className={clsx("block text-2xl font-black flex items-center justify-center gap-1.5 relative z-10", isCosmic ? "text-yellow-300" : "text-emerald-700")}>
                     <Trophy size={20} className="text-yellow-500 fill-yellow-500" /> {formatCurrency(featuredGame.prize)}
                   </span>
                 </div>
-                <div className="bg-blue-50 rounded-3xl p-4 text-center border border-blue-100 shadow-sm relative overflow-hidden group">
+                <div className={clsx(
+                  "rounded-3xl p-4 text-center shadow-sm relative overflow-hidden group",
+                  isCosmic ? "bg-slate-900/90 border border-purple-500/30 text-white" : "bg-blue-50 border border-blue-100 text-blue-700"
+                )}>
                   <div className="absolute inset-0 bg-blue-100 opacity-0 group-hover:opacity-20 transition-opacity"></div>
-                  <span className="block text-[10px] font-black text-blue-600 uppercase mb-1 tracking-widest relative z-10">Costo Cartón</span>
-                  <span className="block text-xl sm:text-2xl font-black text-blue-700 flex items-center justify-center gap-1 relative z-10">
+                  <span className={clsx("block text-[10px] font-black uppercase mb-1 tracking-widest relative z-10", isCosmic ? "text-cyan-400" : "text-blue-600")}>Costo Cartón</span>
+                  <span className={clsx("block text-xl sm:text-2xl font-black flex items-center justify-center gap-1 relative z-10", isCosmic ? "text-cyan-300" : "text-blue-700")}>
                     {checkIsFree(featuredGame) ? (
-                      <span className="text-emerald-600 font-extrabold text-lg sm:text-xl">¡GRATIS! 🎁</span>
+                      <span className="text-emerald-400 font-extrabold text-lg sm:text-xl">¡GRATIS! 🎁</span>
                     ) : (
-                      <><Ticket size={20} className="text-blue-500" /> {formatCurrency(featuredGame.card_value)}</>
+                      <><Ticket size={20} className={isCosmic ? "text-cyan-400" : "text-blue-500"} /> {formatCurrency(featuredGame.card_value)}</>
                     )}
                   </span>
                 </div>
@@ -627,17 +641,23 @@ export default function Home() {
 
         {/* Secondary CTA - Login */}
         <div id="login-section" className="relative group max-w-2xl mx-auto mb-16">
-          <div className="absolute -inset-1 bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10 rounded-[3rem] blur-xl opacity-0 group-hover:opacity-100 transition duration-700"></div>
+          <div className={clsx(
+            "absolute -inset-1 rounded-[3rem] blur-xl opacity-0 group-hover:opacity-100 transition duration-700",
+            isCosmic ? "bg-gradient-to-r from-amber-500/20 via-purple-500/25 to-cyan-500/20" : "bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10"
+          )}></div>
           
-          <div className="relative border border-white/10 rounded-[2.75rem] p-10 shadow-2xl overflow-hidden min-h-[420px] flex flex-col justify-center">
+          <div className={clsx(
+            "relative border rounded-[2.75rem] p-6 sm:p-10 shadow-2xl overflow-hidden min-h-[420px] flex flex-col justify-center",
+            isCosmic ? "border-purple-500/40 shadow-[0_0_35px_rgba(168,85,247,0.25)]" : "border-white/10 shadow-2xl"
+          )}>
             {/* Background Image with Overlay */}
             <div 
-              className="absolute inset-0 z-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-110" 
-              style={{ backgroundImage: `url('${settings?.login_bg_image_url || '/src/assets/images/bingo_player_woman_bg_1782074519120.jpg'}')` }}
+              className="absolute inset-0 z-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105" 
+              style={{ backgroundImage: `url('${settings?.login_bg_image_url || defaultLoginBg}')` }}
             />
             <div 
-              className="absolute inset-0 z-0 bg-slate-900 backdrop-blur-[1px]" 
-              style={{ opacity: 1 - (settings?.login_bg_opacity ?? 0.6) }}
+              className="absolute inset-0 z-0 bg-slate-950 backdrop-blur-[0.5px]" 
+              style={{ opacity: Math.max(0.2, 1 - (settings?.login_bg_opacity ?? 0.6)) }}
             />
 
             <div className="text-left mb-6 relative z-10 px-1 w-full">
@@ -814,7 +834,6 @@ export default function Home() {
         </motion.button>
       )}
         </div>
-      )}
 
       {/* WhatsApp Community Modal */}
       <AnimatePresence>

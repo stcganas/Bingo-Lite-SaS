@@ -91,6 +91,9 @@ export const apiFetch = async (input: RequestInfo | URL, init?: RequestInit, ret
 
     // Only set headers if it's not FormData or if there are specific headers to set
     if (!isFormData) {
+      if (typeof init?.body === 'string' && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+      }
       fetchInit.headers = headers;
     } else {
       // If FormData, we still might want other headers (like Auth), but NOT Content-Type

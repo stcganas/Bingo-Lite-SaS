@@ -681,12 +681,25 @@ export default function AdminDashboard() {
         if (data?.theme_template) setRoomThemeTemplate(data.theme_template);
       })
       .catch(() => {});
-  }, [slug, user?.tenant_id]);
+
+    const tenantParam = currentTenant ? `?slug=${encodeURIComponent(currentTenant)}` : '';
+    apiFetch(`/api/tenant/info${tenantParam}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data?.logo_url) setRoomLogoUrl(data.logo_url);
+      })
+      .catch(() => {});
+  }, [slug, user?.tenant_id, currentTenant]);
 
   const [socialShareMessage, setSocialShareMessage] = useState('');
   const [socialShareImageUrl, setSocialShareImageUrl] = useState('');
   const [isSavingSocialShare, setIsSavingSocialShare] = useState(false);
   const [isUploadingSocialImage, setIsUploadingSocialImage] = useState(false);
+
+  // Logo de la Sala (Marca Blanca)
+  const [roomLogoUrl, setRoomLogoUrl] = useState('');
+  const [isUploadingRoomLogo, setIsUploadingRoomLogo] = useState(false);
+  const [isSavingRoomLogo, setIsSavingRoomLogo] = useState(false);
 
   // Plantilla visual de la sala: 'classic' o 'neon_glow'
   const [roomThemeTemplate, setRoomThemeTemplate] = useState<'classic' | 'neon_glow'>('classic');
@@ -1287,7 +1300,8 @@ export default function AdminDashboard() {
       const res = await apiFetch(`/api/admin/support/tickets${tenantParam}`);
       if (res.ok) {
         const data = await res.json();
-        setSupportTickets(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : (data?.tickets || []);
+        setSupportTickets(list);
       }
     } catch (err) {
       console.error('Error fetching support tickets:', err);
@@ -6351,13 +6365,169 @@ export default function AdminDashboard() {
               
               <div className="space-y-6">
 
+                {/* Módulo de Logo Personalizado de la Sala (Marca Blanca) */}
+                <div className="pt-2 pb-6 border-b border-slate-100">
+                  <h3 className="text-lg font-black text-slate-800 mb-1 flex items-center gap-2">
+                    <Image className="text-emerald-600" /> Logo de la Sala (Marca Blanca)
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4 font-medium">
+                    Personaliza la identidad visual de tu sala de bingo. Este logo se mostrará en la cabecera de la sala, en la invitación a los jugadores y en el instalador de la aplicación (PWA). Si no configuras un logo, se usará el oficial de Bingo Lite.
+                  </p>
+
+                  <div className="bg-slate-50 p-5 rounded-2xl border-2 border-slate-200/80 space-y-4">
+                    {/* Vista Previa del Logo Actual */}
+                    <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-4 rounded-xl border border-slate-200">
+                      <div className="w-24 h-24 rounded-2xl border-2 border-dashed border-slate-300 flex items-center justify-center p-2 bg-slate-900 overflow-hidden shrink-0 shadow-inner">
+                        {roomLogoUrl ? (
+                          <img 
+                            src={roomLogoUrl} 
+                            alt="Logo de la Sala" 
+                            className="max-h-full max-w-full object-contain"
+                          />
+                        ) : (
+                          <div className="text-center text-slate-400">
+                            <Image size={24} className="mx-auto mb-1 opacity-50 text-white" />
+                            <span className="text-[9px] font-black uppercase text-slate-400">Sin Logo</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 space-y-1 text-center sm:text-left">
+                        <div className="flex items-center justify-center sm:justify-start gap-2">
+                          <span className="text-xs font-black uppercase tracking-wider text-slate-700">Estado del Branding:</span>
+                          <span className={clsx(
+                            "px-2 py-0.5 rounded-full text-[10px] font-black uppercase",
+                            roomLogoUrl ? "bg-emerald-100 text-emerald-700 border border-emerald-300" : "bg-slate-200 text-slate-600"
+                          )}>
+                            {roomLogoUrl ? "Marca Blanca Activa ✅" : "Logo Oficial por Defecto"}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500">
+                          {roomLogoUrl ? "Tu marca blanca está activa y visible para todos tus jugadores." : "Aún no has configurado un logo propio. Sube uno en PNG transparente o JPG."}
+                        </p>
+                        {roomLogoUrl && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!window.confirm("¿Deseas restablecer al logo oficial del sistema?")) return;
+                              setRoomLogoUrl('');
+                              await apiFetch('/api/admin/settings/room-logo', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ logo_url: '' })
+                              });
+                              toast.success("Logo restablecido al oficial");
+                            }}
+                            className="text-xs text-red-600 hover:text-red-700 font-bold underline cursor-pointer mt-1"
+                          >
+                            Quitar logo y usar oficial
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Botón de Subida y URL Manual */}
+                    <div className="space-y-2">
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="url"
+                          value={roomLogoUrl}
+                          onChange={(e) => setRoomLogoUrl(e.target.value)}
+                          placeholder="https://ejemplo.com/logo-tu-marca.png"
+                          className="flex-1 p-3 border-2 border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-medium text-slate-800 text-sm bg-white"
+                        />
+                        <label className={clsx(
+                          "px-4 py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition border shadow-sm",
+                          isUploadingRoomLogo
+                            ? "bg-slate-200 text-slate-500 cursor-not-allowed border-slate-300"
+                            : "bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 active:scale-95"
+                        )}>
+                          {isUploadingRoomLogo ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                          <span>{isUploadingRoomLogo ? 'Subiendo...' : 'Subir Logo'}</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={isUploadingRoomLogo}
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              if (file.size > 5 * 1024 * 1024) {
+                                toast.error("El archivo supera el límite de 5MB");
+                                return;
+                              }
+                              setIsUploadingRoomLogo(true);
+                              try {
+                                const formData = new FormData();
+                                formData.append('logo_image', file);
+                                const res = await apiFetch('/api/admin/upload-room-logo', {
+                                  method: 'POST',
+                                  body: formData
+                                });
+                                if (!res.ok) throw new Error('Error al subir el logo');
+                                const data = await res.json();
+                                if (data.url) {
+                                  setRoomLogoUrl(data.url);
+                                  await apiFetch('/api/admin/settings/room-logo', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ logo_url: data.url })
+                                  });
+                                  toast.success('¡Logo subido y guardado exitosamente para la sala!');
+                                }
+                              } catch (err: any) {
+                                toast.error(err.message || 'Error al subir el logo');
+                              } finally {
+                                setIsUploadingRoomLogo(false);
+                                e.target.value = '';
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-medium">
+                        💡 Formato recomendado: PNG transparente o SVG, 512x512 px o relación horizontal limpia.
+                      </p>
+                    </div>
+
+                    {/* Botón Guardar Logo */}
+                    <button
+                      type="button"
+                      disabled={isSavingRoomLogo || isUploadingRoomLogo}
+                      onClick={async () => {
+                        setIsSavingRoomLogo(true);
+                        try {
+                          const res = await apiFetch('/api/admin/settings/room-logo', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ logo_url: roomLogoUrl })
+                          });
+                          if (!res.ok) throw new Error('Error al guardar logo');
+                          toast.success('¡Logo personalizado de la sala guardado exitosamente!');
+                        } catch (err: any) {
+                          toast.error(err.message || 'Error al guardar el logo');
+                        } finally {
+                          setIsSavingRoomLogo(false);
+                        }
+                      }}
+                      className={clsx(
+                        "w-full py-3 px-6 text-white font-black rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-md",
+                        isSavingRoomLogo ? "bg-slate-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700 active:scale-95"
+                      )}
+                    >
+                      {isSavingRoomLogo ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                      Guardar Logo de la Sala
+                    </button>
+                  </div>
+                </div>
+
                 {/* Módulo de Plantilla Visual de la Sala */}
                 <div className="pt-2 pb-2 border-b border-slate-100">
                   <h3 className="text-lg font-black text-slate-800 mb-2 flex items-center gap-2">
                     <Sparkles className="text-purple-600" /> Plantilla Visual de la Sala
                   </h3>
                   <p className="text-xs text-slate-500 mb-4 font-medium">
-                    Elige el diseño visual activo para esta sala. La plantilla <b>Clásica</b> es la predeterminada; puedes alternar a la plantilla <b>Neón Glow VIP</b> según la ocasión o evento.
+                    Elige el diseño visual activo para esta sala. La plantilla <b>Clásica</b> es la predeterminada; puedes alternar a la plantilla <b>Cósmica VIP</b> según la ocasión o evento.
                   </p>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
