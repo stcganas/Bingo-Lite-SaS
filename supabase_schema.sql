@@ -157,12 +157,18 @@ DROP POLICY IF EXISTS "Allow all access to settings" ON public.settings;
 CREATE POLICY "Public read settings" ON public.settings FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Allow all access to wallets" ON public.wallets;
--- Wallets: Mutaciones directas desde el cliente web bloqueadas
+DROP POLICY IF EXISTS "Service role full access to wallets" ON public.wallets;
+-- Wallets: Mutaciones directas desde el cliente web bloqueadas; acceso completo reservado al backend (service_role)
+CREATE POLICY "Service role full access to wallets" ON public.wallets FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow all access to wallet_transactions" ON public.wallet_transactions;
--- Wallet Transactions: Mutaciones directas desde el cliente web bloqueadas
+DROP POLICY IF EXISTS "Service role full access to wallet_transactions" ON public.wallet_transactions;
+-- Wallet Transactions: Mutaciones directas desde el cliente web bloqueadas; acceso completo reservado al backend (service_role)
+CREATE POLICY "Service role full access to wallet_transactions" ON public.wallet_transactions FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow all access to wallet_activations" ON public.wallet_activations;
+DROP POLICY IF EXISTS "Service role full access to wallet_activations" ON public.wallet_activations;
+CREATE POLICY "Service role full access to wallet_activations" ON public.wallet_activations FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Allow all access to sellers" ON public.sellers;
 CREATE POLICY "Public read sellers" ON public.sellers FOR SELECT USING (true);

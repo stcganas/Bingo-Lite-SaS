@@ -532,6 +532,33 @@ Permitir a los administradores reiniciar a $0 el módulo que organiza a los gana
 - **TypeScript:** `npx tsc --noEmit` completado con **0 errores** (código de salida 0).
 - **Vite Build:** `npm run build` completado exitosamente en **23.20s** con Service Worker y PWA generados (código de salida 0).
 
+---
+
+## 📌 Hito 15: Corrección de Violación RLS en `wallets` y Blindaje contra Contaminación de Sesión de Supabase
+**Fecha:** 22 de Octubre, 2026  
+**Estado:** ✅ Completado y Verificado  
+
+### 🎯 Problema Abordado:
+- Al intentar aprobar una solicitud de recarga en el panel de administración, el servidor devolvía el error:
+  `new row violates row-level security policy for table "wallets"`.
+- **Causa Raíz Diagnosticada:**
+  1. **Contaminación de Sesión en el Cliente Supabase del Backend:** En `server.ts` línea 1633, al validar las credenciales del Super Administrador, se ejecutaba `await supabase.auth.signInWithPassword({ email, password })` sobre la instancia maestra global de `supabase`. En el SDK de Supabase, esto muta el token de sesión interno de la instancia, cambiando la cabecera `Authorization` de `service_role` al JWT del usuario autenticado (`role: authenticated`). A partir de ese momento, cualquier operación de base de datos subsiguiente (incluyendo la aprobación de recargas) se enviaba con el rol `authenticated` en lugar de `service_role`.
+  2. **Violación de Políticas RLS:** Al ejecutarse con el rol `authenticated` sobre la tabla `wallets` (que tiene RLS activado y mutaciones directas restringidas a nivel de base de datos), PostgreSQL rechazaba la inserción arrojando error 42501 (`new row violates row-level security policy for table "wallets"`).
+
+### 🛠️ Solución Implementada:
+1. **Blindaje de Cabeceras Globales en `supabaseClient.ts`:**
+   - Se configuró la opción `global: { headers: { apikey: supabaseServiceKey, Authorization: 'Bearer ' + supabaseServiceKey } }` para asegurar que la instancia maestra del backend siempre utilice credenciales inmutables de `service_role`.
+2. **Cliente Efímero de Autenticación (`createAuthVerificationClient`):**
+   - Se creó una función dedicada que genera una instancia efímera y aislada de Supabase exclusivamente para verificar credenciales de inicio de sesión (`signInWithPassword`) sin alterar el cliente maestro del servidor.
+3. **Políticas Explícitas en `supabase_schema.sql`:**
+   - Se definieron políticas explícitas `FOR ALL TO service_role USING (true) WITH CHECK (true)` para `wallets`, `wallet_transactions` y `wallet_activations` garantizando que el backend conserve pleno acceso operativo sin violaciones de RLS.
+
+### 📁 Archivos Modificados:
+- [`supabaseClient.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/supabaseClient.ts): Cabeceras globales fijas de `service_role` y exportación de `createAuthVerificationClient`.
+- [`server.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/server.ts): Uso de `createAuthVerificationClient()` en la autenticación del Super Administrador.
+- [`supabase_schema.sql`](file:///c:/Users/PC/Desktop/Bingo-Live-main/supabase_schema.sql): Políticas RLS explícitas para el rol `service_role`.
+- [`CONTINUIDAD_PROYECTO.md`](file:///c:/Users/PC/Desktop/Bingo-Live-main/CONTINUIDAD_PROYECTO.md): Documentación del Hito 15.
+
 
 
 

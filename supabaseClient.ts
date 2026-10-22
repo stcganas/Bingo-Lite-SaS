@@ -46,10 +46,29 @@ if (candidateRole !== 'service_role') {
 export const supabaseUrl = envUrl;
 export const supabaseServiceKey = candidateKey;
 
+// Cliente maestro para operaciones seguras del backend Node.js
+// Blindado con cabeceras globales fijas para que NUNCA degrade al rol anon o authenticated
 export const supabase = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,
     detectSessionInUrl: false
+  },
+  global: {
+    headers: {
+      apikey: supabaseServiceKey,
+      Authorization: `Bearer ${supabaseServiceKey}`
+    }
   }
 });
+
+// Cliente efímero aislado exclusivo para validar credenciales de login sin contaminar el cliente maestro
+export function createAuthVerificationClient() {
+  return createClient(supabaseUrl, process.env.VITE_SUPABASE_ANON_KEY || supabaseServiceKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  });
+}

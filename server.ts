@@ -9,7 +9,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { supabase } from './supabaseClient.ts';
+import { supabase, createAuthVerificationClient } from './supabaseClient.ts';
 import * as Ably from 'ably';
 import { GoogleGenAI } from '@google/genai';
 
@@ -1630,7 +1630,8 @@ app.post('/api/admin/tenant-login', async (req, res) => {
         return res.status(500).json({ error: 'Servicio de autenticación no disponible.' });
       }
 
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      const authClient = createAuthVerificationClient();
+      const { data: authData, error: authError } = await authClient.auth.signInWithPassword({
         email,
         password
       });
