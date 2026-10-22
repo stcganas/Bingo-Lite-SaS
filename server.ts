@@ -3073,7 +3073,7 @@ app.post('/api/admin/settings/player-commission', requireAdmin, async (req, res)
 // Configuración de Promoción e Invitaciones en Redes Sociales (Facebook, WhatsApp)
 app.get('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
   try {
-    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const targetTenant = (req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req);
     const settings = await getGameSettings('global', targetTenant);
     res.json({
       message: settings.social_share_message || '',
@@ -3086,7 +3086,7 @@ app.get('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
 
 app.post('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
   try {
-    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const targetTenant = (req.body.tenant_id as string) || (req as any).tenantId || getTenantIdFromRequest(req);
     const { message, image_url } = req.body;
     await saveGameSettings('global', {
       social_share_message: typeof message === 'string' ? message : '',
@@ -7392,16 +7392,50 @@ app.post('/api/gift-invitations/generate', async (req, res) => {
   }
 });
 
-// Endpoint para compartir en redes sociales (WhatsApp, Facebook) con regalos ilimitados de 1 solo uso
+// Endpoint público para obtener la configuración y datos promocionales de una sala
+app.get('/api/room/social-share', async (req, res) => {
+  try {
+    const rawTenant = req.query.slug || req.query.tenantId || req.query.tenant || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite';
+    const currentTenant = normalizeTenant(rawTenant as string);
+    const settings = await getGameSettings('global', currentTenant);
+    const tenantInfo = await getTenantInfo(currentTenant);
+
+    let activeGame: any = null;
+    const { data: games } = await supabase.from('game')
+      .select('*')
+      .in('status', ['waiting', 'scheduled', 'playing', 'paused'])
+      .order('created_at', { ascending: false });
+
+    if (games && games.length > 0) {
+      activeGame = games.find((g: any) => normalizeTenant(g.tenant_id) === currentTenant) || games[0];
+    }
+
+    const bingoName = tenantInfo.name || activeGame?.name || 'Nuestro Gran Bingo';
+    const prizeFormatted = activeGame?.prize ? `$${Number(activeGame.prize).toLocaleString('es-CO')}` : 'Premios en Efectivo';
+    const startDate = activeGame?.start_time
+      ? new Date(activeGame.start_time).toLocaleString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+      : 'Muy Pronto';
+
+    res.json({
+      success: true,
+      message: settings.social_share_message || '',
+      image_url: settings.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || '',
+      bingoName,
+      prize: prizeFormatted,
+      startDate,
+      tenantId: currentTenant
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Error al consultar datos de invitación de la sala' });
+  }
+});
+
+// Endpoint para compartir en redes sociales (WhatsApp, Facebook) con regalos e invitaciones inteligentes
 app.post('/api/gift-invitations/social-share', async (req, res) => {
   try {
     const { sender_phone, tenantId, network } = req.body;
-    const cleanSender = normalizePhone(sender_phone);
-    if (!cleanSender) {
-      return res.status(400).json({ error: 'Número de teléfono del remitente requerido.' });
-    }
-
-    const currentTenant = normalizeTenant(tenantId || (req as any).tenantId);
+    const cleanSender = sender_phone ? normalizePhone(sender_phone) : null;
+    const currentTenant = normalizeTenant(tenantId || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite');
 
     // Obtener juego activo de la sala
     let activeGame: any = null;
@@ -7417,18 +7451,23 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
     // Generar registro de invitación único para redes sociales (un solo uso por link)
     const dummyRecipient = `social-${network || 'share'}-${Math.random().toString(36).substring(2, 9)}`;
 
-    const { data: invite, error } = await supabase.from('gift_invitations')
-      .insert({
-        sender_phone: cleanSender,
-        recipient_phone: dummyRecipient,
-        status: 'pending',
-        game_id: activeGame?.id || null,
-        card_count: 1
-      })
-      .select()
-      .single();
-
-    const inviteId = invite?.id || Date.now();
+    let inviteId = Date.now();
+    try {
+      const { data: invite } = await supabase.from('gift_invitations')
+        .insert({
+          sender_phone: cleanSender || `sala-${currentTenant}`,
+          recipient_phone: dummyRecipient,
+          status: 'pending',
+          game_id: activeGame?.id || null,
+          card_count: 1,
+          tenant_id: currentTenant
+        })
+        .select()
+        .single();
+      if (invite?.id) inviteId = invite.id;
+    } catch (insertErr) {
+      console.warn('[social-share] Warning inserting invitation record:', insertErr);
+    }
 
     // Obtener configuración de la sala para obtener imagen y mensaje personalizado
     const settings = await getGameSettings('global', currentTenant);
@@ -7436,7 +7475,9 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
 
     const baseUrl = process.env.VITE_APP_URL || 'https://bingolite.click';
     const roomPrefix = currentTenant !== 'bingo-lite' && currentTenant !== 'default' ? `/sala/${currentTenant}` : '';
-    const registerUrl = `${baseUrl}${roomPrefix}/register?invitedBy=${cleanSender}&gift=${inviteId}`;
+    const registerUrl = cleanSender
+      ? `${baseUrl}${roomPrefix}/register?invitedBy=${cleanSender}&gift=${inviteId}`
+      : `${baseUrl}${roomPrefix}/register?gift=${inviteId}`;
     const smartUrl = `${baseUrl}/invitacion/${inviteId}`;
 
     // Mensaje persuasivo para redes sociales
@@ -7446,15 +7487,15 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
       ? new Date(activeGame.start_time).toLocaleString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
       : 'Muy Pronto';
 
-    let customTemplate = settings.social_share_message || `🎉 *¡TE ACABO DE REGALAR 1 CARTÓN DE BINGO GRATIS!* 🎁✨\n\n¡Hola! Estoy jugando en *${bingoName}* y quiero que ganemos juntos dinero real en efectivo. 🍀\n\n🏆 *Premio en juego:* ${prizeFormatted}\n📅 *Cita del Gran Sorteo:* ${startDate}\n\n👉 *Reclama tu cartón 100% GRATIS antes de que empiece aquí:*\n{url}\n\n⚠️ *Aviso:* Este enlace exclusivo es de uso único y se redime solo una vez. ¡Entra ya y cantemos BINGO en familia! 👨‍👩‍👧‍👦🍀`;
+    let customTemplate = settings.social_share_message || `🎉 *¡TE INVITO A JUGAR EN ${bingoName.toUpperCase()}!* 🎁✨\n\n¡Hola! Ven y participa con nosotros para ganar dinero real en efectivo. 🍀\n\n🏆 *Premio en juego:* ${prizeFormatted}\n📅 *Cita del Gran Sorteo:* ${startDate}\n\n👉 *Regístrate y reclama 1 CARTÓN GRATIS de bienvenida aquí:*\n{url}\n\n¡Entra ya mismo y cantemos BINGO en familia! 👨‍👩‍👧‍👦🍀`;
 
     const finalMessage = customTemplate
-      .replace(/\{url\}/g, registerUrl)
+      .replace(/\{url\}/g, smartUrl)
       .replace(/\{bingoName\}/g, bingoName)
       .replace(/\{prize\}/g, prizeFormatted)
       .replace(/\{date\}/g, startDate);
 
-    const imageUrl = settings.social_share_image_url || tenantInfo.logo_url || 'https://bingolite.click/logo-app.png';
+    const imageUrl = settings.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || 'https://bingolite.click/logo-app.png';
 
     res.json({
       success: true,
@@ -7483,14 +7524,16 @@ app.get('/invitacion/:inviteId', async (req, res) => {
     const sender = invite?.sender_phone || '';
     const gameId = invite?.game_id || '';
 
-    let tenantSlug = 'bingo-lite';
-    if (gameId) {
+    let tenantSlug = invite?.tenant_id ? normalizeTenant(invite.tenant_id) : 'bingo-lite';
+    if (!invite?.tenant_id && gameId) {
       const { data: game } = await supabase.from('game').select('tenant_id, name, prize').eq('id', gameId).maybeSingle();
       if (game?.tenant_id) tenantSlug = normalizeTenant(game.tenant_id);
     }
 
     const roomPrefix = tenantSlug !== 'bingo-lite' && tenantSlug !== 'default' ? `/sala/${tenantSlug}` : '';
-    const destinationUrl = `${baseUrl}${roomPrefix}/register?invitedBy=${sender}&gift=${inviteId}`;
+    const destinationUrl = sender && !sender.startsWith('sala-')
+      ? `${baseUrl}${roomPrefix}/register?invitedBy=${sender}&gift=${inviteId}`
+      : `${baseUrl}${roomPrefix}/register?gift=${inviteId}`;
 
     const userAgent = req.headers['user-agent'] || '';
     const isCrawler = /facebookexternalhit|Facebot|Twitterbot|WhatsApp|TelegramBot|LinkedInBot|Slackbot/i.test(userAgent);
@@ -7499,8 +7542,10 @@ app.get('/invitacion/:inviteId', async (req, res) => {
       const settings = await getGameSettings('global', tenantSlug);
       const tenantInfo = await getTenantInfo(tenantSlug);
       const title = `🎁 ¡Te han regalado 1 Cartón Gratis de Bingo! - ${tenantInfo.name}`;
-      const desc = `Únete a ${tenantInfo.name}, reclama tu cartón de cortesía y participa en el gran sorteo en vivo. ¡Solo se redime una vez!`;
-      const img = settings.social_share_image_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
+      const desc = settings.social_share_message
+        ? settings.social_share_message.replace(/\{.*?\}/g, '').substring(0, 200)
+        : `Únete a ${tenantInfo.name}, reclama tu cartón de cortesía y participa en el gran sorteo en vivo. ¡Solo se redime una vez!`;
+      const img = settings.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
 
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       return res.send(`<!DOCTYPE html>

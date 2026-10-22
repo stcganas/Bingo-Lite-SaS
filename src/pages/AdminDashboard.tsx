@@ -674,7 +674,8 @@ export default function AdminDashboard() {
       })
       .catch(() => {});
 
-    apiFetch('/api/admin/settings/social-share')
+    const tenantSocialParam = currentTenant ? `?tenantId=${encodeURIComponent(currentTenant)}` : '';
+    apiFetch(`/api/admin/settings/social-share${tenantSocialParam}`)
       .then(res => res.json())
       .then(data => {
         if (data) {
@@ -6790,7 +6791,8 @@ export default function AdminDashboard() {
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                               message: socialShareMessage,
-                              image_url: socialShareImageUrl
+                              image_url: socialShareImageUrl,
+                              tenant_id: currentTenant
                             })
                           });
                           if (!res.ok) throw new Error('Error al guardar');

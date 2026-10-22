@@ -58,6 +58,87 @@ export default function Home() {
   const [resetMessage, setResetMessage] = useState('');
   const [isSubmittingReset, setIsSubmittingReset] = useState(false);
 
+  // Estados y lógica para compartir en redes sociales la invitación de la sala
+  const [showSocialShareModal, setShowSocialShareModal] = useState(false);
+  const [socialInviteData, setSocialInviteData] = useState<any>(null);
+  const [isGeneratingSocialLink, setIsGeneratingSocialLink] = useState(false);
+
+  const fetchSocialShareData = async () => {
+    if (socialInviteData) return socialInviteData;
+    setIsGeneratingSocialLink(true);
+    try {
+      const tenantKey = tenantSlug || tenant?.slug || 'bingo-lite';
+      const res = await apiFetch('/api/gift-invitations/social-share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sender_phone: user?.phone || '',
+          tenantId: tenantKey,
+          network: 'general'
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSocialInviteData(data);
+        return data;
+      }
+    } catch (err) {
+      console.error('Error fetching social share data:', err);
+    } finally {
+      setIsGeneratingSocialLink(false);
+    }
+    return null;
+  };
+
+  const handleOpenSocialShareModal = async () => {
+    setShowSocialShareModal(true);
+    await fetchSocialShareData();
+  };
+
+  const handleSocialShareWhatsApp = async () => {
+    const data = socialInviteData || (await fetchSocialShareData());
+    const fallbackUrl = window.location.href;
+    const msg = data?.message || `🎉 ¡Te invito a jugar en ${tenant?.name || 'Bingo Live'}! Reclama tu cartón gratis: ${fallbackUrl}`;
+    const encoded = encodeURIComponent(msg);
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (isMobile) {
+      window.location.href = `whatsapp://send?text=${encoded}`;
+    } else {
+      window.open(`https://api.whatsapp.com/send?text=${encoded}`, '_blank');
+    }
+    toast.success('🎁 ¡Abriendo WhatsApp con tu invitación!');
+  };
+
+  const handleSocialShareFacebook = async () => {
+    const data = socialInviteData || (await fetchSocialShareData());
+    const shareUrl = data?.smartUrl || data?.registerUrl || window.location.href;
+    window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, '_blank', 'width=600,height=500');
+    toast.success('¡Abriendo Facebook para compartir tu invitación!');
+  };
+
+  const handleSocialShareCopy = async () => {
+    const data = socialInviteData || (await fetchSocialShareData());
+    const linkToCopy = data?.smartUrl || data?.registerUrl || window.location.href;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(linkToCopy);
+      toast.success('¡Enlace inteligente copiado al portapapeles! 🚀');
+    }
+  };
+
+  const handleSocialShareNative = async () => {
+    const data = socialInviteData || (await fetchSocialShareData());
+    const shareUrl = data?.smartUrl || data?.registerUrl || window.location.href;
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Invitación a ${tenant?.name || 'Bingo Live'}`,
+          text: data?.message,
+          url: shareUrl
+        });
+      } catch (e) {}
+    }
+  };
+
   const handleShareWhatsApp = () => {
     const salaName = tenant?.name || 'Bingo Live';
     const registerUrl = window.location.origin + (tenantPrefix ? `${tenantPrefix}/register` : '/register');
@@ -860,9 +941,25 @@ export default function Home() {
           <LogIn size={18} /> INGRESAR
         </button>
       </div>
-      {/* Botones Flotantes en la Página Principal: Regalar Cartones y Redes Sociales (WhatsApp) */}
+      {/* Botones Flotantes en la Página Principal: Compartir en Redes, Regalar Cartones y Redes Sociales (WhatsApp) */}
       <div className="fixed left-4 sm:left-6 bottom-24 md:bottom-8 z-40 flex flex-col items-start gap-2.5 sm:gap-3 pointer-events-none">
-        {/* Botón Flotante para Regalar Cartones en la Página Principal */}
+        {/* 1. Botón Flotante para Compartir en Redes Sociales (ARRIBA de Regalar Cartones) */}
+        <motion.button
+          initial={{ opacity: 0, y: 30, scale: 0.8 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ type: 'spring', damping: 15, stiffness: 100, delay: 0.6 }}
+          onClick={handleOpenSocialShareModal}
+          className="pointer-events-auto flex items-center gap-2.5 py-2.5 px-3.5 sm:py-3 sm:px-5 bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-full font-black text-xs sm:text-sm uppercase tracking-wider shadow-2xl border-2 border-white/60 hover:scale-105 active:scale-95 transition-all cursor-pointer group"
+          title="Compartir en Redes Sociales e Invitar Amigos 📢"
+        >
+          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-white text-blue-600 flex items-center justify-center shrink-0 shadow-md group-hover:rotate-12 transition-transform">
+            <Share2 size={16} className="sm:w-[18px] sm:h-[18px] text-blue-600" />
+          </div>
+          <span className="hidden sm:inline">📢 Compartir en Redes</span>
+          <span className="sm:hidden font-extrabold text-[11px]">📢 Compartir</span>
+        </motion.button>
+
+        {/* 2. Botón Flotante para Regalar Cartones en la Página Principal */}
         <motion.button
           initial={{ opacity: 0, y: 30, scale: 0.8 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -878,7 +975,7 @@ export default function Home() {
           <span className="sm:hidden font-extrabold text-[11px]">🎁 Regalar</span>
         </motion.button>
 
-        {/* Floating WhatsApp / Redes Sociales Button */}
+        {/* 3. Floating WhatsApp / Redes Sociales Button */}
         {settings?.whatsapp_group_link && (
           <motion.button
             initial={{ opacity: 0, y: 30, scale: 0.8 }}
@@ -1273,6 +1370,171 @@ export default function Home() {
                     className="text-xs font-black text-purple-600 hover:text-purple-800 transition uppercase tracking-wider cursor-pointer"
                   >
                     Iniciar Sesión →
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal para Compartir en Redes Sociales con Enlace Inteligente e Imagen Promocional */}
+      <AnimatePresence>
+        {showSocialShareModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowSocialShareModal(false)}
+              className="absolute inset-0 bg-slate-950/80 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-md bg-white rounded-3xl p-5 sm:p-7 shadow-2xl border-2 border-blue-300 overflow-hidden text-left z-10 max-h-[calc(100vh-2rem)] overflow-y-auto"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 bg-blue-100 text-blue-700 rounded-xl shadow-sm">
+                    <Share2 size={22} className="text-blue-600" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-slate-800 text-base sm:text-lg leading-tight">Compartir en Redes</h4>
+                    <p className="text-[11px] text-blue-600 font-extrabold uppercase tracking-wider">
+                      {tenant?.name || 'Bingo Lite Oficial'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowSocialShareModal(false)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full transition cursor-pointer"
+                  title="Cerrar"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {/* Vista previa de Imagen Promocional Personalizada */}
+                {(socialInviteData?.imageUrl || settings?.social_share_image_url || tenant?.banner_url) && (
+                  <div className="relative rounded-2xl overflow-hidden border-2 border-blue-200/80 shadow-md max-h-40 bg-slate-950 group">
+                    <img 
+                      src={socialInviteData?.imageUrl || settings?.social_share_image_url || tenant?.banner_url || defaultLoginBg} 
+                      alt="Promoción de la Sala"
+                      className="w-full h-36 object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-950/20 to-transparent flex flex-col justify-end p-3">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-yellow-300 bg-black/60 backdrop-blur-md px-2.5 py-0.5 rounded-full w-fit border border-yellow-400/40">
+                        🎁 1 Cartón Gratis de Regalo
+                      </span>
+                      <p className="text-white font-black text-xs sm:text-sm drop-shadow mt-1">
+                        {socialInviteData?.bingoName || tenant?.name || 'Gran Sorteo en Vivo'}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Mensaje Promocional Personalizado */}
+                <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3.5 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                      <Sparkles size={12} className="text-amber-500" /> Mensaje de Invitación Oficial
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const msg = socialInviteData?.message || '';
+                        if (msg) {
+                          navigator.clipboard.writeText(msg);
+                          toast.success('¡Mensaje copiado al portapapeles!');
+                        }
+                      }}
+                      className="text-[11px] font-black text-blue-600 hover:text-blue-800 flex items-center gap-1 cursor-pointer transition"
+                    >
+                      <Copy size={12} /> Copiar Texto
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-700 font-medium whitespace-pre-line max-h-24 overflow-y-auto pr-1 leading-relaxed border-t border-slate-200/50 pt-1.5">
+                    {socialInviteData?.message || 'Cargando invitación personalizada de la sala...'}
+                  </p>
+                </div>
+
+                {/* Enlace Inteligente */}
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-black uppercase tracking-wider text-slate-700 flex items-center justify-between">
+                    <span>Enlace Inteligente</span>
+                    <span className="text-[10px] text-emerald-600 font-extrabold uppercase">Listo para publicar</span>
+                  </label>
+                  <div className="flex items-center gap-2 p-2 bg-blue-50/70 rounded-xl border border-blue-200">
+                    <input
+                      type="text"
+                      readOnly
+                      value={socialInviteData?.smartUrl || socialInviteData?.registerUrl || window.location.href}
+                      className="flex-1 bg-transparent text-xs font-mono font-bold text-blue-950 outline-none select-all truncate px-1"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSocialShareCopy}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-lg text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer shrink-0"
+                    >
+                      <Copy size={13} />
+                      <span>Copiar</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-medium leading-tight">
+                    🌐 Al compartir este enlace en redes sociales, Facebook y WhatsApp mostrarán la imagen y descripción personalizada de la sala.
+                  </p>
+                </div>
+
+                {/* Botones de Acción para Publicar y Enviar */}
+                <div className="flex flex-col gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={handleSocialShareWhatsApp}
+                    className="flex items-center justify-center gap-2.5 py-3.5 px-4 bg-[#25D366] hover:bg-[#128C7E] text-white font-black text-sm rounded-xl transition shadow-md active:scale-95 cursor-pointer"
+                  >
+                    <MessageCircle size={20} />
+                    <span>Enviar Invitación por WhatsApp</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleSocialShareFacebook}
+                    className="flex items-center justify-center gap-2.5 py-3.5 px-4 bg-[#1877F2] hover:bg-[#166fe5] text-white font-black text-sm rounded-xl transition shadow-md active:scale-95 cursor-pointer"
+                  >
+                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                      <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                    </svg>
+                    <span>Publicar en Perfil de Facebook</span>
+                  </button>
+
+                  {typeof navigator !== 'undefined' && !!navigator.share && (
+                    <button
+                      type="button"
+                      onClick={handleSocialShareNative}
+                      className="flex items-center justify-center gap-2 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-200 active:scale-95"
+                    >
+                      <Share2 size={15} />
+                      <span>Compartir en Otras Redes (Instagram, Telegram, etc.)</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-500 font-bold">¿Quieres ingresar a tu cuenta?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSocialShareModal(false);
+                      scrollToLogin();
+                    }}
+                    className="text-xs font-black text-blue-600 hover:text-blue-800 transition uppercase tracking-wider cursor-pointer"
+                  >
+                    Ir al Inicio de Sesión →
                   </button>
                 </div>
               </div>
