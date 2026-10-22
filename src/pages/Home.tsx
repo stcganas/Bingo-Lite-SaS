@@ -51,7 +51,6 @@ export default function Home() {
 
   // Estados para solicitud técnica de recuperación de contraseña
   const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
-  const [showGiftModal, setShowGiftModal] = useState(false);
   const [resetPhone, setResetPhone] = useState('');
   const [resetName, setResetName] = useState('');
   const [resetEmail, setResetEmail] = useState('');
@@ -139,32 +138,7 @@ export default function Home() {
     }
   };
 
-  const handleShareWhatsApp = () => {
-    const salaName = tenant?.name || 'Bingo Live';
-    const registerUrl = window.location.origin + (tenantPrefix ? `${tenantPrefix}/register` : '/register');
-    const msg = `🎁 ¡Hola! Te invito a jugar Bingo en la sala *${salaName}*. Regístrate aquí y recibe 1 CARTÓN DE BIENVENIDA gratis para participar en premios reales: ${registerUrl}`;
-    const encoded = encodeURIComponent(msg);
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-    if (isMobile) {
-      window.location.href = `whatsapp://send?text=${encoded}`;
-    } else {
-      window.open(`https://api.whatsapp.com/send?text=${encoded}`, '_blank');
-    }
-    toast.success('🎁 ¡Abriendo WhatsApp con tu regalo de bienvenida!');
-  };
 
-  const handleShareFacebook = () => {
-    const registerUrl = window.location.origin + (tenantPrefix ? `${tenantPrefix}/register` : '/register');
-    const fbShareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(registerUrl)}`;
-    window.open(fbShareUrl, '_blank', 'width=650,height=520,location=no,toolbar=no');
-    toast.success('🎁 ¡Abriendo Facebook para compartir tu invitación!');
-  };
-
-  const handleCopyInviteLink = async () => {
-    const registerUrl = window.location.origin + (tenantPrefix ? `${tenantPrefix}/register` : '/register');
-    await navigator.clipboard.writeText(registerUrl);
-    toast.success('🎁 ¡Enlace copiado! Compártelo con amigos para que reciban su cartón gratis.');
-  };
 
   const handlePasswordResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -941,9 +915,9 @@ export default function Home() {
           <LogIn size={18} /> INGRESAR
         </button>
       </div>
-      {/* Botones Flotantes en la Página Principal: Compartir en Redes, Regalar Cartones y Redes Sociales (WhatsApp) */}
+      {/* Botones Flotantes en la Página Principal: Compartir en Redes y WhatsApp */}
       <div className="fixed left-4 sm:left-6 bottom-24 md:bottom-8 z-40 flex flex-col items-start gap-2.5 sm:gap-3 pointer-events-none">
-        {/* 1. Botón Flotante para Compartir en Redes Sociales (ARRIBA de Regalar Cartones) */}
+        {/* 1. Botón Flotante para Compartir en Redes Sociales */}
         <motion.button
           initial={{ opacity: 0, y: 30, scale: 0.8 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -959,23 +933,7 @@ export default function Home() {
           <span className="sm:hidden font-extrabold text-[11px]">📢 Compartir</span>
         </motion.button>
 
-        {/* 2. Botón Flotante para Regalar Cartones en la Página Principal */}
-        <motion.button
-          initial={{ opacity: 0, y: 30, scale: 0.8 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ type: 'spring', damping: 15, stiffness: 100, delay: 0.8 }}
-          onClick={() => setShowGiftModal(true)}
-          className="pointer-events-auto flex items-center gap-2.5 py-2.5 px-3.5 sm:py-3 sm:px-5 bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white rounded-full font-black text-xs sm:text-sm uppercase tracking-wider shadow-2xl border-2 border-white/60 hover:scale-105 active:scale-95 transition-all cursor-pointer group"
-          title="Regalar 1 Cartón Gratis de Bienvenida a tus Amigos 🎁"
-        >
-          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-yellow-400 text-purple-950 flex items-center justify-center shrink-0 shadow-md group-hover:rotate-12 transition-transform">
-            <Gift size={16} className="sm:w-[18px] sm:h-[18px] animate-bounce" />
-          </div>
-          <span className="hidden sm:inline">🎁 Regalar Cartones</span>
-          <span className="sm:hidden font-extrabold text-[11px]">🎁 Regalar</span>
-        </motion.button>
-
-        {/* 3. Floating WhatsApp / Redes Sociales Button */}
+        {/* 2. Floating WhatsApp / Redes Sociales Button */}
         {settings?.whatsapp_group_link && (
           <motion.button
             initial={{ opacity: 0, y: 30, scale: 0.8 }}
@@ -1286,97 +1244,7 @@ export default function Home() {
 
 
 
-      {/* Modal para Regalar Cartones e Invitar Amigos */}
-      <AnimatePresence>
-        {showGiftModal && (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setShowGiftModal(false)}
-              className="absolute inset-0 bg-slate-950/80 backdrop-blur-md"
-            />
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-full max-w-md bg-white rounded-3xl p-6 sm:p-7 shadow-2xl border-2 border-purple-300 overflow-hidden text-left z-10"
-            >
-              <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2.5 bg-purple-100 text-purple-800 rounded-xl">
-                    <Gift size={22} className="text-purple-600" />
-                  </div>
-                  <div>
-                    <h4 className="font-black text-slate-800 text-base sm:text-lg leading-tight">Regalar Cartones</h4>
-                    <p className="text-[11px] text-purple-600 font-extrabold uppercase tracking-wider">1 Cartón Gratis de Bienvenida</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowGiftModal(false)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-full transition cursor-pointer"
-                >
-                  <X size={20} />
-                </button>
-              </div>
 
-              <div className="space-y-4">
-                <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-pink-50 border-2 border-purple-200/80 rounded-2xl p-4 space-y-1.5">
-                  <p className="text-xs font-black text-purple-950 flex items-center gap-1.5">
-                    🎉 ¡Invita y Regala a tus Amigos!
-                  </p>
-                  <p className="text-xs text-purple-900 font-medium leading-relaxed">
-                    Comparte tu invitación para la sala <b>{tenant?.name || 'Bingo Live'}</b>. Cualquier amigo que se registre con tu enlace recibirá <b>1 CARTÓN GRATIS</b> para participar.
-                  </p>
-                </div>
-
-                <div className="flex flex-col gap-2.5 pt-1">
-                  <button
-                    onClick={handleShareWhatsApp}
-                    className="flex items-center justify-center gap-2.5 py-3.5 px-4 bg-[#25D366] hover:bg-[#128C7E] text-white font-black text-sm rounded-xl transition shadow-md active:scale-95 cursor-pointer"
-                  >
-                    <MessageCircle size={20} />
-                    <span>Compartir en WhatsApp</span>
-                  </button>
-
-                  <button
-                    onClick={handleShareFacebook}
-                    className="flex items-center justify-center gap-2.5 py-3 px-4 bg-[#1877F2] hover:bg-[#166fe5] text-white font-black text-sm rounded-xl transition shadow-md active:scale-95 cursor-pointer"
-                  >
-                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                      <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                    </svg>
-                    <span>Publicar en Facebook</span>
-                  </button>
-
-                  <button
-                    onClick={handleCopyInviteLink}
-                    className="flex items-center justify-center gap-2 py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-200 active:scale-95"
-                  >
-                    <Copy size={16} />
-                    <span>Copiar Enlace de Registro con Regalo</span>
-                  </button>
-                </div>
-
-                <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                  <span className="text-[11px] text-slate-500 font-bold">¿Ya tienes cuenta en la sala?</span>
-                  <button
-                    onClick={() => {
-                      setShowGiftModal(false);
-                      scrollToLogin();
-                    }}
-                    className="text-xs font-black text-purple-600 hover:text-purple-800 transition uppercase tracking-wider cursor-pointer"
-                  >
-                    Iniciar Sesión →
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* Modal para Compartir en Redes Sociales con Enlace Inteligente e Imagen Promocional */}
       <AnimatePresence>
