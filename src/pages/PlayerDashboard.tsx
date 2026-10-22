@@ -405,22 +405,24 @@ ${refUrl}
   }, [showGiftSecureModal]);
 
   // Helper to check if player has unlocked gifting (requires at least 2 active cards in play)
-  const hasGiftAccess = (cards && cards.length >= 2) || (player?.card_count && player.card_count >= 2);
+  const hasGiftAccess = Boolean(cards && cards.length >= 2);
 
   // Check if current game is free or player has acquired free cards to disable buying/acquiring more
   const cardPriceNumber = Math.max(0, Number(String(gameState?.card_value ?? '').replace(/[^0-9.-]+/g, "")) || 0);
   const isFreeGame = Boolean(
-    gameState?.is_free === true ||
-    gameState?.is_free === 'true' ||
-    gameState?.is_free === 1 ||
-    gameState?.type === 'free' ||
-    cardPriceNumber === 0 ||
-    (typeof gameState?.card_value === 'string' && gameState?.card_value.toLowerCase().includes('gratis'))
+    (gameState?.is_free === true ||
+     gameState?.is_free === 'true' ||
+     gameState?.is_free === 1 ||
+     gameState?.type === 'free' ||
+     (typeof gameState?.card_value === 'string' && gameState?.card_value.toLowerCase().includes('gratis'))) &&
+    gameState?.is_free !== false &&
+    gameState?.type !== 'paid' &&
+    cardPriceNumber === 0
   );
   const hasActiveGame = Boolean(
     gameState && 
     gameState.id &&
-    (gameState.status === 'waiting' || gameState.status === 'in_progress' || gameState.status === 'scheduled')
+    ['waiting', 'scheduled', 'in_progress', 'playing', 'paused'].includes(gameState.status)
   );
   const canBuyCards = Boolean(hasActiveGame && !isFreeGame);
   const hasFreeCards = Boolean(
@@ -1869,7 +1871,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                   toast('Este es un juego gratuito con 2 cartones incluidos. No requiere compra.', { icon: '🎁' });
                   return;
                 }
-                navigate("/register");
+                navigate(tenantPrefix ? `${tenantPrefix}/register` : "/register");
               }}
               disabled={!canBuyCards}
               className={clsx(
@@ -2564,7 +2566,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                             toast('No hay un juego de pago activo programado en este momento.', { icon: '⏳' });
                             return;
                           }
-                          navigate("/register");
+                          navigate(tenantPrefix ? `${tenantPrefix}/register` : "/register");
                         }}
                         disabled={!canBuyCards}
                         className={clsx(
@@ -3742,7 +3744,7 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                         }
                         setShowGiftSecureModal(false);
                         sessionStorage.setItem(`bingo_secure_skipped_${player?.id}`, 'true');
-                        navigate("/register");
+                        navigate(tenantPrefix ? `${tenantPrefix}/register` : "/register");
                       }}
                       disabled={!canBuyCards || hasFreeCards}
                       className={clsx(

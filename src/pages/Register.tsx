@@ -34,14 +34,18 @@ export default function Register() {
   const cardPriceNumber = Math.max(0, Number(String(activeGame?.card_value ?? '').replace(/[^0-9.-]+/g, "")) || 0);
   const hasActiveGame = Boolean(activeGame && activeGame.id);
   const isFreeGame = Boolean(
-    isFreeQuery || 
-    invitedBy ||
-    activeGame?.is_free === true || 
-    activeGame?.is_free === 'true' || 
-    activeGame?.is_free === 1 || 
-    activeGame?.type === 'free' ||
-    (activeGame && cardPriceNumber === 0) ||
-    (typeof activeGame?.card_value === 'string' && activeGame.card_value.toLowerCase().includes('gratis'))
+    !invitedBy &&
+    activeGame?.is_free !== false &&
+    activeGame?.type !== 'paid' &&
+    (
+      isFreeQuery || 
+      activeGame?.is_free === true || 
+      activeGame?.is_free === 'true' || 
+      activeGame?.is_free === 1 || 
+      activeGame?.type === 'free' ||
+      (typeof activeGame?.card_value === 'string' && activeGame.card_value.toLowerCase().includes('gratis')) ||
+      (activeGame && cardPriceNumber === 0 && activeGame?.is_free === true)
+    )
   );
 
   const [formData, setFormData] = useState({
@@ -51,7 +55,7 @@ export default function Register() {
     city: '',
     seller_code: urlRef,
     player_ref: playerRef,
-    card_count: isFreeGame ? 2 : (registerOnlyQuery ? 0 : 1),
+    card_count: isFreeGame ? 2 : (registerOnlyQuery ? 0 : 0),
     password: '',
     room_code: tenant.access_code || 'LITE777',
   });
@@ -136,14 +140,18 @@ export default function Register() {
         setActiveGame(data);
         const parsedCost = Math.max(0, Number(String(data?.card_value ?? '').replace(/[^0-9.-]+/g, "")) || 0);
         const isFree = Boolean(
-          isFreeQuery || 
-          invitedBy ||
-          data?.is_free === true || 
-          data?.is_free === 'true' || 
-          data?.is_free === 1 || 
-          data?.type === 'free' ||
-          parsedCost === 0 ||
-          (typeof data?.card_value === 'string' && data.card_value.toLowerCase().includes('gratis'))
+          !invitedBy &&
+          data?.is_free !== false &&
+          data?.type !== 'paid' &&
+          (
+            isFreeQuery || 
+            data?.is_free === true || 
+            data?.is_free === 'true' || 
+            data?.is_free === 1 || 
+            data?.type === 'free' ||
+            (typeof data?.card_value === 'string' && data.card_value.toLowerCase().includes('gratis')) ||
+            (parsedCost === 0 && data?.is_free === true)
+          )
         );
         if (isFree) {
           if (invitedBy) {

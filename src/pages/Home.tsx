@@ -115,15 +115,15 @@ export default function Home() {
 
   const checkIsFree = (g: any) => {
     if (!g) return false;
+    if (g.is_free === false || g.type === 'paid') return false;
     const cardValNum = parseInt(String(g.card_value || '0').replace(/[^0-9]/g, ''), 10) || 0;
+    if (cardValNum > 0) return false;
     return Boolean(
       g.is_free === true ||
       g.is_free === 'true' ||
       g.is_free === 1 ||
       g.type === 'free' ||
-      cardValNum === 0 ||
-      g.card_value === '0' ||
-      g.card_value === '$0'
+      (typeof g.card_value === 'string' && g.card_value.toLowerCase().includes('gratis'))
     );
   };
 
@@ -636,8 +636,12 @@ export default function Home() {
                   <Ticket size={30} className="text-yellow-400" />
                 </div>
                 <div className="text-left">
-                  <span className="block text-2xl font-black leading-none mb-1 text-white tracking-tight">¡VINCÚLATE YA!</span>
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Adquiere tus cartones al instante</p>
+                  <span className="block text-2xl font-black leading-none mb-1 text-white tracking-tight">
+                    {hasPaidGames ? "¡VINCÚLATE YA!" : "¡REGÍSTRATE EN LA SALA!"}
+                  </span>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+                    {hasPaidGames ? "Adquiere tus cartones al instante" : "Crea tu cuenta oficial para participar"}
+                  </p>
                 </div>
               </div>
               <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center border border-white/5 group-hover:translate-x-1 transition-all">
