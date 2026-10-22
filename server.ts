@@ -10831,16 +10831,24 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     getChannel(cleanTenant).publish('new_player', newPlayer);
     invalidatePlayersCaches(cleanTenant);
 
-    // Notificar al Administrador de la sala sobre el nuevo usuario registrado (Push + In-App)
+    // Notificar al Administrador de la sala sobre el nuevo usuario / compra de cartones (Push + In-App)
     try {
       const cardsMade = isGiftReg ? 1 : (isFreeGame ? 2 : (finalCardCount > 0 ? finalCardCount : 0));
-      const cardMsg = cardsMade > 0 ? ` con ${cardsMade} cartón(es)` : ' (solo registro de cuenta)';
-      sendPushNotification({
-        recipient: 'admin',
-        title: '👤 Nuevo Jugador Registrado',
-        message: `Se ha registrado ${name || 'Jugador'} (${phone})${cardMsg} en la sala.`,
-        tenantId: cleanTenant
-      }).catch(e => console.warn('[New Player Admin Push Error]:', e));
+      if (cardsMade > 0 && !isFreeGame && !isGiftReg) {
+        sendPushNotification({
+          recipient: 'admin',
+          title: '🎟️ Nueva Compra de Cartones',
+          message: `El nuevo jugador ${name || 'Jugador'} (${phone}) compró ${cardsMade} cartón(es) para "${game?.name || 'la partida'}".`,
+          tenantId: cleanTenant
+        }).catch(e => console.warn('[New Player Card Purchase Admin Push Error]:', e));
+      } else if (cardsMade === 0) {
+        sendPushNotification({
+          recipient: 'admin',
+          title: '👤 Nuevo Jugador Registrado',
+          message: `Se ha registrado ${name || 'Jugador'} (${phone}) (solo registro de cuenta) en la sala.`,
+          tenantId: cleanTenant
+        }).catch(e => console.warn('[New Player Admin Push Error]:', e));
+      }
     } catch (e) {}
 
     try {
@@ -11027,10 +11035,11 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
 
       // Notify admin about accredited recharge
       try {
+        const playerName = player?.name ? `${player.name} (${phone})` : phone;
         sendPushNotification({
           recipient: 'admin',
           title: '💰 Recarga Aprobada y Acreditada',
-          message: `El jugador con celular ${phone} recargó $${numericAmount.toLocaleString('es-CO')} automáticamente.`,
+          message: `El jugador ${playerName} recargó $${numericAmount.toLocaleString('es-CO')} en su billetera digital.`,
           tenantId: rechargeTenantId
         }).catch(e => console.warn('[Recharge Auto Admin Push Error]:', e));
       } catch (e) {}
@@ -11044,10 +11053,11 @@ app.post('/api/wallet/recharge-request', upload.single('receipt'), async (req: a
     } else {
       // Notify admin about pending manual recharge (Push + In-App strictly scoped by tenant)
       try {
+        const playerName = player?.name ? `${player.name} (${phone})` : phone;
         sendPushNotification({
           recipient: 'admin',
           title: '📥 Nueva Solicitud de Recarga',
-          message: `El jugador con celular ${phone} solicita una recarga de $${numericAmount.toLocaleString('es-CO')}. Por favor revisa y verifica el comprobante en tu panel.`,
+          message: `El jugador ${playerName} solicita una recarga de $${numericAmount.toLocaleString('es-CO')}. Revisa el comprobante en tu panel.`,
           tenantId: requestTenantId
         }).catch(e => console.warn('[Recharge Manual Admin Push Error]:', e));
       } catch (e) {}
@@ -12679,8 +12689,10 @@ async function sendPushNotification({ recipient, phone, title, message, url, ten
     }
 
     const roomSlug = tenantInfo?.slug || (scopedTenant !== 'default' && scopedTenant !== 'global' ? scopedTenant : '');
-    const roomPath = roomSlug ? `/sala/${roomSlug}` : '';
-    const appUrl = url || `${getAppUrl()}${roomPath}`;
+    const defaultAdminPath = roomSlug ? `/sala/${roomSlug}/admin` : '/admin';
+    const defaultPlayerPath = roomSlug ? `/sala/${roomSlug}` : '';
+    const targetPath = recipient === 'admin' ? defaultAdminPath : defaultPlayerPath;
+    const appUrl = url || `${getAppUrl()}${targetPath}`;
 
     // Direct fetch for OneSignal with full Mobile & Desktop Web Push compatibility
     const notificationPayload: any = {
@@ -12701,37 +12713,35 @@ async function sendPushNotification({ recipient, phone, title, message, url, ten
     };
 
     if (recipient === 'admin') {
-      if (scopedTenant && scopedTenant !== 'default' && scopedTenant !== 'global') {
+      const cleanTenantFilter = (scopedTenant === 'default' ? 'demo' : scopedTenant).toLowerCase();
+      if (cleanTenantFilter && cleanTenantFilter !== 'global') {
         notificationPayload.filters = [
-          { field: "tag", key: "tenant_id", relation: "=", value: scopedTenant },
+          { field: "tag", key: "role", relation: "=", value: "admin" },
           { operator: "AND" },
-          { field: "tag", key: "role", relation: "=", value: "admin" }
+          { field: "tag", key: "tenant_id", relation: "=", value: cleanTenantFilter }
         ];
       } else {
         notificationPayload.filters = [
           { field: "tag", key: "role", relation: "=", value: "admin" }
         ];
       }
-      if (targetIds.length > 0) {
-        notificationPayload.include_external_user_ids = Array.from(new Set(targetIds.map(t => String(t))));
-      }
     } else if (recipient === 'all') {
-      if (scopedTenant && scopedTenant !== 'default' && scopedTenant !== 'global') {
+      const cleanTenantFilter = (scopedTenant === 'default' ? 'demo' : scopedTenant).toLowerCase();
+      if (cleanTenantFilter && cleanTenantFilter !== 'global') {
         notificationPayload.filters = [
-          { field: "tag", key: "tenant_id", relation: "=", value: scopedTenant }
+          { field: "tag", key: "tenant_id", relation: "=", value: cleanTenantFilter }
         ];
       } else {
         notificationPayload.included_segments = ["Subscribed Users", "Total Subscriptions", "Active Users", "All"];
       }
+    } else if (phone) {
+      const cleanPhone = normalizePhone(phone);
+      notificationPayload.filters = [
+        { field: "tag", key: "phone", relation: "=", value: cleanPhone }
+      ];
     } else if (targetIds.length > 0) {
       const uniqueTargetIds = Array.from(new Set(targetIds.map(t => String(t))));
       notificationPayload.include_external_user_ids = uniqueTargetIds;
-      if (phone) {
-        const cleanPhone = normalizePhone(phone);
-        if (cleanPhone) {
-          notificationPayload.filters = [{ field: "tag", key: "phone", relation: "=", value: cleanPhone }];
-        }
-      }
     } else {
       console.log('[Notification] In-app notification delivered to DB. No external user IDs mapped for browser push.');
       return { success: true, delivered_in_app: true };

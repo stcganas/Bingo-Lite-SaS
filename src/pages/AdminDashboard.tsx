@@ -7,6 +7,8 @@ import { announceBall } from '../utils/speech';
 import NotificationBell from '../components/NotificationBell';
 import { PWAInstallButton } from '../components/PWAInstallButton';
 import NotificationAdmin from '../components/NotificationAdmin';
+import PushSubscriptionBanner from '../components/PushSubscriptionBanner';
+import { loginOneSignal } from '../lib/onesignal';
 import { useAuth } from '../AuthContext';
 import toast, { Toaster } from 'react-hot-toast';
 import clsx from 'clsx';
@@ -197,6 +199,13 @@ export default function AdminDashboard() {
       console.error('Error stopping DJ BG:', err);
     }
   };
+
+  useEffect(() => {
+    if (user && (user.role === 'admin' || user.role === 'superadmin')) {
+      const roomTenant = currentTenant || user.tenant_id || 'bingo-lite';
+      loginOneSignal(user.uid, user.email || user.phone, 'admin', roomTenant).catch(() => {});
+    }
+  }, [user?.uid, currentTenant]);
 
   useEffect(() => {
     const fetchAIPresets = async () => {
@@ -2979,6 +2988,9 @@ export default function AdminDashboard() {
             </span>
           </div>
         </div>
+
+        {/* Banner de Activación de Alertas Web Push para Administrador */}
+        <PushSubscriptionBanner className="mb-4" />
 
         {/* Tabs Navigation - Slide Tabs */}
         <div className="bg-white p-2 rounded-2xl shadow-lg border border-slate-200 mb-6 sticky top-0 z-40 backdrop-blur-md bg-white/90">

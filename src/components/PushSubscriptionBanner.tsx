@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BellRing, CheckCircle2, X, Sparkles, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { promptPushPermission, getSubscriptionStatus, sendTestNotification } from '../lib/onesignal';
+import { promptPushPermission, getSubscriptionStatus, sendTestNotification, loginOneSignal } from '../lib/onesignal';
 import { useAuth } from '../AuthContext';
 import toast from 'react-hot-toast';
 
@@ -60,8 +60,16 @@ export default function PushSubscriptionBanner({
     try {
       const ok = await promptPushPermission();
       if (ok) {
+        if (user?.uid) {
+          await loginOneSignal(user.uid, user.phone || user.email, user.role || 'player', user.tenant_id);
+        }
         setIsSubscribed(true);
-        toast.success('¡Notificaciones Web Push activadas con éxito! 🔔', { icon: '🎉' });
+        toast.success(
+          user?.role === 'admin'
+            ? '¡Alertas de Administrador activadas! 🔔 Recibirás avisos de compras y recargas.'
+            : '¡Notificaciones Web Push activadas con éxito! 🔔',
+          { icon: '🎉' }
+        );
         
         if (user?.phone) {
           sendTestNotification(user.phone).catch(() => {});
@@ -130,21 +138,23 @@ export default function PushSubscriptionBanner({
           <div className="flex-1 min-w-0 pr-4">
             <div className="flex items-center gap-2">
               <span className="bg-white/20 text-[10px] font-black uppercase px-2 py-0.5 rounded-full tracking-wider">
-                🔔 Notificaciones en Tiempo Real
+                {user?.role === 'admin' ? '🛡️ Alertas de Sala en Vivo' : '🔔 Notificaciones en Tiempo Real'}
               </span>
               <span className="flex items-center gap-1 text-[10px] font-bold text-yellow-100">
-                <Sparkles size={11} /> ¡No te pierdas ningún sorteo!
+                <Sparkles size={11} /> {user?.role === 'admin' ? 'Recargas y Compras' : '¡No te pierdas ningún sorteo!'}
               </span>
             </div>
             
             <h4 className="text-base sm:text-lg font-black text-white leading-tight mt-1">
-              {isSubscribed ? '¡Notificaciones Push Activadas!' : '¿Deseas enterarte cuando inicie tu juego y cuando ganes?'}
+              {isSubscribed 
+                ? (user?.role === 'admin' ? '¡Alertas de Administrador Activas!' : '¡Notificaciones Push Activadas!') 
+                : (user?.role === 'admin' ? '¿Deseas recibir avisos cuando compren cartones o pidan recargas?' : '¿Deseas enterarte cuando inicie tu juego y cuando ganes?')}
             </h4>
             
             <p className="text-xs sm:text-sm text-yellow-100 font-medium mt-0.5 leading-snug">
               {isSubscribed 
-                ? 'Recibirás avisos instantáneos de nuevos juegos, pagos aprobados y ganadores.' 
-                : 'Activa las notificaciones web para recibir alertas de cartones aprobados, inicio de partidas, ganadores y recargas.'}
+                ? (user?.role === 'admin' ? 'Recibirás avisos web push instantáneos cuando un usuario compre cartones o solicite recargar su billetera.' : 'Recibirás avisos instantáneos de nuevos juegos, pagos aprobados y ganadores.') 
+                : (user?.role === 'admin' ? 'Activa las alertas Web Push en este navegador para enterarte al instante de nuevas compras de cartones y solicitudes de recargas.' : 'Activa las notificaciones web para recibir alertas de cartones aprobados, inicio de partidas, ganadores y recargas.')}
             </p>
           </div>
 
@@ -162,7 +172,7 @@ export default function PushSubscriptionBanner({
                 className="w-full sm:w-auto px-5 py-3 bg-slate-900 hover:bg-black text-yellow-300 font-black text-xs sm:text-sm rounded-xl transition flex items-center justify-center gap-2 shadow-lg active:scale-95 cursor-pointer disabled:opacity-50"
               >
                 <BellRing size={16} />
-                <span>{isActivating ? 'Activando...' : 'Activar Notificaciones 🔔'}</span>
+                <span>{isActivating ? 'Activando...' : (user?.role === 'admin' ? 'Activar Alertas de Sala 🔔' : 'Activar Notificaciones 🔔')}</span>
               </button>
             )}
           </div>
