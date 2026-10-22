@@ -1286,7 +1286,23 @@ export default function AdminDashboard() {
       const res = await apiFetch(`/api/admin/players/wallets?_t=${timestamp}${tenantParam}`);
       if (res.ok) {
         const data = await res.json();
-        setWalletPlayers(data);
+        if (Array.isArray(data)) {
+          setWalletPlayers((prev) => {
+            const mapPrev = new Map(prev.map(p => [normalizePhone(p.phone), p.balance]));
+            return data.map((player: any) => {
+              const cleanP = normalizePhone(player.phone);
+              const prevBal = mapPrev.get(cleanP);
+              // Si el admin acaba de acreditar un saldo y el servidor aún está replicando o devolvió 0, no borrar el saldo confirmado
+              const effectiveBal = (player.balance === 0 && typeof prevBal === 'number' && prevBal > 0)
+                ? prevBal
+                : player.balance;
+              return {
+                ...player,
+                balance: effectiveBal
+              };
+            });
+          });
+        }
       }
     } catch (err) {
       // ignored

@@ -849,12 +849,17 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
       const res = await apiFetch(`/api/wallet?phone=${normalizedPhone}${tenantParam}&gameId=${gameStateRef.current?.id || ''}&_t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
-        // Solo actualizar balance si la respuesta es autenticada y trae un número válido
-        if (typeof data.balance === 'number' && data.authenticated !== false) {
-          setWalletBalance(data.balance);
+        // Aceptar balance oficial o actualBalance si está presente
+        const incomingBalance = (typeof data.balance === 'number' && data.balance > 0)
+          ? data.balance
+          : (typeof data.actualBalance === 'number' ? data.actualBalance : (typeof data.balance === 'number' ? data.balance : null));
+        if (incomingBalance !== null) {
+          setWalletBalance(incomingBalance);
         }
         if (typeof data.activated === 'boolean') {
           setWalletActivated(data.activated);
+        } else if (incomingBalance && incomingBalance > 0) {
+          setWalletActivated(true);
         }
       }
     } catch (err: any) {
@@ -1282,8 +1287,12 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
 
     const onWalletUpdated = (msg: any) => {
       console.log('DEBUG: Evento wallet_updated recibido en PlayerDashboard:', msg.data);
-      if (userRef.current?.phone && comparePhones(userRef.current.phone, msg.data.phone)) {
-        setWalletBalance(msg.data.balance);
+      const myPhone = userRef.current?.phone || (player as any)?.phone;
+      if (myPhone && comparePhones(myPhone, msg.data?.phone)) {
+        if (typeof msg.data?.balance === 'number') {
+          setWalletBalance(msg.data.balance);
+          setWalletActivated(true);
+        }
         fetchWalletHistory();
       }
     };

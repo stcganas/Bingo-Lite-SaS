@@ -469,25 +469,34 @@ async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<nu
   if (!phone) return 0;
   const targetTenant = normalizeTenant(tenantId);
   try {
-    let query = supabase.from('wallets').select('balance, tenant_id').eq('phone', phone);
-    if (targetTenant !== 'global') {
-      if (targetTenant === 'bingo-lite') {
-        query = query.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
-      } else {
-        query = query.eq('tenant_id', targetTenant);
-      }
-    }
+    let query = supabase.from('wallets').select('balance, tenant_id, updated_at').eq('phone', phone);
     const { data: rows, error } = await query.order('updated_at', { ascending: false });
     if (error) {
       console.warn('[getWalletBalance] Error consultando wallets:', error.message);
       return 0;
     }
     if (rows && rows.length > 0) {
-      // Priorizar coincidencia exacta con targetTenant
+      // 1. Priorizar coincidencia exacta con targetTenant
       const exactMatch = rows.find(r => normalizeTenant(r.tenant_id) === targetTenant);
-      if (exactMatch) return Number(exactMatch.balance) || 0;
+      if (exactMatch && typeof exactMatch.balance === 'number') {
+        return Number(exactMatch.balance);
+      }
+      // 2. Si targetTenant es bingo-lite, admitir default o null
+      if (targetTenant === 'bingo-lite') {
+        const liteMatch = rows.find(r => {
+          const t = normalizeTenant(r.tenant_id);
+          return t === 'bingo-lite' || t === 'default';
+        });
+        if (liteMatch && typeof liteMatch.balance === 'number') {
+          return Number(liteMatch.balance);
+        }
+      }
+      // 3. Fallback inteligente: si el jugador tiene saldo en alguna variante de la misma sala o saldo positivo registrado
       const positiveRow = rows.find(r => Number(r.balance) > 0);
-      return positiveRow ? Number(positiveRow.balance) : Number(rows[0].balance) || 0;
+      if (positiveRow) {
+        return Number(positiveRow.balance) || 0;
+      }
+      return Number(rows[0].balance) || 0;
     }
     return 0;
   } catch (e: any) {
@@ -507,8 +516,14 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
 
   const currentQueue = walletUpdateQueues.get(queueKey) || Promise.resolve();
 
-  const execution = currentQueue.catch(() => 0).then(async () => {
-    // 1. Obtener saldo actual de la sala
+  // Timeout de seguridad en la cola para nunca bloquear transacciones si una promesa queda colgada
+  const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout en cola de billetera')), 15000));
+
+  const execution = Promise.race([
+    currentQueue.catch(() => 0),
+    timeoutPromise.catch(() => 0)
+  ]).then(async () => {
+    // 1. Obtener saldo actual
     const currentBalance = await getWalletBalance(phone, targetTenant);
     const newBalance = currentBalance + amount;
 
@@ -516,10 +531,19 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       throw new Error(`Saldo insuficiente. Saldo actual: $${currentBalance}, requerido: $${Math.abs(amount)}`);
     }
 
-    // 2. Determinar el tenant_id efectivo para la clave compuesta (phone, tenant_id)
+    // 2. Determinar el tenant_id efectivo:
+    // Prioridad: Si el jugador existe en players, respetar su tenant_id para no desvincular billeteras
     let effectiveTenant = targetTenant;
+    try {
+      const specificPlayer = await findSpecificPlayer(phone, targetTenant);
+      if (specificPlayer && specificPlayer.tenant_id) {
+        effectiveTenant = normalizeTenant(specificPlayer.tenant_id);
+      }
+    } catch (pErr) {
+      // Ignorar y continuar con targetTenant
+    }
 
-    // Asegurar que effectiveTenant exista en tenants (por id o slug) para respetar la foreign key
+    // Asegurar que effectiveTenant exista en tenants (por id o slug) para respetar foreign keys
     try {
       const { data: tenantCheck } = await supabase.from('tenants')
         .select('id, slug')
@@ -542,23 +566,54 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       updated_at: new Date().toISOString()
     };
 
-    // 3. Persistir en la tabla wallets de forma atómica con UPSERT
-    const { error: upsertErr } = await supabase.from('wallets')
-      .upsert(payload, { onConflict: 'phone,tenant_id' });
+    // 3. Persistir en la tabla wallets de forma atómica y verificar resultado
+    let savedSuccessfully = false;
 
-    if (upsertErr) {
-      console.error('[updateWalletBalance] Error crítico al persistir wallet:', upsertErr);
-      // Fallback con UPDATE directo si ya existía
-      const { error: updateErr } = await supabase.from('wallets')
+    // Intentar primero con UPSERT
+    const { data: upsertData, error: upsertErr } = await supabase.from('wallets')
+      .upsert(payload, { onConflict: 'phone,tenant_id' })
+      .select();
+
+    if (!upsertErr && upsertData && upsertData.length > 0) {
+      savedSuccessfully = true;
+    } else {
+      if (upsertErr) {
+        console.warn('[updateWalletBalance] Upsert falló, intentando actualización directa:', upsertErr.message);
+      }
+      // Fallback 1: UPDATE coincidiendo phone y tenant_id
+      const { data: updateData, error: updateErr } = await supabase.from('wallets')
         .update({ balance: newBalance, updated_at: new Date().toISOString() })
         .eq('phone', phone)
-        .eq('tenant_id', effectiveTenant);
-      if (updateErr) {
-        throw new Error(`No se pudo persistir el saldo en base de datos: ${upsertErr.message}`);
+        .eq('tenant_id', effectiveTenant)
+        .select();
+
+      if (!updateErr && updateData && updateData.length > 0) {
+        savedSuccessfully = true;
+      } else {
+        // Fallback 2: UPDATE coincidiendo únicamente phone si la tabla tiene restricción única mono-tenant por phone
+        const { data: updatePhoneData, error: updatePhoneErr } = await supabase.from('wallets')
+          .update({ balance: newBalance, tenant_id: effectiveTenant, updated_at: new Date().toISOString() })
+          .eq('phone', phone)
+          .select();
+
+        if (!updatePhoneErr && updatePhoneData && updatePhoneData.length > 0) {
+          savedSuccessfully = true;
+        } else {
+          // Fallback 3: INSERT simple
+          const { data: insertData, error: insertErr } = await supabase.from('wallets')
+            .insert(payload)
+            .select();
+          if (!insertErr && insertData && insertData.length > 0) {
+            savedSuccessfully = true;
+          } else {
+            console.error('[updateWalletBalance] Error crítico persistiendo wallet:', insertErr || updatePhoneErr || updateErr || upsertErr);
+            throw new Error(`No se pudo persistir el saldo de la billetera en la base de datos.`);
+          }
+        }
       }
     }
 
-    // 4. Registrar en historial de transacciones
+    // 4. Registrar en historial de transacciones (no bloqueante)
     try {
       await supabase.from('wallet_transactions').insert({
         player_phone: phone,
@@ -580,12 +635,18 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       }
     }
 
-    // 5. Emitir evento en tiempo real vía Ably a la sala y al canal principal
+    // 5. Emitir evento en tiempo real vía Ably a la sala y canales relacionados sin perder destinatarios
     try {
       const updateData = { phone, balance: newBalance, tenantId: effectiveTenant };
       getChannel(effectiveTenant).publish('wallet_updated', updateData);
-      if (effectiveTenant !== 'default' && effectiveTenant !== 'bingo-lite') {
+      if (effectiveTenant !== 'bingo-lite') {
+        getChannel('bingo-lite').publish('wallet_updated', updateData);
+      }
+      if (effectiveTenant !== 'default') {
         getChannel('default').publish('wallet_updated', updateData);
+      }
+      if (targetTenant !== effectiveTenant && targetTenant !== 'bingo-lite' && targetTenant !== 'default') {
+        getChannel(targetTenant).publish('wallet_updated', updateData);
       }
     } catch (ablyErr: any) {
       console.warn('[updateWalletBalance] Advertencia al emitir evento Ably:', ablyErr?.message);
@@ -2113,24 +2174,13 @@ app.get('/api/wallet', async (req, res) => {
 
     const balance = await getWalletBalance(phone, cleanTenant);
 
-    // Si el usuario tiene contraseña pero aún no está autenticado (ej. digitando su número en Registro):
-    // Devolvemos 200 con hasPassword: true para que el formulario le muestre el campo de contraseña sin romper la UI.
-    if (hasPassword && !isAuthenticated) {
-      return res.json({
-        balance: 0,
-        actualBalance: balance,
-        activated,
-        hasPassword: true,
-        authenticated: false
-      });
-    }
-
-    // Si no tiene contraseña o ya está autenticado, retornamos el saldo oficial
+    // Retornamos el saldo oficial real garantizando que nunca quede en $0 para el jugador
     res.json({
       balance,
+      actualBalance: balance,
       activated,
       hasPassword,
-      authenticated: true
+      authenticated: isAuthenticated || !hasPassword
     });
   } catch (err: any) {
     console.error('[GET /api/wallet error]:', err);
@@ -2257,14 +2307,24 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
     if (error) throw error;
 
     // 2. Consulta en bloque a la tabla wallets
+    // Consultamos por los teléfonos de los jugadores encontrados para no perder saldos por diferencias de slug de sala
+    const playerPhones = Array.from(new Set((players || []).map(p => normalizePhone(p.phone)).filter(Boolean)));
+    
     let walletQuery = supabase.from('wallets').select('phone, balance, tenant_id, updated_at');
-    if (targetTenant !== 'global') {
+    if (playerPhones.length > 0) {
+      if (targetTenant !== 'global') {
+        walletQuery = walletQuery.or(`phone.in.(${playerPhones.join(',')}),tenant_id.eq.${targetTenant}`);
+      } else {
+        walletQuery = walletQuery.in('phone', playerPhones);
+      }
+    } else if (targetTenant !== 'global') {
       if (targetTenant === 'bingo-lite') {
         walletQuery = walletQuery.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
       } else {
         walletQuery = walletQuery.eq('tenant_id', targetTenant);
       }
     }
+
     const { data: allWallets } = await walletQuery;
     const walletMap = new Map<string, number>();
     (allWallets || []).forEach((w: any) => {
@@ -2272,7 +2332,12 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
       if (!cleanPhone) return;
       const bal = Number(w.balance) || 0;
       const current = walletMap.get(cleanPhone);
-      if (current === undefined || bal > current) {
+      const isExactTenant = normalizeTenant(w.tenant_id) === targetTenant;
+      
+      // Priorizar coincidencia exacta con targetTenant, o si no hay saldo previo, o si el nuevo saldo es positivo y mayor
+      if (current === undefined || isExactTenant || (bal > 0 && current === 0)) {
+        walletMap.set(cleanPhone, bal);
+      } else if (bal > current && !isExactTenant) {
         walletMap.set(cleanPhone, bal);
       }
     });
@@ -11325,18 +11390,44 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
       return res.status(400).json({ error: 'Esta solicitud de recarga ya ha sido aprobada previamente' });
     }
 
-    // Extracción limpia y robusta del monto (maneja formatos "$ 20.000", "20,000", etc.)
-    const rawAmountStr = String(receipt.amount ?? '0').replace(/[^0-9.]/g, '');
-    const amount = parseFloat(rawAmountStr) || 0;
+    // Extracción limpia y robusta del monto (maneja tipos numéricos, "$ 20.000", "20.000", "20,000", etc.)
+    let amount = 0;
+    if (typeof receipt.amount === 'number' && !isNaN(receipt.amount) && receipt.amount > 0) {
+      amount = receipt.amount;
+    } else {
+      const str = String(receipt.amount ?? '0').trim();
+      const cleaned = str.replace(/[^0-9.,]/g, '');
+      if (cleaned.includes('.') && !cleaned.includes(',')) {
+        const parts = cleaned.split('.');
+        if (parts.length > 2 || (parts.length === 2 && parts[1].length === 3)) {
+          amount = parseFloat(parts.join('')) || 0;
+        } else {
+          amount = parseFloat(cleaned) || 0;
+        }
+      } else if (cleaned.includes(',') && !cleaned.includes('.')) {
+        const parts = cleaned.split(',');
+        if (parts.length > 2 || (parts.length === 2 && parts[1].length === 3)) {
+          amount = parseFloat(parts.join('')) || 0;
+        } else {
+          amount = parseFloat(cleaned.replace(',', '.')) || 0;
+        }
+      } else if (cleaned.includes('.') && cleaned.includes(',')) {
+        amount = parseFloat(cleaned.replace(/\./g, '').replace(',', '.')) || 0;
+      } else {
+        amount = parseFloat(cleaned) || 0;
+      }
+    }
+
     if (amount <= 0) {
       return res.status(400).json({ error: 'El comprobante no contiene un monto numérico positivo válido para acreditar' });
     }
 
+    const cleanPlayerPhone = normalizePhone(player.phone);
     const targetTenant = normalizeTenant(player.tenant_id || adminUser?.tenant_id);
 
-    // 1. Acreditar saldo en la billetera de forma atómica
+    // 1. Acreditar saldo en la billetera de forma atómica y persistente
     const newBalance = await updateWalletBalance(
-      player.phone,
+      cleanPlayerPhone,
       amount,
       `Recarga de billetera aprobada por administrador`,
       'recharge',
@@ -11344,7 +11435,7 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
     );
 
     // Activar la billetera explícitamente
-    await activateWallet(player.phone, 0, targetTenant);
+    await activateWallet(cleanPlayerPhone, 0, targetTenant);
 
     // 2. Marcar como aprobado en el historial de comprobantes
     receipt.is_silent_error = false;
@@ -11366,12 +11457,19 @@ app.post('/api/admin/recharge-requests/:id/approve', requireAdmin, async (req, r
 
     // 3. Emitir eventos en tiempo real vía Ably a la sala y canales correspondientes
     try {
-      const channel = getChannel(targetTenant);
-      channel.publish('wallet_updated', { phone: player.phone, balance: newBalance, tenantId: targetTenant });
-      channel.publish('recharge_request_submitted', { playerId: player.id, status: 'approved' });
-      if (targetTenant !== 'default' && targetTenant !== 'bingo-lite') {
-        getChannel('default').publish('wallet_updated', { phone: player.phone, balance: newBalance, tenantId: targetTenant });
-        getChannel('default').publish('recharge_request_submitted', { playerId: player.id, status: 'approved' });
+      const updatePayload = { phone: cleanPlayerPhone, balance: newBalance, tenantId: targetTenant };
+      const reqPayload = { playerId: player.id, status: 'approved', phone: cleanPlayerPhone, tenantId: targetTenant };
+
+      getChannel(targetTenant).publish('wallet_updated', updatePayload);
+      getChannel(targetTenant).publish('recharge_request_submitted', reqPayload);
+
+      if (targetTenant !== 'bingo-lite') {
+        getChannel('bingo-lite').publish('wallet_updated', updatePayload);
+        getChannel('bingo-lite').publish('recharge_request_submitted', reqPayload);
+      }
+      if (targetTenant !== 'default') {
+        getChannel('default').publish('wallet_updated', updatePayload);
+        getChannel('default').publish('recharge_request_submitted', reqPayload);
       }
     } catch (ablyErr: any) {
       console.warn('[Approve Recharge] Advertencia al emitir evento Ably:', ablyErr?.message);
