@@ -97,12 +97,29 @@ export default function SaaSMarketingLanding() {
     e.preventDefault();
     setFormError(null);
 
-    if (!roomForm.admin_email || !roomForm.admin_password) {
-      setFormError('Debes ingresar el correo y la contraseña para el Administrador de tu sala.');
+    if (!roomForm.name || !roomForm.name.trim()) {
+      setFormError('El nombre de la sala es obligatorio.');
       return;
     }
 
-    if (roomForm.admin_password.length < 6) {
+    if (!roomForm.admin_email || !roomForm.admin_email.trim()) {
+      setFormError('El correo electrónico para el Administrador de tu sala es obligatorio.');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(roomForm.admin_email.trim())) {
+      setFormError('Por favor ingresa un correo electrónico válido (ej. admin@misala.com).');
+      return;
+    }
+
+    const cleanContactPhone = (roomForm.contact_phone || '').replace(/\D/g, '');
+    if (!cleanContactPhone || cleanContactPhone.length !== 10) {
+      setFormError('El número de teléfono o WhatsApp de la sala es obligatorio y debe tener exactamente 10 dígitos.');
+      return;
+    }
+
+    if (!roomForm.admin_password || roomForm.admin_password.length < 6) {
       setFormError('La contraseña del administrador debe tener al menos 6 caracteres.');
       return;
     }
@@ -772,13 +789,15 @@ export default function SaaSMarketingLanding() {
 
                     <div>
                       <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">
-                        Teléfono / WhatsApp
+                        Teléfono / WhatsApp de la Sala *
                       </label>
                       <input
+                        required
                         type="tel"
-                        placeholder="Ej. 3001234567"
+                        maxLength={10}
+                        placeholder="Ej. 3001234567 (10 dígitos)"
                         value={roomForm.contact_phone}
-                        onChange={e => setRoomForm({...roomForm, contact_phone: e.target.value})}
+                        onChange={e => setRoomForm({...roomForm, contact_phone: e.target.value.replace(/\D/g, '').slice(0, 10)})}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white text-xs focus:border-amber-500 outline-none transition"
                       />
                     </div>

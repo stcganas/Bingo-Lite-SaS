@@ -1284,12 +1284,25 @@ app.post('/api/tenants', async (req, res) => {
       admin_password
     } = req.body;
 
-    if (!name || !name.trim()) {
+    const cleanAdminEmail = (admin_email || '').trim().toLowerCase();
+    const cleanContactPhone = contact_phone ? normalizePhone(contact_phone) : '';
+    const cleanName = (name || '').trim();
+
+    if (!cleanName) {
       return res.status(400).json({ error: 'El nombre de la sala es obligatorio.' });
     }
 
-    if (!admin_email || !admin_email.trim()) {
+    if (!cleanAdminEmail) {
       return res.status(400).json({ error: 'El correo electrónico del administrador de la sala es obligatorio.' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanAdminEmail)) {
+      return res.status(400).json({ error: 'Por favor, ingresa un correo electrónico válido para el administrador.' });
+    }
+
+    if (!cleanContactPhone || cleanContactPhone.length !== 10) {
+      return res.status(400).json({ error: 'El número de teléfono o WhatsApp de la sala es obligatorio y debe tener exactamente 10 dígitos.' });
     }
 
     if (!admin_password || admin_password.length < 6) {
@@ -1297,7 +1310,7 @@ app.post('/api/tenants', async (req, res) => {
     }
 
     // Normalizar slug (solo letras, números y guiones)
-    const slug = (rawSlug || name)
+    const slug = (rawSlug || cleanName)
       .toLowerCase()
       .trim()
       .normalize('NFD')
@@ -1311,17 +1324,72 @@ app.post('/api/tenants', async (req, res) => {
       return res.status(400).json({ error: `El identificador "${slug}" es una palabra reservada del sistema. Elige otro nombre.` });
     }
 
+    // PROTECCIÓN ESTRICTA CONTRA DATOS DUPLICADOS EN LA CREACIÓN DE SALAS
+    // 1. Verificar nombre de sala duplicado (case-insensitive)
+    if (supabase) {
+      const { data: duplicateName } = await supabase
+        .from('tenants')
+        .select('id, name')
+        .ilike('name', cleanName)
+        .maybeSingle();
+
+      if (duplicateName) {
+        return res.status(409).json({
+          error: `Ya existe una sala de bingo registrada con el nombre "${cleanName}". Por favor, elige un nombre diferente.`
+        });
+      }
+
+      // 2. Verificar correo electrónico de administrador duplicado
+      const { data: duplicateEmail } = await supabase
+        .from('tenants')
+        .select('id, name, admin_email')
+        .eq('admin_email', cleanAdminEmail)
+        .maybeSingle();
+
+      if (duplicateEmail) {
+        return res.status(409).json({
+          error: `El correo electrónico "${cleanAdminEmail}" ya está registrado en la sala "${duplicateEmail.name || duplicateEmail.id}". Los correos de las salas deben ser únicos.`
+        });
+      }
+
+      // 3. Verificar número de teléfono o WhatsApp duplicado
+      const { data: duplicatePhone } = await supabase
+        .from('tenants')
+        .select('id, name, contact_phone')
+        .eq('contact_phone', cleanContactPhone)
+        .maybeSingle();
+
+      if (duplicatePhone) {
+        return res.status(409).json({
+          error: `El número de teléfono "${cleanContactPhone}" ya está registrado en la sala "${duplicatePhone.name || duplicatePhone.id}". Los números de teléfono de las salas deben ser únicos.`
+        });
+      }
+    }
+
+    // Comprobación adicional en memoria caché de salas
+    for (const [key, val] of tenantsCache.entries()) {
+      const t = val.tenant;
+      if ((t.name || '').trim().toLowerCase() === cleanName.toLowerCase()) {
+        return res.status(409).json({ error: `Ya existe una sala de bingo registrada con el nombre "${cleanName}". Por favor, elige un nombre diferente.` });
+      }
+      if ((t.admin_email || '').trim().toLowerCase() === cleanAdminEmail) {
+        return res.status(409).json({ error: `El correo electrónico "${cleanAdminEmail}" ya está registrado en otra sala de bingo. Debe ser único.` });
+      }
+      if (t.contact_phone && normalizePhone(t.contact_phone) === cleanContactPhone) {
+        return res.status(409).json({ error: `El número de teléfono "${cleanContactPhone}" ya está registrado para otra sala de bingo. Debe ser único.` });
+      }
+    }
+
     // Código de acceso seguro a la sala (PIN alfanumérico)
     const accessCode = (rawCode && rawCode.trim())
       ? rawCode.trim().toUpperCase()
       : Math.random().toString(36).substring(2, 8).toUpperCase();
 
-    const cleanAdminEmail = admin_email.trim().toLowerCase();
     const hashedAdminPassword = hashPassword(admin_password);
 
     const tenantPayload: any = {
       id: slug,
-      name: name.trim(),
+      name: cleanName,
       slug: slug,
       subdomain: slug,
       access_code: accessCode,
@@ -1333,8 +1401,8 @@ app.post('/api/tenants', async (req, res) => {
       max_cards_per_game: 20000,
       admin_email: cleanAdminEmail,
       admin_password: hashedAdminPassword,
-      admin_name: (organizer_name || name).trim(),
-      contact_phone: contact_phone ? contact_phone.trim() : null
+      admin_name: (organizer_name || cleanName).trim(),
+      contact_phone: cleanContactPhone
     };
 
     // PREVENCIÓN ESTRICTA DE SECUESTRO DE SALAS (ROOM TAKEOVER)
@@ -10631,6 +10699,20 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     if (existingPlayer) {
       console.log('Actualizando jugador existente ID:', existingPlayer.id);
 
+      // PROTECCIÓN CONTRA JUGADORES DUPLICADOS: Si es solo registro de cuenta o sin juego, no permitir duplicar el teléfono
+      const isAccountOnlyRegistration = Boolean(
+        isRegisterOnly || 
+        !hasActiveGame || 
+        finalCardCount === 0 || 
+        payment_method === 'register_only'
+      );
+
+      if (isAccountOnlyRegistration) {
+        return res.status(409).json({
+          error: `El número de teléfono ${phone} ya se encuentra registrado en esta sala. El número de teléfono debe ser único para cada jugador. Por favor, inicia sesión con tu contraseña o ingresa a tu cuenta.`
+        });
+      }
+
       // Verificar contraseña si el jugador ya tiene una establecida
       if (existingPlayer.password && existingPlayer.password.trim() !== '') {
         const isMatch = verifyPassword(password, existingPlayer.password);
@@ -10813,6 +10895,11 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     }
 
     if (insertError) {
+      if (insertError.code === '23505' || insertError.message?.toLowerCase().includes('duplicate') || insertError.message?.toLowerCase().includes('unique')) {
+        return res.status(409).json({
+          error: `El número de teléfono ${phone} ya se encuentra registrado en esta sala. El número de teléfono debe ser único para cada jugador.`
+        });
+      }
       return res.status(500).json({ error: `Error de base de datos: ${insertError.message}` });
     }
 
@@ -12764,6 +12851,36 @@ async function sendPushNotification({ recipient, phone, title, message, url, ten
     const rawErrors = result?.errors || [];
     const errorList = Array.isArray(rawErrors) ? rawErrors.map(String) : [String(rawErrors)];
     let isNotSubscribedError = errorList.some(e => e.toLowerCase().includes('not subscribed'));
+
+    // FALLBACK INTELIGENTE PARA ADMINISTRADOR: Si el filtro específico por sala devolvió que ningún jugador está suscrito
+    // o 0 receptores, reenviar inmediatamente con el filtro universal role=admin para que las alertas lleguen sin falta
+    if ((isNotSubscribedError || result?.recipients === 0) && recipient === 'admin') {
+      console.log(`[Notification Dispatch] Retrying admin push with universal role=admin filter...`);
+      const fallbackAdminPayload = {
+        ...notificationPayload,
+        include_external_user_ids: undefined,
+        filters: [{ field: "tag", key: "role", relation: "=", value: "admin" }]
+      };
+
+      try {
+        const retryAdminRes = await fetch('https://onesignal.com/api/v1/notifications', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Authorization': `Key ${onesignalApiKey}`
+          },
+          body: JSON.stringify(fallbackAdminPayload)
+        });
+        const retryAdminResult = await retryAdminRes.json();
+        console.log('[Notification Dispatch] Universal Admin Retry Status:', retryAdminRes.status, 'Body:', JSON.stringify(retryAdminResult));
+
+        if (retryAdminRes.ok && retryAdminResult?.id && !retryAdminResult.errors) {
+          return { success: true, delivered_in_app: true, onesignal: retryAdminResult };
+        }
+      } catch (adminRetryErr) {
+        console.warn('[Notification Dispatch] Universal Admin Retry Error:', adminRetryErr);
+      }
+    }
 
     // Retry with phone tag filter if single player by external_id was not subscribed
     if (isNotSubscribedError && recipient === 'single' && phone) {

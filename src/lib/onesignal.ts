@@ -150,6 +150,7 @@ export const loginOneSignal = async (externalId: string, phone?: string, role?: 
           const currentId = OneSignal.User?.externalId;
           if (currentId !== externalId) {
             await OneSignal.login(externalId);
+            await new Promise(resolve => setTimeout(resolve, 250));
           }
 
           const tagsToAdd: Record<string, string> = {};
