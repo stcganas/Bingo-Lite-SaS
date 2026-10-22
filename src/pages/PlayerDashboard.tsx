@@ -1894,15 +1894,16 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
             <button 
               onClick={handleOpenGiftModal}
               className={clsx(
-                "flex flex-col items-center justify-center py-2 px-1.5 sm:px-2.5 text-white rounded-xl transition shadow-md border font-black text-center",
+                "flex flex-col items-center justify-center py-2 px-1.5 sm:px-2.5 text-white rounded-xl transition shadow-md border font-black text-center cursor-pointer",
                 hasGiftAccess 
-                  ? "bg-purple-600 hover:bg-purple-700 border-purple-400" 
-                  : "bg-purple-900 border-purple-800 text-purple-300"
+                  ? "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 border-purple-300 ring-2 ring-purple-400/50 shadow-purple-600/30" 
+                  : "bg-purple-900 border-purple-800 text-purple-300 hover:bg-purple-850"
               )}
+              title={hasGiftAccess ? "Regalar Cartones de Cortesía 🎁" : "Requiere 2 cartones activos para regalar"}
             >
               <div className="flex items-center gap-1">
-                <Gift size={14} className={hasGiftAccess ? "text-yellow-300" : "text-purple-300/50"} />
-                <span className="text-[10px] sm:text-xs uppercase tracking-wider">Regalar</span>
+                <Gift size={14} className={hasGiftAccess ? "text-yellow-300 animate-bounce" : "text-purple-300/50"} />
+                <span className="text-[10px] sm:text-xs uppercase tracking-wider font-black">Regalar</span>
               </div>
               <span className="text-[8px] sm:text-[9px] text-purple-200 font-bold uppercase mt-0.5">Cortesía</span>
             </button>
@@ -4228,163 +4229,174 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
           )}
         </AnimatePresence>
         
-        {/* Floating gift cards trigger */}
-        <button 
-          onClick={handleOpenGiftModal}
-          className={clsx(
-            "fixed bottom-6 left-6 z-[90] w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all border-4 border-white group",
-            hasGiftAccess 
-              ? "bg-purple-600 text-white hover:bg-purple-700 hover:scale-110 active:scale-90 cursor-pointer" 
-              : "bg-purple-900/80 text-purple-200 hover:bg-purple-900 cursor-pointer"
-          )}
-          title={hasGiftAccess ? "Regalar Cartones Gratis 🎁" : "Requiere al menos 2 cartones en juego para regalar 🔒"}
-        >
-          <Gift size={26} className={clsx(hasGiftAccess ? "text-yellow-300 animate-pulse" : "text-purple-300/50")} />
-          <span className="absolute left-16 bg-slate-800 text-white text-[10px] font-black uppercase tracking-wider py-1 px-2.5 rounded-lg opacity-0 group-hover:opacity-100 transition whitespace-nowrap pointer-events-none shadow-md">
+        {/* Floating gift cards trigger (Prioritario arriba) */}
+        <div className="relative group">
+          <button 
+            onClick={handleOpenGiftModal}
+            className={clsx(
+              "w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all border-4 border-white active:scale-90 group cursor-pointer",
+              hasGiftAccess 
+                ? "bg-gradient-to-tr from-purple-600 to-indigo-600 text-white hover:scale-110 shadow-purple-500/40" 
+                : "bg-purple-900/90 text-purple-200 hover:bg-purple-900"
+            )}
+            title={hasGiftAccess ? "Regalar Cartones Gratis 🎁" : "Requiere al menos 2 cartones en juego para regalar 🔒"}
+          >
+            <Gift size={26} className={clsx(hasGiftAccess ? "text-yellow-300 animate-pulse" : "text-purple-300/50")} />
+          </button>
+          <span className="absolute left-16 top-1/2 -translate-y-1/2 bg-slate-900/90 backdrop-blur-md text-white text-[10px] font-black uppercase tracking-wider py-1.5 px-3 rounded-xl opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-white/10 whitespace-nowrap z-20">
             {hasGiftAccess ? "Regalar Cartones 🎁" : "Requiere 2 cartones 🔒"}
           </span>
-        </button>
+        </div>
 
-        {/* Modal para cambiar/establecer contraseña del jugador */}
-        <AnimatePresence>
-          {showPasswordModal && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999]"
-            >
-              <motion.div 
-                initial={{ scale: 0.9, y: 20 }}
-                animate={{ scale: 1, y: 0 }}
-                exit={{ scale: 0.9, y: 20 }}
-                className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-slate-100 overflow-hidden relative"
-              >
-                <button 
-                  onClick={() => setShowPasswordModal(false)}
-                  className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition p-1 bg-slate-50 rounded-full hover:bg-slate-100"
-                >
-                  <X size={20} />
-                </button>
-                
-                <div className="flex items-center gap-3 mb-6 border-b pb-4">
-                  <div className="p-2 bg-amber-500/10 rounded-xl">
-                    <Key className="text-amber-500" size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Seguridad de tu Cuenta</h3>
-                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Establecer o cambiar tu contraseña</p>
-                  </div>
-                </div>
-                
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Contraseña Actual (Si ya tienes una)</label>
-                    <input 
-                      type="password" 
-                      placeholder="Déjalo en blanco si nunca has tenido una"
-                      value={oldPassword}
-                      onChange={e => setOldPassword(e.target.value)}
-                      className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 outline-none font-bold text-slate-700 bg-slate-50 focus:bg-white transition text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Nueva Contraseña</label>
-                    <input 
-                      type="password" 
-                      placeholder="Mínimo 4 caracteres"
-                      value={newPassword}
-                      onChange={e => setNewPassword(e.target.value)}
-                      className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 outline-none font-bold text-slate-700 transition text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Confirmar Nueva Contraseña</label>
-                    <input 
-                      type="password" 
-                      placeholder="Repite la contraseña"
-                      value={confirmPassword}
-                      onChange={e => setConfirmPassword(e.target.value)}
-                      className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 outline-none font-bold text-slate-700 transition text-sm"
-                    />
-                  </div>
-                </div>
-                
-                <div className="flex gap-3 mt-6 border-t pt-4">
-                  <button 
-                    disabled={isChangingPassword}
-                    onClick={async () => {
-                      if (!newPassword || newPassword.length < 4) {
-                        toast.error('La contraseña debe tener al menos 4 caracteres');
-                        return;
-                      }
-                      if (newPassword !== confirmPassword) {
-                        toast.error('Las contraseñas no coinciden');
-                        return;
-                      }
-                      setIsChangingPassword(true);
-                      try {
-                        const targetPhone = user?.phone || player?.phone;
-                        const response = await apiFetch('/api/players/change-password', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            phone: targetPhone,
-                            oldPassword: oldPassword.trim(),
-                            newPassword: newPassword.trim()
-                          })
-                        });
-                        const data = await response.json();
-                        if (response.ok) {
-                          toast.success('¡Seguridad de tu cuenta actualizada con éxito!');
-                          setShowPasswordModal(false);
-                          setOldPassword('');
-                          setNewPassword('');
-                          setConfirmPassword('');
-                        } else {
-                          toast.error(data.error || 'Error al cambiar contraseña');
-                        }
-                      } catch (err: any) {
-                        toast.error('Error al conectar con el servidor');
-                      } finally {
-                        setIsChangingPassword(false);
-                      }
-                    }}
-                    className={clsx(
-                      "flex-1 py-3 text-white font-black text-sm rounded-xl transition flex items-center justify-center gap-2",
-                      isChangingPassword ? "bg-slate-400 cursor-not-allowed" : "bg-amber-600 hover:bg-amber-700"
-                    )}
-                  >
-                    {isChangingPassword ? <RefreshCw className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-                    Actualizar Seguridad
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setShowPasswordModal(false);
-                      setOldPassword('');
-                      setNewPassword('');
-                      setConfirmPassword('');
-                    }}
-                    className="py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm rounded-xl transition"
-                  >
-                    Cerrar
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
+        {/* Floating Share Button (Debajo del de regalo, sin solapamiento) */}
+        <div className="relative group">
+          <button 
+            onClick={() => setIsShareOpen(!isShareOpen)}
+            className={clsx(
+              "w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all active:scale-90 border-4 border-white cursor-pointer",
+              isShareOpen ? "bg-slate-800 text-white rotate-90" : "bg-gradient-to-tr from-blue-600 to-cyan-600 text-white hover:scale-110 shadow-blue-500/40"
+            )}
+            title="Compartir invitación y regalar 1 cartón gratis a tus amigos"
+          >
+            {isShareOpen ? <X size={28} /> : <Share2 size={28} />}
+          </button>
+          {!isShareOpen && (
+            <span className="absolute left-16 top-1/2 -translate-y-1/2 bg-slate-900/90 backdrop-blur-md text-white text-[10px] font-black uppercase tracking-wider py-1.5 px-3 rounded-xl opacity-0 group-hover:opacity-100 transition-all pointer-events-none shadow-xl border border-white/10 whitespace-nowrap z-20">
+              Compartir en Redes 📢
+            </span>
           )}
-        </AnimatePresence>
-
-        <button 
-          onClick={() => setIsShareOpen(!isShareOpen)}
-          className={clsx(
-            "w-14 h-14 rounded-full flex items-center justify-center shadow-2xl transition-all active:scale-90 border-4 border-white",
-            isShareOpen ? "bg-slate-800 text-white rotate-90" : "bg-blue-600 text-white hover:bg-blue-700 hover:scale-110"
-          )}
-        >
-          {isShareOpen ? <X size={28} /> : <Share2 size={28} />}
-        </button>
+        </div>
       </div>
+
+      {/* Modal para cambiar/establecer contraseña del jugador */}
+      <AnimatePresence>
+        {showPasswordModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-[9999]"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-slate-100 overflow-hidden relative"
+            >
+              <button 
+                onClick={() => setShowPasswordModal(false)}
+                className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition p-1 bg-slate-50 rounded-full hover:bg-slate-100 cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+              
+              <div className="flex items-center gap-3 mb-6 border-b pb-4">
+                <div className="p-2 bg-amber-500/10 rounded-xl">
+                  <Key className="text-amber-500" size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-800 uppercase tracking-tight">Seguridad de tu Cuenta</h3>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Establecer o cambiar tu contraseña</p>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Contraseña Actual (Si ya tienes una)</label>
+                  <input 
+                    type="password" 
+                    placeholder="Déjalo en blanco si nunca has tenido una"
+                    value={oldPassword}
+                    onChange={e => setOldPassword(e.target.value)}
+                    className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 outline-none font-bold text-slate-700 bg-slate-50 focus:bg-white transition text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Nueva Contraseña</label>
+                  <input 
+                    type="password" 
+                    placeholder="Mínimo 4 caracteres"
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                    className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 outline-none font-bold text-slate-700 transition text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-1">Confirmar Nueva Contraseña</label>
+                  <input 
+                    type="password" 
+                    placeholder="Repite la contraseña"
+                    value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)}
+                    className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-amber-500 outline-none font-bold text-slate-700 transition text-sm"
+                  />
+                </div>
+              </div>
+              
+              <div className="flex gap-3 mt-6 border-t pt-4">
+                <button 
+                  disabled={isChangingPassword}
+                  onClick={async () => {
+                    if (!newPassword || newPassword.length < 4) {
+                      toast.error('La contraseña debe tener al menos 4 caracteres');
+                      return;
+                    }
+                    if (newPassword !== confirmPassword) {
+                      toast.error('Las contraseñas no coinciden');
+                      return;
+                    }
+                    setIsChangingPassword(true);
+                    try {
+                      const targetPhone = user?.phone || player?.phone;
+                      const response = await apiFetch('/api/players/change-password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          phone: targetPhone,
+                          oldPassword: oldPassword.trim(),
+                          newPassword: newPassword.trim()
+                        })
+                      });
+                      const data = await response.json();
+                      if (response.ok) {
+                        toast.success('¡Seguridad de tu cuenta actualizada con éxito!');
+                        setShowPasswordModal(false);
+                        setOldPassword('');
+                        setNewPassword('');
+                        setConfirmPassword('');
+                      } else {
+                        toast.error(data.error || 'Error al cambiar contraseña');
+                      }
+                    } catch (err: any) {
+                      toast.error('Error al conectar con el servidor');
+                    } finally {
+                      setIsChangingPassword(false);
+                    }
+                  }}
+                  className={clsx(
+                    "flex-1 py-3 text-white font-black text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer",
+                    isChangingPassword ? "bg-slate-400 cursor-not-allowed" : "bg-amber-600 hover:bg-amber-700"
+                  )}
+                >
+                  {isChangingPassword ? <RefreshCw className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+                  Actualizar Seguridad
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowPasswordModal(false);
+                    setOldPassword('');
+                    setNewPassword('');
+                    setConfirmPassword('');
+                  }}
+                  className="py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm rounded-xl transition cursor-pointer"
+                >
+                  Cerrar
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
