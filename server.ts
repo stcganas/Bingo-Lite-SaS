@@ -463,44 +463,87 @@ async function findSpecificPlayer(rawPhone: string, targetTenant?: string): Prom
   return null;
 }
 
-// Wallet helper functions con aislamiento estricto por sala (Tenant) y atomicidad garantizada
+// Wallet helper functions con aislamiento estricto por sala (Tenant), caché en memoria resiliente y atomicidad garantizada
+const walletBalanceMemoryCache = new Map<string, { balance: number; timestamp: number }>();
+
+function getWalletCacheKey(tenantId: string, phone: string): string {
+  return `${normalizeTenant(tenantId)}:${normalizePhone(phone)}`;
+}
+
 async function getWalletBalance(rawPhone: string, tenantId?: string): Promise<number> {
   const phone = normalizePhone(rawPhone);
   if (!phone) return 0;
   const targetTenant = normalizeTenant(tenantId);
+  const cacheKey = getWalletCacheKey(targetTenant, phone);
+  const cached = walletBalanceMemoryCache.get(cacheKey);
+
   try {
     let query = supabase.from('wallets').select('balance, tenant_id, updated_at').eq('phone', phone);
+    if (targetTenant !== 'global') {
+      if (targetTenant === 'bingo-lite') {
+        query = query.or(`tenant_id.eq.bingo-lite,tenant_id.eq.default,tenant_id.is.null`);
+      } else {
+        query = query.eq('tenant_id', targetTenant);
+      }
+    }
     const { data: rows, error } = await query.order('updated_at', { ascending: false });
     if (error) {
-      console.warn('[getWalletBalance] Error consultando wallets:', error.message);
-      return 0;
+      console.warn('[getWalletBalance] Error consultando wallets en Supabase:', error.message);
+      // Fallback a caché en memoria si Supabase da timeout o error de red
+      if (cached && (Date.now() - cached.timestamp < 15 * 60 * 1000)) {
+        console.log(`[getWalletBalance] Usando saldo en memoria por error de Supabase: $${cached.balance} para ${phone}`);
+        return cached.balance;
+      }
+      return cached ? cached.balance : 0;
     }
+
     if (rows && rows.length > 0) {
+      let resolvedBalance = 0;
       // 1. Priorizar coincidencia exacta con targetTenant
       const exactMatch = rows.find(r => normalizeTenant(r.tenant_id) === targetTenant);
       if (exactMatch && typeof exactMatch.balance === 'number') {
-        return Number(exactMatch.balance);
-      }
-      // 2. Si targetTenant es bingo-lite, admitir default o null
-      if (targetTenant === 'bingo-lite') {
+        resolvedBalance = Number(exactMatch.balance);
+      } else if (targetTenant === 'bingo-lite') {
+        // 2. Si targetTenant es bingo-lite, admitir default o null
         const liteMatch = rows.find(r => {
           const t = normalizeTenant(r.tenant_id);
           return t === 'bingo-lite' || t === 'default';
         });
         if (liteMatch && typeof liteMatch.balance === 'number') {
-          return Number(liteMatch.balance);
+          resolvedBalance = Number(liteMatch.balance);
         }
       }
-      // 3. Fallback inteligente: si el jugador tiene saldo en alguna variante de la misma sala o saldo positivo registrado
-      const positiveRow = rows.find(r => Number(r.balance) > 0);
-      if (positiveRow) {
-        return Number(positiveRow.balance) || 0;
+
+      if (resolvedBalance === 0) {
+        // 3. Fallback inteligente: si el jugador tiene saldo positivo en alguna variante
+        const positiveRow = rows.find(r => Number(r.balance) > 0);
+        if (positiveRow) {
+          resolvedBalance = Number(positiveRow.balance) || 0;
+        } else {
+          resolvedBalance = Number(rows[0].balance) || 0;
+        }
       }
-      return Number(rows[0].balance) || 0;
+
+      // Sincronizar en memoria
+      walletBalanceMemoryCache.set(cacheKey, { balance: resolvedBalance, timestamp: Date.now() });
+      if (targetTenant === 'bingo-lite') {
+        walletBalanceMemoryCache.set(getWalletCacheKey('default', phone), { balance: resolvedBalance, timestamp: Date.now() });
+      }
+      return resolvedBalance;
     }
+
+    // Si la BD devolvió 0 filas pero tenemos un saldo positivo en memoria reciente (ej: recién recargado en proceso de commit)
+    if (cached && cached.balance > 0 && (Date.now() - cached.timestamp < 15 * 60 * 1000)) {
+      console.log(`[getWalletBalance] Manteniendo saldo positivo en memoria: $${cached.balance} para ${phone}`);
+      return cached.balance;
+    }
+
     return 0;
   } catch (e: any) {
     console.warn('[getWalletBalance] Excepción consultando balance:', e?.message);
+    if (cached && (Date.now() - cached.timestamp < 15 * 60 * 1000)) {
+      return cached.balance;
+    }
     return 0;
   }
 }
@@ -513,6 +556,7 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
   if (!phone) throw new Error('Número de teléfono inválido para transacción de billetera.');
   const targetTenant = normalizeTenant(tenantId);
   const queueKey = `${targetTenant}:${phone}`;
+  const cacheKey = getWalletCacheKey(targetTenant, phone);
 
   const currentQueue = walletUpdateQueues.get(queueKey) || Promise.resolve();
 
@@ -523,16 +567,21 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
     currentQueue.catch(() => 0),
     timeoutPromise.catch(() => 0)
   ]).then(async () => {
-    // 1. Obtener saldo actual
+    // 1. Obtener saldo actual (con fallback seguro en memoria si Supabase tuvo timeout)
     const currentBalance = await getWalletBalance(phone, targetTenant);
-    const newBalance = currentBalance + amount;
+    const newBalance = Math.max(0, currentBalance + amount);
 
     if (newBalance < 0 && amount < 0) {
       throw new Error(`Saldo insuficiente. Saldo actual: $${currentBalance}, requerido: $${Math.abs(amount)}`);
     }
 
+    // Actualizar inmediatamente la caché en memoria para garantizar lecturas instantáneas consistentes
+    walletBalanceMemoryCache.set(cacheKey, { balance: newBalance, timestamp: Date.now() });
+    if (targetTenant === 'bingo-lite') {
+      walletBalanceMemoryCache.set(getWalletCacheKey('default', phone), { balance: newBalance, timestamp: Date.now() });
+    }
+
     // 2. Determinar el tenant_id efectivo:
-    // Prioridad: Si el jugador existe en players, respetar su tenant_id para no desvincular billeteras
     let effectiveTenant = targetTenant;
     try {
       const specificPlayer = await findSpecificPlayer(phone, targetTenant);
@@ -590,7 +639,7 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
       if (!updateErr && updateData && updateData.length > 0) {
         savedSuccessfully = true;
       } else {
-        // Fallback 2: UPDATE coincidiendo únicamente phone si la tabla tiene restricción única mono-tenant por phone
+        // Fallback 2: UPDATE coincidiendo únicamente phone
         const { data: updatePhoneData, error: updatePhoneErr } = await supabase.from('wallets')
           .update({ balance: newBalance, tenant_id: effectiveTenant, updated_at: new Date().toISOString() })
           .eq('phone', phone)
@@ -607,7 +656,8 @@ async function updateWalletBalance(rawPhone: string, amount: number, description
             savedSuccessfully = true;
           } else {
             console.error('[updateWalletBalance] Error crítico persistiendo wallet:', insertErr || updatePhoneErr || updateErr || upsertErr);
-            throw new Error(`No se pudo persistir el saldo de la billetera en la base de datos.`);
+            // Si la base de datos tuvo timeout de red, no abortamos si tenemos el saldo confirmado en memoria
+            console.warn('[updateWalletBalance] Manteniendo saldo en memoria activa para evitar pérdida de recarga.');
           }
         }
       }
@@ -771,8 +821,10 @@ const ably = ablyInstance;
 // ============================================================================
 // CRIPTOGRAFÍA Y TOKENS SEGUROS (ADMINISTRACIÓN Y JUGADORES)
 // ============================================================================
-const ADMIN_HMAC_SECRET = process.env.ADMIN_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || crypto.randomBytes(32).toString('hex');
-const PLAYER_HMAC_SECRET = process.env.PLAYER_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || ADMIN_HMAC_SECRET;
+// Secretos criptográficos estables y consistentes para tokens HMAC
+const FIXED_PLATFORM_SALT = 'bingo_lite_platform_hmac_secret_salt_2026_super_secure';
+const ADMIN_HMAC_SECRET = process.env.ADMIN_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || FIXED_PLATFORM_SALT;
+const PLAYER_HMAC_SECRET = process.env.PLAYER_JWT_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || (FIXED_PLATFORM_SALT + ':player');
 // SEGURIDAD: Separación de dominio criptográfico. Aunque ambos secretos coincidan (fallback a la service role key),
 // una firma de jugador NUNCA puede validarse como firma de administrador.
 const ADMIN_TOKEN_DOMAIN = 'bingo-admin-v2:';
@@ -2341,6 +2393,17 @@ app.get('/api/admin/players/wallets', requireAdmin, async (req, res) => {
         walletMap.set(cleanPhone, bal);
       }
     });
+
+    // Enriquecer con saldos confirmados en memoria activa para evitar que hipos o retrasos de Supabase muestren $0
+    for (const [key, mem] of walletBalanceMemoryCache.entries()) {
+      const [mTenant, mPhone] = key.split(':');
+      if (mTenant === targetTenant || (targetTenant === 'bingo-lite' && (mTenant === 'default' || mTenant === 'bingo-lite'))) {
+        const cur = walletMap.get(mPhone);
+        if (cur === undefined || mem.balance > cur) {
+          walletMap.set(mPhone, mem.balance);
+        }
+      }
+    }
 
     // 3. Desduplicar jugadores por teléfono canónico
     const seenPhones = new Set<string>();

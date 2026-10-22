@@ -852,9 +852,24 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
         // Aceptar balance oficial o actualBalance si está presente
         const incomingBalance = (typeof data.balance === 'number' && data.balance > 0)
           ? data.balance
-          : (typeof data.actualBalance === 'number' ? data.actualBalance : (typeof data.balance === 'number' ? data.balance : null));
-        if (incomingBalance !== null) {
-          setWalletBalance(incomingBalance);
+          : (typeof data.actualBalance === 'number' && data.actualBalance > 0
+              ? data.actualBalance
+              : (typeof data.balance === 'number' ? data.balance : null));
+
+        if (incomingBalance !== null && typeof incomingBalance === 'number') {
+          if (incomingBalance > 0) {
+            setWalletBalance(incomingBalance);
+            setWalletActivated(true);
+          } else if (incomingBalance === 0) {
+            // Protección contra borrado por hipo de red: si el jugador ya tiene un saldo positivo confirmado en pantalla,
+            // no borrarlo a 0 a menos que el usuario realmente no tenga saldo registrado
+            setWalletBalance(prev => {
+              if (prev !== null && prev > 0 && data.authenticated === false) {
+                return prev; // Conservar saldo confirmado
+              }
+              return incomingBalance;
+            });
+          }
         }
         if (typeof data.activated === 'boolean') {
           setWalletActivated(data.activated);

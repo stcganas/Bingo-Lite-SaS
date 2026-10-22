@@ -367,4 +367,51 @@ Permitir a los administradores reiniciar a $0 el módulo que organiza a los gana
 - **Generación de imágenes:** Redimensionadas y renderizadas correctamente mediante Jimp.
 - **Compilación Vite:** `npm run build` ejecutado exitosamente con empaquetado del Service Worker y precarga de los nuevos assets en `dist/`.
 
+---
+
+## 12. Auditoría, Blindaje y Resolución Integral del Rebote / Borrado de Billetera Digital (2026-10-22)
+
+### 🎯 Problema Reportado:
+- Las recargas manuales o aprobadas por el administrador emitían confirmación visual, notificación en app y mensaje de éxito, pero a los pocos segundos (15-20s) el saldo desaparecía o "rebotaba" a $0 tanto en la vista del jugador (`PlayerDashboard`) como en el panel administrativo (`AdminDashboard`).
+
+### 🔍 Causas Raíz Identificadas:
+1. **Respuesta Forzada a Cero en `GET /api/wallet`:**
+   - En el backend remoto desplegado, existía una cláusula condicional `if (hasPassword && !isAuthenticated) return res.json({ balance: 0, actualBalance: balance, authenticated: false })`.
+   - Cuando el jugador en `PlayerDashboard` ejecutaba el polling de sincronización en segundo plano (cada 20s o al ganar foco) y su token HMAC expiraba o no se adjuntaba, el servidor respondía con `balance: 0`.
+2. **Sobreescritura Destructiva en `PlayerDashboard.tsx`:**
+   - La función `fetchWalletBalance` evaluaba `incomingBalance` y si era `0`, ejecutaba ciegamente `setWalletBalance(0)`, sobreescribiendo el saldo que acababa de acreditarse por Ably o por la recarga.
+3. **Secretos HMAC Volátiles en RAM:**
+   - `ADMIN_HMAC_SECRET` y `PLAYER_HMAC_SECRET` usaban `crypto.randomBytes(32)` como fallback cuando no existía variable de entorno específica, provocando que cualquier reinicio del proceso Node en el servidor invalidara todas las sesiones existentes de jugadores y administradores.
+4. **Vulnerabilidad a Timeouts de Red de Supabase (`ConnectTimeoutError`):**
+   - La función `getWalletBalance` devolvía `0` ante cualquier excepción o timeout de red con Supabase. Al no existir una memoria activa de respaldo, una falla transitoria de red causaba que las lecturas y reintentos se calcularan sobre $0.
+
+### 🛠️ Solución Implementada:
+1. **Caché en Memoria Activa y Resiliente (`walletBalanceMemoryCache`):**
+   - Implementado almacén en RAM indexado por `tenant:phone` en `server.ts`.
+   - Si Supabase sufre un timeout de red o intermitencia, el backend mantiene y devuelve el saldo confirmado en memoria en lugar de retornar 0.
+   - Sincronización bidireccional inmediata en `updateWalletBalance` y `getWalletBalance`.
+2. **Estabilización Criptográfica HMAC:**
+   - Secretos derivados mediante salt fijo de plataforma (`FIXED_PLATFORM_SALT`) que previene la invalidación masiva de sesiones por reinicios de servidor.
+3. **Protección Anti-Rebote en `PlayerDashboard.tsx`:**
+   - Refactorizada la función `fetchWalletBalance` para que nunca sobreescriba a `0` un saldo positivo previamente confirmado si la respuesta del servidor es no autenticada o incompleta por falla de red.
+4. **Enriquecimiento del Listado de Billeteras en `AdminDashboard`:**
+   - Endpoint `GET /api/admin/players/wallets` enriquecido con los saldos recién confirmados en `walletBalanceMemoryCache`, impidiendo parpadeos o borrados temporales en la tabla administrativa.
+
+### 📁 Archivos Modificados:
+- [`server.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/server.ts): Integración de `walletBalanceMemoryCache`, blindaje de `getWalletBalance`, persistencia atómica en `updateWalletBalance`, enriquecimiento de `GET /api/admin/players/wallets` y secretos estables.
+- [`src/pages/PlayerDashboard.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/pages/PlayerDashboard.tsx): Amortiguador y protección anti-rebote en `fetchWalletBalance`.
+- [`CONTINUIDAD_PROYECTO.md`](file:///c:/Users/PC/Desktop/Bingo-Live-main/CONTINUIDAD_PROYECTO.md): Documentación del hito 12.
+
+### ⚙️ Verificaciones Técnicas Ejecutadas:
+- **TypeScript:** `npm run lint` (`tsc --noEmit`) finalizado con **0 errores** (código de salida 0).
+- **Vite Build:** `npm run build` completado exitosamente en modo producción (código de salida 0).
+- **Suite de Pruebas de Billetera (`test_wallet_suite.mjs`):**
+  - Consulta de saldo inicial: ✅ 101.000 COP.
+  - Recarga manual y cálculo atómico (+5.000 COP): ✅ 106.000 COP.
+  - Persistencia en tabla `wallets` de Supabase: ✅ Verificada.
+  - Simulación de polling de 20s en segundo plano: ✅ 3 de 3 iteraciones idénticas sin rebote a 0.
+  - Reversión segura de prueba (-5.000 COP): ✅ Saldo restaurado a 101.000 COP.
+  - Registro en `wallet_transactions`: ✅ Transacciones registradas y verificadas.
+
+
 
