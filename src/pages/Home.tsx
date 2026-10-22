@@ -231,7 +231,13 @@ export default function Home() {
       );
       const targetSlug = data.room_slug || tenantSlug || 'bingo-lite';
       const cleanSlug = targetSlug === 'default' ? 'demo' : targetSlug;
-      toast.success(`¡Acceso concedido a la sala ${tenant?.name || cleanSlug}!`);
+      toast.success(`¡Acceso concedido a la sala ${tenant?.name || cleanSlug}!`, {
+        id: 'login-success-toast',
+        duration: 2500
+      });
+      setTimeout(() => {
+        try { toast.dismiss('login-success-toast'); } catch (e) {}
+      }, 2600);
       navigate(`/sala/${cleanSlug}/player`);
     } catch (error: any) {
       const msg = error.message || 'Error al iniciar sesión';
@@ -273,7 +279,6 @@ export default function Home() {
 
   return (
     <>
-      <Toaster position="top-center" />
       <div className={clsx(
         "min-h-screen flex flex-col font-sans relative pb-24 transition-colors duration-500",
         isCosmic ? "bg-[#09031c] text-slate-100" : "bg-slate-50 text-slate-900"

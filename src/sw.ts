@@ -2,14 +2,14 @@
 import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
 import { clientsClaim } from 'workbox-core';
 
-declare let self: ServiceWorkerGlobalScope;
+declare let self: ServiceWorkerGlobalScope & { __WB_MANIFEST: any };
 
 // standard PWA workbox setup
 self.skipWaiting();
 clientsClaim();
 
 // Deduplicate manifest entries by URL to prevent add-to-cache-list-conflicting-entries
-const rawManifest = (self as any).__WB_MANIFEST || [];
+const rawManifest = self.__WB_MANIFEST || [];
 const seenUrls = new Set<string>();
 const cleanManifest = rawManifest.filter((entry: any) => {
   const url = typeof entry === 'string' ? entry : entry?.url;

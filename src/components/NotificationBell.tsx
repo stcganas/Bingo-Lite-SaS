@@ -59,7 +59,8 @@ export default function NotificationBell() {
     try {
       const id = user?.uid;
       if (!id) return;
-      const res = await apiFetch(`/api/notifications/${encodeURIComponent(id)}`).catch(() => null);
+      const tenantParam = user?.tenant_id ? `?tenantId=${encodeURIComponent(user.tenant_id)}&role=${encodeURIComponent(user.role || '')}` : `?role=${encodeURIComponent(user.role || '')}`;
+      const res = await apiFetch(`/api/notifications/${encodeURIComponent(id)}${tenantParam}`).catch(() => null);
       if (res && res.ok) {
         const data = await res.json();
         setNotifications(Array.isArray(data) ? data : []);

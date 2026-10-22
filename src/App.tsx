@@ -688,7 +688,7 @@ export default function App() {
               <GlobalBackgroundMusic />
               <MaintenanceWrapper>
               <div className="min-h-screen bg-blue-50 text-slate-800 font-sans">
-                <Toaster position="top-center" />
+                <Toaster position="top-center" toastOptions={{ duration: 3500 }} />
                 <SupabaseWarning />
                 <PWAInstallPrompt />
                 <React.Suspense fallback={

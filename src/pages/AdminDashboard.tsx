@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { getBingoChannel } from '../ably';
-import { Play, Pause, Square, RefreshCcw, CheckCircle2, XCircle, Users, Trophy, Clock, Plus, Trash2, Calendar, Gamepad2, Grid, Settings, List, Volume2, Volume1, VolumeX, Radio, MessageSquare, Save, LogOut, ChevronDown, ChevronUp, HardDrive, Bot, Wallet, DollarSign, Ban, Shield, ShieldCheck, Edit3, Mail, MapPin, Share2, Copy, MessageCircle, X, BellRing, History, Loader2, Image, Upload, Music, Sliders, BarChart2, Sparkles, Gift, Download, Zap, Gauge, FastForward, Timer, PlayCircle, StopCircle, ArrowRight, Check, Key, QrCode, Scan, Star, SlidersHorizontal, Search, CheckSquare, Wrench, Smartphone } from 'lucide-react';
+import { Play, Pause, Square, RefreshCcw, RefreshCw, CheckCircle2, XCircle, Users, Trophy, Clock, Plus, Trash2, Calendar, Gamepad2, Grid, Settings, List, Volume2, Volume1, VolumeX, Radio, MessageSquare, Save, LogOut, ChevronDown, ChevronUp, HardDrive, Bot, Wallet, DollarSign, Ban, Shield, ShieldCheck, Edit3, Mail, MapPin, Share2, Copy, MessageCircle, X, BellRing, History, Loader2, Image, Upload, Music, Sliders, BarChart2, Sparkles, Gift, Download, Zap, Gauge, FastForward, Timer, PlayCircle, StopCircle, ArrowRight, Check, Key, QrCode, Scan, Star, SlidersHorizontal, Search, CheckSquare, Wrench, Smartphone } from 'lucide-react';
 import { useTTS } from '../hooks/useTTS';
 import { announceBall } from '../utils/speech';
 import NotificationBell from '../components/NotificationBell';
@@ -813,6 +813,7 @@ export default function AdminDashboard() {
   const [historyPlayer, setHistoryPlayer] = useState<any>(null);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [walletHistoryData, setWalletHistoryData] = useState<any[]>([]);
+  const [isReconciling, setIsReconciling] = useState(false);
   const [userGiftFilter, setUserGiftFilter] = useState<'all' | 'gifted' | 'completed' | 'none'>('all');
   const [selectedGiftingPlayer, setSelectedGiftingPlayer] = useState<any | null>(null);
   
@@ -1420,6 +1421,36 @@ export default function AdminDashboard() {
       toast.error('Error al conectar con el servidor');
     } finally {
       setProcessingRechargeId(null);
+    }
+  };
+
+  const handleReconcileWallets = async (playerPhone?: string) => {
+    if (isReconciling) return;
+    setIsReconciling(true);
+    const toastId = toast.loading(playerPhone ? `Sincronizando billetera de ${playerPhone}...` : 'Sincronizando todas las billeteras con el libro mayor...');
+    try {
+      const res = await apiFetch('/api/admin/wallets/reconcile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: playerPhone || undefined,
+          tenantId: currentTenant || undefined
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        toast.dismiss(toastId);
+        toast.success(data.message || 'Billeteras sincronizadas exitosamente');
+        await Promise.all([fetchWalletPlayers(), fetchRechargeRequests(true)]);
+      } else {
+        toast.dismiss(toastId);
+        toast.error(data.error || 'Error al reconciliar billeteras');
+      }
+    } catch (err) {
+      toast.dismiss(toastId);
+      toast.error('Error de conexión al sincronizar billeteras');
+    } finally {
+      setIsReconciling(false);
     }
   };
 
@@ -6007,7 +6038,16 @@ export default function AdminDashboard() {
                     <p className="text-emerald-100 text-xs font-bold">Verifica y acredita las recargas de saldo de los jugadores</p>
                   </div>
                 </div>
-                <div className="flex flex-col items-end gap-2">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => handleReconcileWallets()}
+                    disabled={isReconciling}
+                    className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 text-white border border-emerald-400/40 px-3.5 py-1.5 rounded-full font-black text-xs uppercase tracking-wider shadow transition transform active:scale-95 cursor-pointer disabled:opacity-50"
+                    title="Sincronizar todas las recargas aprobadas con los saldos de la sala"
+                  >
+                    <RefreshCw size={14} className={clsx("stroke-[2.5]", isReconciling && "animate-spin")} />
+                    {isReconciling ? "Sincronizando..." : "Sincronizar Saldos"}
+                  </button>
                   <span className="bg-white/20 border border-white/30 text-white font-black text-xs px-3 py-1 rounded-full uppercase tracking-wider">
                     {rechargeRequests.filter(r => r.status === 'pending').length} Pendientes
                   </span>
@@ -6196,13 +6236,24 @@ export default function AdminDashboard() {
                     <p className="text-blue-100 text-xs font-bold">Gestiona el saldo de los jugadores</p>
                   </div>
                 </div>
-                <button
-                  onClick={() => setShowDirectRechargeModal(true)}
-                  className="flex items-center gap-2 bg-white text-blue-700 hover:bg-blue-50 px-4 py-2.5 rounded-2xl font-black text-xs uppercase tracking-wider shadow-md transition transform active:scale-95 cursor-pointer"
-                >
-                  <Plus size={18} className="stroke-[3]" />
-                  Recarga Manual por Teléfono
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleReconcileWallets()}
+                    disabled={isReconciling}
+                    className="flex items-center gap-2 bg-blue-700 hover:bg-blue-800 text-white border border-blue-400/40 px-4 py-2.5 rounded-2xl font-black text-xs uppercase tracking-wider shadow-md transition transform active:scale-95 cursor-pointer disabled:opacity-50"
+                    title="Sincronizar y auditar todos los saldos de la sala contra el libro mayor"
+                  >
+                    <RefreshCw size={16} className={clsx("stroke-[2.5]", isReconciling && "animate-spin")} />
+                    {isReconciling ? "Sincronizando..." : "Sincronizar Billeteras"}
+                  </button>
+                  <button
+                    onClick={() => setShowDirectRechargeModal(true)}
+                    className="flex items-center gap-2 bg-white text-blue-700 hover:bg-blue-50 px-4 py-2.5 rounded-2xl font-black text-xs uppercase tracking-wider shadow-md transition transform active:scale-95 cursor-pointer"
+                  >
+                    <Plus size={18} className="stroke-[3]" />
+                    Recarga Manual por Teléfono
+                  </button>
+                </div>
               </div>
 
               <div className="p-6">
@@ -6252,15 +6303,23 @@ export default function AdminDashboard() {
                               setSelectedWalletPlayer(player.phone);
                               setRechargeAmount('');
                             }}
-                            className="flex-1 py-2 bg-blue-100 text-blue-700 rounded-xl font-bold text-sm hover:bg-blue-200 transition flex items-center justify-center gap-2"
+                            className="flex-1 py-2 bg-blue-100 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-200 transition flex items-center justify-center gap-1.5"
                           >
-                            <Plus size={16} /> Recargar
+                            <Plus size={15} /> Recargar
                           </button>
                           <button
                             onClick={() => openWalletHistory(player)}
-                            className="flex-1 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm hover:bg-slate-200 transition flex items-center justify-center gap-2"
+                            className="flex-1 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-200 transition flex items-center justify-center gap-1.5"
                           >
-                            <List size={16} /> Historial
+                            <List size={15} /> Historial
+                          </button>
+                          <button
+                            onClick={() => handleReconcileWallets(player.phone)}
+                            disabled={isReconciling}
+                            className="p-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-xl font-bold transition flex items-center justify-center border border-emerald-200/60"
+                            title="Sincronizar y auditar saldo de este jugador"
+                          >
+                            <RefreshCw size={15} className={isReconciling ? "animate-spin" : ""} />
                           </button>
                         </div>
                       )}

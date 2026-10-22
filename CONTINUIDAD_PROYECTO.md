@@ -413,5 +413,126 @@ Permitir a los administradores reiniciar a $0 el módulo que organiza a los gana
   - Reversión segura de prueba (-5.000 COP): ✅ Saldo restaurado a 101.000 COP.
   - Registro en `wallet_transactions`: ✅ Transacciones registradas y verificadas.
 
+---
+
+## 13. Corrección del Toast de Login y Activación Integral del Sistema de Notificaciones Multi-Tenant (2026-10-22)
+
+### 🎯 Problemas y Requerimientos Atendidos:
+1. **Toast de Login Pegado:** Al iniciar sesión en una sala (ej: "¡Acceso concedido a la sala Bingo Lite Oficial!"), el mensaje emergente se quedaba congelado de forma indefinida en pantalla.
+2. **Activación Universal de Notificaciones Push & In-App:** Activar y garantizar el funcionamiento de 10 eventos de notificación para todas las salas, jugadores y administradores, con aislamiento estricto por sala (multi-tenant):
+   - **Para Jugadores:**
+     1. Restablecimiento de contraseña (confirmación de nueva clave / cambio exitoso).
+     2. Solicitud de recarga del usuario (notificación de comprobante recibido y de recarga aprobada / acreditada).
+     3. Nuevo juego creado o programado.
+     4. Juego ganado por un jugador (bingo o patrón completado).
+     5. Comienzo del juego (inicio de sorteo de balotas).
+     6. Pago del premio del juego gratis.
+   - **Para Administradores:**
+     7. Nuevo ticket de soporte / restablecimiento de contraseña radicado.
+     8. Nueva solicitud de recarga enviada por un usuario.
+     9. Nueva compra de cartones realizada por un usuario.
+     10. Nuevo usuario registrado en la sala.
+
+### 🔍 Causas Raíz y Correcciones del Toast de Login:
+- **Causa Raíz:** En [`src/pages/Home.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/pages/Home.tsx), existía un componente `<Toaster position="top-center" />` local que colisionaba con el `<Toaster />` global de [`src/App.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/App.tsx). Adicionalmente, el toast de bienvenida carecía de un identificador único (`id`) y de un temporizador de auto-cierre forzado.
+- **Solución:**
+  - Se eliminó el `<Toaster />` redundante en `Home.tsx`.
+  - Se configuró el toast de login con `id: 'login-success-toast'`, `duration: 2500` y auto-dismiss forzado con `setTimeout`.
+  - En `App.tsx`, se configuró `<Toaster position="top-center" toastOptions={{ duration: 3500 }} />` para garantizar que ningún toast quede infinito en toda la aplicación.
+
+### 🛠️ Arquitectura y Activación del Sistema de Notificaciones:
+1. **Robustecimiento de `sendPushNotification` en [`server.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/server.ts):**
+   - Ahora soporta `recipient: 'all' | 'single' | 'admin'`.
+   - **Para `admin`:** Identifica a los administradores de la sala en `admin_sessions` y `admin_users` con `tenant_id`, inserta registros in-app para `admin`, `admin-${tenantId}` y UIDs de administradores; en OneSignal aplica filtros por tag `tenant_id = :slug` AND `role = admin`.
+   - **Para `all`:** Aplica en OneSignal filtros por tag `tenant_id = :slug` (evitando fuga o cruce de notificaciones entre diferentes salas concurrentes) e inserta in-app para todos los jugadores de dicha sala.
+   - **Para `single`:** Notifica al teléfono y external IDs del jugador e inserta en la tabla `notifications`.
+   - **Tiempo Real:** Emite el evento `notification_received` vía Ably particionado por sala para actualizar la campana en vivo instantáneamente.
+2. **Conexión de los 10 Eventos en el Backend:**
+   - **Evento 1 (Restablecimiento de contraseña):** En `POST /api/admin/support/tickets/:id/reset-password` y `POST /api/players/change-password`.
+   - **Evento 2 (Solicitud de recarga de usuario):** En `POST /api/wallet/recharge-request` (solicitud recibida y auto-aprobada), `POST /api/admin/recharge-requests/:id/approve` y `POST /api/admin/recharge-requests/:id/reject`.
+   - **Evento 3 (Nuevo juego):** En `POST /api/games`, broadcast filtrado por `tenant_id`.
+   - **Evento 4 (Juego ganado por un jugador):** En `processBingoWin`, se envían 3 notificaciones simultáneas: al ganador individual, a toda la sala anunciando al ganador, y al administrador de la sala con el detalle del premio.
+   - **Evento 5 (Comienzo del juego):** En `broadcastGameStartAnnouncement` y `doActivateGame`, broadcast a la sala anunciando el inicio del sorteo de balotas.
+   - **Evento 6 (Pago del premio de juego gratis):** En `POST /api/admin/free-games/record-prize` y `processBingoWin` (juegos gratis), notifica al jugador premiado y al administrador.
+   - **Evento 7 (Admin - Nuevo ticket de soporte):** En `POST /api/support/tickets/password-reset`, alerta push + in-app al administrador de la sala.
+   - **Evento 8 (Admin - Nueva solicitud de recarga):** En `POST /api/wallet/recharge-request`, alerta push + in-app al administrador de la sala.
+   - **Evento 9 (Admin - Nueva compra de cartones):** En `POST /api/players` (compra de jugador existente) y `POST /api/players/claim-free-cards` (reclamo de cartones gratis).
+   - **Evento 10 (Admin - Nuevo usuario registrado):** En `POST /api/players` (nuevo registro en la sala).
+3. **Tags de OneSignal y Sincronización en Frontend:**
+   - En [`src/lib/onesignal.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/lib/onesignal.ts): `loginOneSignal` ahora recibe `tenantId` y asigna automáticamente los tags `tenant_id` y `room`.
+   - En [`src/AuthContext.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/AuthContext.tsx): Sincronizado `tenant_id` en todas las autenticaciones de jugadores y administradores.
+   - En [`src/components/NotificationBell.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/components/NotificationBell.tsx): Petición parametrizada con `tenantId` y `role` para consultar estrictamente las notificaciones de su sala.
+   - En `server.ts` `GET /api/notifications/:id`: Los administradores consultan con fallback a `admin` y `admin-${tenantId}` aislado por sala.
+
+### 📁 Archivos Modificados:
+- [`src/pages/Home.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/pages/Home.tsx): Retiro de `<Toaster />` redundante y timeout forzado para el toast de login.
+- [`src/App.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/App.tsx): Duración global por defecto en `<Toaster />` (3500ms).
+- [`server.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/server.ts): Soporte de `recipient: 'admin'` en `sendPushNotification`, segmentación OneSignal por `tenant_id`, y conexión de los 10 eventos.
+- [`src/lib/onesignal.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/lib/onesignal.ts): Parámetro y etiquetas `tenant_id` y `room` en `loginOneSignal`.
+- [`src/AuthContext.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/AuthContext.tsx): Paso de `tenant_id` en todos los flujos de autenticación.
+- [`src/components/NotificationBell.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/components/NotificationBell.tsx): Consulta de notificaciones filtrada por sala y rol.
+- [`CONTINUIDAD_PROYECTO.md`](file:///c:/Users/PC/Desktop/Bingo-Live-main/CONTINUIDAD_PROYECTO.md): Documentación del hito 13.
+
+### ⚙️ Verificaciones Técnicas Ejecutadas:
+- **TypeScript:** `npm run lint` (`tsc --noEmit`) finalizado con **0 errores** (código de salida 0).
+- **Vite Build:** `npm run build` completado exitosamente con empaquetado PWA y Service Worker (código de salida 0).
+- **Suite de Notificaciones Multi-Tenant (`test_notifications_suite.mjs`):**
+  - Notificación Admin Sala A insertada: ✅ OK.
+  - Notificación Jugador Sala A insertada: ✅ OK.
+  - Notificación Admin Sala B insertada: ✅ OK.
+  - Aislamiento Multi-Tenant Sala A vs Sala B: ✅ PASÓ (0 fugas entre salas).
+  - Recuperación de Notificación de Jugador: ✅ PASÓ.
+  - Limpieza de datos temporales: ✅ Completada sin residuos.
+
+---
+
+## 📌 Hito 14: Sincronización Integral y Reconciliación Financiera de Billetera Digital (Libro Mayor / Ledger)
+**Fecha:** 22 de Octubre, 2026  
+**Estado:** ✅ Completado y Verificado en Producción  
+
+### 🎯 Problema Abordado:
+- Los saldos de las billeteras digitales no cuadraban con las recargas efectuadas por los jugadores y las aprobaciones manuales realizadas por los administradores.
+- **Síntoma Crítico:** Al aprobar una recarga o realizar una recarga manual directa, el saldo se reflejaba visualmente y emitía notificación push/in-app, pero unos segundos después el saldo rebotaba o volvía al monto anterior.
+- **Causa Raíz Diagnosticada:**
+  1. **Persistencia No Confirmada en Supabase:** `updateWalletBalance` no verificaba la escritura real ante `ConnectTimeoutError` esporádicos de red hacia Supabase. Al fallar silenciosamente la persistencia en `wallets` o `wallet_transactions`, guardaba temporalmente en memoria, pero el comprobante quedaba permanentemente marcado como `approved` en `players.receipt_url`. Al reiniciar el proceso o consultar `getWalletBalance` unos segundos después, la base de datos devolvía el saldo viejo y borraba la memoria.
+  2. **Bloqueo en Re-Aprobación:** Si una recarga aprobada fallaba en acreditar saldo, el endpoint `/api/admin/recharge-requests/:id/approve` bloqueaba al administrador diciendo *"Esta solicitud de recarga ya ha sido aprobada previamente"*, dejando el dinero huérfano.
+  3. **Discrepancia Real Identificada en BD:** El jugador Eric (`3145261451`) tenía dos recargas aprobadas (#4 por $100.000 y #5 por $20.000) más $1.000 de premio, pero su saldo en `wallets` estaba congelado en $101.000 (faltaban exactamente los $20.000 de la recarga #5).
+  4. **Filtro Multi-Tenant Erróneo en Recargas:** En `GET /api/admin/recharge-requests`, `cleanTenant = targetTenant === 'default' ? 'demo' : targetTenant` convertía solicitudes de la sala principal en solicitudes de `demo`.
+
+### 🛠️ Solución Técnica Implementada:
+1. **Helper con Reintentos Exponenciales (`executeWithRetry`):**
+   - Incorporado en `server.ts` para blindar todas las operaciones de lectura y escritura crítica en `wallets`, `wallet_transactions` y `players`. Reintenta hasta 4 veces con retroceso exponencial.
+2. **Motor de Reconciliación Financiera (`reconcileWalletForPlayer`):**
+   - Compara la verdad financiera: `Suma(Comprobantes de recarga aprobados) + Suma(Premios acreditados) - Suma(Compras de cartones con billetera) + Suma(Recargas manuales directas del admin)`.
+   - Si detecta comprobantes aprobados huérfanos que no tienen transacción en `wallet_transactions`, genera automáticamente la transacción faltante y actualiza atómicamente el saldo en `wallets`.
+3. **Blindaje de `updateWalletBalance`:**
+   - La persistencia en `wallets` y en `wallet_transactions` ahora es obligatoria y confirmada en base de datos antes de actualizar memoria o emitir eventos. Si tras los reintentos falla la persistencia, lanza una excepción explícita impidiendo estados inconsistentes o falsos positivos.
+4. **Endpoint de Reconciliación para el Administrador (`POST /api/admin/wallets/reconcile`):**
+   - Permite auditar y sincronizar en 1 clic todas las billeteras de una sala o la billetera de un jugador individual.
+5. **Aprobación Inteligente en `POST /api/admin/recharge-requests/:id/approve`:**
+   - Si un comprobante ya figuraba como aprobado pero sus fondos no habían impactado `wallet_transactions`, el endpoint lo detecta, lo acredita y sincroniza la billetera en lugar de bloquear al organizador.
+6. **Mapeo Correcto de Sala Multi-Tenant:**
+   - Corregido el mapeo en `recharge-requests` usando `normalizeTenant` (`bingo-lite` / `default`).
+7. **Botones de Sincronización en la UI (`src/pages/AdminDashboard.tsx`):**
+   - Botón **"Sincronizar Billeteras"** en la cabecera de Control de Billeteras.
+   - Botón **"Sincronizar Saldos"** en la cabecera de Solicitudes de Recarga.
+   - Botón de auditoría y sincronización individual en la tarjeta de cada jugador.
+
+### 📁 Archivos Modificados:
+- [`server.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/server.ts): `executeWithRetry`, `reconcileWalletForPlayer`, blindaje de `getWalletBalance` y `updateWalletBalance`, endpoint `POST /api/admin/wallets/reconcile`, corrección de mapeo tenant y validación inteligente en `recharge-requests/:id/approve`.
+- [`src/pages/AdminDashboard.tsx`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/pages/AdminDashboard.tsx): Botones de sincronización masiva e individual, integración con `/api/admin/wallets/reconcile` y refresco automático.
+- [`src/sw.ts`](file:///c:/Users/PC/Desktop/Bingo-Live-main/src/sw.ts): Literal `self.__WB_MANIFEST` para empaquetado Workbox PWA limpio.
+- [`CONTINUIDAD_PROYECTO.md`](file:///c:/Users/PC/Desktop/Bingo-Live-main/CONTINUIDAD_PROYECTO.md): Documentación del Hito 14.
+
+### ⚙️ Verificaciones Técnicas Ejecutadas:
+- **Auditoría Financiera en Vivo (`test_live_reconcile_endpoint.mjs`):**
+  - **Eric (`3145261451`):** Saldo en `wallets` = **$121.000 COP** | Suma `wallet_transactions` = **$121.000 COP** | Comprobantes aprobados ($120.000) + Premio ($1.000) = **$121.000 COP**. Coincidencia exacta: **✅ SÍ**.
+  - **Karla (`3145267878`):** Saldo en `wallets` = **$50.000 COP** | Transacciones de recarga = **$50.000 COP**. Coincidencia exacta: **✅ SÍ**.
+  - **Yayita (`3125261451`):** Saldo en `wallets` = **$5.500 COP**. Coincidencia exacta: **✅ SÍ**.
+- **TypeScript:** `npx tsc --noEmit` completado con **0 errores** (código de salida 0).
+- **Vite Build:** `npm run build` completado exitosamente en **23.20s** con Service Worker y PWA generados (código de salida 0).
+
+
+
 
 

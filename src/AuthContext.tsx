@@ -61,8 +61,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await initializeOneSignal();
         if (!isSubscribed) return;
         
-        await loginOneSignal(user.uid, user.phone, user.role);
-        console.log(`[Auth Hook] OneSignal.login successfully synchronized for DB user: ${user.uid}`);
+        await loginOneSignal(user.uid, user.phone, user.role, user.tenant_id);
+        console.log(`[Auth Hook] OneSignal.login successfully synchronized for DB user: ${user.uid} (room: ${user.tenant_id || 'default'})`);
 
         // Trigger welcome web push notification now that device is registered on OneSignal
         // Throttled per session to prevent double notifications
@@ -164,7 +164,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const doOneSignalLogin = async () => {
           try {
             await initializeOneSignal();
-            await loginOneSignal(basicUser.uid, undefined, basicUser.role);
+            await loginOneSignal(basicUser.uid, undefined, basicUser.role, basicUser.tenant_id);
             
             // Only prompt if it's an explicit sign in event
             if (event === 'SIGNED_IN') {
@@ -261,7 +261,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               const doOneSignalLogin = async () => {
                 try {
                   await initializeOneSignal();
-                  await loginOneSignal(player.uid, player.phone, player.role || 'player');
+                  await loginOneSignal(player.uid, player.phone, player.role || 'player', player.tenant_id);
                 } catch (e) {
                   console.warn('OneSignal login (saved player) error:', e);
                 }
@@ -382,7 +382,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       const doOneSignalLogin = async () => {
         try {
-          await loginOneSignal(playerUser.uid, playerUser.phone, playerUser.role);
+          await loginOneSignal(playerUser.uid, playerUser.phone, playerUser.role, playerUser.tenant_id);
           setTimeout(() => promptPushPermission(), 5000);
         } catch (e) {
           console.warn('OneSignal loginPlayer error:', e);
@@ -425,6 +425,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (data.token) {
         localStorage.setItem('bingo_admin_token', data.token);
       }
+
+      const doOneSignalLogin = async () => {
+        try {
+          await loginOneSignal(adminUser.uid, adminUser.email, 'admin', adminUser.tenant_id);
+          setTimeout(() => promptPushPermission(), 5000);
+        } catch (e) {
+          console.warn('OneSignal loginTenantAdmin error:', e);
+        }
+      };
+      doOneSignalLogin();
       
       const soundSettings = JSON.parse(localStorage.getItem('bingo-sound-settings') || '{}');
       if (soundSettings.login) playLoginSound();

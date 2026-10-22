@@ -120,7 +120,7 @@ export const setUserRoleTag = async (role: string) => {
   }
 };
 
-export const loginOneSignal = async (externalId: string, phone?: string, role?: string) => {
+export const loginOneSignal = async (externalId: string, phone?: string, role?: string, tenantId?: string) => {
   if (!externalId) return;
 
   const isIframe = typeof window !== 'undefined' && window.self !== window.top;
@@ -153,6 +153,13 @@ export const loginOneSignal = async (externalId: string, phone?: string, role?: 
           }
 
           const tagsToAdd: Record<string, string> = {};
+
+          if (tenantId) {
+            const rawTenant = tenantId.toLowerCase().trim();
+            const cleanTenant = rawTenant === 'default' ? 'demo' : rawTenant;
+            tagsToAdd['tenant_id'] = cleanTenant;
+            tagsToAdd['room'] = cleanTenant;
+          }
 
           if (phone) {
             const normalizedPhone = phone.replace(/[^0-9]/g, '');
