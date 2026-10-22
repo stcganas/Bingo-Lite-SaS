@@ -970,13 +970,33 @@ ${roomDirectUrl}
                 {errorMsg}
               </div>
               
-              <button 
-                onClick={handleCloseErrorModal}
-                className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-black text-sm uppercase tracking-wider hover:from-blue-700 hover:to-indigo-700 transition shadow-md active:scale-98 flex items-center justify-center gap-2"
-              >
-                {!(isFreeGame || isRegisterOnly || !hasActiveGame || !file) && <Upload size={16} />}
-                {isFreeGame || isRegisterOnly || !hasActiveGame || !file ? 'Entendido' : 'Entendido, subir nuevo comprobante'}
-              </button>
+              {errorMsg.toLowerCase().includes('ya está registrado') || errorMsg.toLowerCase().includes('ya se encuentra registrado') ? (
+                <div className="flex flex-col gap-2.5">
+                  <button 
+                    onClick={() => {
+                      handleCloseErrorModal();
+                      navigate(tenantPrefix || (cleanTenant !== 'bingo-lite' ? `/sala/${cleanTenant}` : '/'));
+                    }}
+                    className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-xl font-black text-sm uppercase tracking-wider hover:from-emerald-700 hover:to-teal-700 transition shadow-md active:scale-98 flex items-center justify-center gap-2"
+                  >
+                    <span>Ingresar a la Sala con mi Cuenta</span>
+                  </button>
+                  <button 
+                    onClick={handleCloseErrorModal}
+                    className="w-full py-2.5 bg-slate-100 text-slate-600 rounded-xl font-bold text-xs uppercase hover:bg-slate-200 transition"
+                  >
+                    Corregir número de teléfono
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  onClick={handleCloseErrorModal}
+                  className="w-full py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl font-black text-sm uppercase tracking-wider hover:from-blue-700 hover:to-indigo-700 transition shadow-md active:scale-98 flex items-center justify-center gap-2"
+                >
+                  {!(isFreeGame || isRegisterOnly || !hasActiveGame || !file) && <Upload size={16} />}
+                  {isFreeGame || isRegisterOnly || !hasActiveGame || !file ? 'Entendido' : 'Entendido, subir nuevo comprobante'}
+                </button>
+              )}
             </div>
           </div>
         </div>

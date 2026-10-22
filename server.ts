@@ -10406,6 +10406,16 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       finalStatus = 'approved';
     }
 
+    const parsedCardCount = parseInt(card_count || '0', 10);
+    const isRegisterOnly = Boolean(
+      !hasActiveGame ||
+      payment_method === 'register_only' ||
+      payment_method === 'none' ||
+      payment_method === 'account_only' ||
+      parsedCardCount === 0 ||
+      (!req.file && payment_method !== 'wallet' && payment_method !== 'gift' && !isFreeGame)
+    );
+
     if (payment_method === 'gift' || invited_by) {
       const cleanInvitedBy = normalizePhone(invited_by);
       if (!cleanInvitedBy) {
@@ -10490,15 +10500,6 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       finalCardCount = 1;
       receipt_url = `GIFT_INSTRUCTED_BY_${cleanInvitedBy}`;
     } else {
-      const parsedCardCount = parseInt(card_count || '0', 10);
-      const isRegisterOnly = Boolean(
-        payment_method === 'register_only' ||
-        payment_method === 'none' ||
-        payment_method === 'account_only' ||
-        parsedCardCount === 0 ||
-        (!req.file && payment_method !== 'wallet' && payment_method !== 'gift' && !isFreeGame)
-      );
-
       if (isFreeGame) {
         // Solo juegos gratuitos otorgan 2 cartones gratis
         finalCardCount = 2;
@@ -10709,7 +10710,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
 
       if (isAccountOnlyRegistration) {
         return res.status(409).json({
-          error: `El número de teléfono ${phone} ya se encuentra registrado en esta sala. El número de teléfono debe ser único para cada jugador. Por favor, inicia sesión con tu contraseña o ingresa a tu cuenta.`
+          error: '¡Ya tienes una cuenta registrada en esta sala!',
+          message: `El número de WhatsApp ${phone} ya está registrado a nombre de "${existingPlayer.name || 'Jugador'}".\n\nPor favor inicia sesión con tu contraseña para continuar. Si olvidaste tu contraseña, pulsa "¿Olvidaste tu contraseña?" para restablecerla.`
         });
       }
 
@@ -10718,7 +10720,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         const isMatch = verifyPassword(password, existingPlayer.password);
         if (!password || !isMatch) {
           return res.status(401).json({
-            error: 'Contraseña incorrecta. Por favor verifícala.',
+            error: 'Contraseña requerida',
+            message: `El número de teléfono ${phone} ya tiene una cuenta registrada en esta sala. Para proteger tus cartones, ingresa tu contraseña de cuenta actual.`,
             passwordRequired: true
           });
         }
@@ -10897,7 +10900,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     if (insertError) {
       if (insertError.code === '23505' || insertError.message?.toLowerCase().includes('duplicate') || insertError.message?.toLowerCase().includes('unique')) {
         return res.status(409).json({
-          error: `El número de teléfono ${phone} ya se encuentra registrado en esta sala. El número de teléfono debe ser único para cada jugador.`
+          error: 'Número ya registrado',
+          message: `El número de WhatsApp ${phone} ya se encuentra registrado en esta sala. Por favor inicia sesión con tu contraseña para ingresar.`
         });
       }
       return res.status(500).json({ error: `Error de base de datos: ${insertError.message}` });
@@ -10954,8 +10958,11 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
     });
     res.json({ success: true, player: newPlayer, token: playerToken });
   } catch (err: any) {
-
-    res.status(500).json({ error: `Error inesperado: ${err.message || 'Error desconocido'}` });
+    console.error('[Register API Error]:', err);
+    res.status(500).json({ 
+      error: 'Error al procesar tu solicitud',
+      message: err.message || 'Ocurrió un error al procesar tu registro. Por favor verifica tus datos e inténtalo de nuevo.' 
+    });
   }
 });
 
