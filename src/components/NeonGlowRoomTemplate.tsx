@@ -76,19 +76,29 @@ export default function NeonGlowRoomTemplate({
 
       <div className="relative z-10 max-w-md mx-auto px-4 pt-4 sm:pt-6">
         
-        {/* Barra superior discreta: Selector de Plantilla */}
+        {/* Barra superior discreta: Selector de Plantilla y Admin Acceso */}
         <div className="flex items-center justify-between gap-2 mb-4 bg-slate-900/60 backdrop-blur-md px-3 py-1.5 rounded-full border border-slate-800 text-[11px]">
           <span className="flex items-center gap-1.5 text-cyan-400 font-bold uppercase tracking-wider">
             <Sparkles size={13} className="text-cyan-400 animate-spin" />
             Tema: <span className="text-white font-black">Neón Glow VIP</span>
           </span>
-          <button
-            onClick={onSwitchTheme}
-            className="px-2.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full font-bold transition flex items-center gap-1 text-[10px]"
-            title="Cambiar a la plantilla clásica original"
-          >
-            🎨 Cambiar a Clásica
-          </button>
+          <div className="flex items-center gap-1.5">
+            <Link
+              to={tenantSlug ? `/sala/${tenantSlug}/admin/login` : "/admin/login"}
+              className="px-2.5 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-400/30 rounded-full font-black text-[10px] uppercase tracking-wider flex items-center gap-1 transition"
+              title="Acceso al panel administrativo de la sala"
+            >
+              <Shield size={11} className="text-amber-400" />
+              <span>Admin Acceso</span>
+            </Link>
+            <button
+              onClick={onSwitchTheme}
+              className="px-2.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-full font-bold transition flex items-center gap-1 text-[10px]"
+              title="Cambiar a la plantilla clásica original"
+            >
+              🎨 Cambiar a Clásica
+            </button>
+          </div>
         </div>
 
         {/* ============================================================== */}

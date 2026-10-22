@@ -314,13 +314,18 @@ export default function Home() {
             {user?.isSuperAdmin && (
               <Link 
                 to="/super-admin" 
-                className="px-4 py-2 bg-blue-600 text-white rounded-full text-xs font-black uppercase tracking-widest shadow-lg hover:bg-blue-700 transition flex items-center gap-2"
+                className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-full text-xs font-black uppercase tracking-wider shadow-lg transition flex items-center gap-1.5"
               >
-                <Shield size={16} /> Super Admin
+                <Shield size={14} /> <span>Super Admin</span>
               </Link>
             )}
-            <Link to="/admin" className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white/70 hover:text-white hover:bg-white/20 transition flex items-center justify-center">
-              <Shield size={20} />
+            <Link 
+              to={tenantSlug ? `/sala/${tenantSlug}/admin/login` : "/admin/login"} 
+              className="px-3 py-1.5 bg-slate-900/80 hover:bg-slate-900 text-amber-300 hover:text-amber-200 border border-amber-400/40 rounded-full text-xs font-black uppercase tracking-wider shadow-lg backdrop-blur-md transition flex items-center gap-1.5 transform hover:scale-105 active:scale-95"
+              title="Acceso al panel administrativo de la sala"
+            >
+              <Shield size={14} className="text-amber-400" />
+              <span>Admin Acceso</span>
             </Link>
           </div>
 

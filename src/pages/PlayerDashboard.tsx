@@ -729,7 +729,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
   const handleLogout = async () => {
     try {
       await logout();
-      navigate("/");
+      const exitRoomUrl = tenantPrefix || (effectiveTenant ? `/sala/${effectiveTenant}` : "/");
+      navigate(exitRoomUrl);
       toast.success('Sesión cerrada correctamente');
     } catch (error) {
       console.error('Error logging out:', error);
@@ -740,7 +741,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
   const fetchCards = async () => {
     const currentUser = userRef.current;
     if (!currentUser || currentUser.role !== 'player') {
-      navigate("/");
+      const exitRoomUrl = tenantPrefix || (effectiveTenant ? `/sala/${effectiveTenant}` : "/");
+      navigate(exitRoomUrl);
       return;
     }
 
@@ -755,7 +757,8 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
         if (data.error === 'Player not found') {
            setStatus('not_found');
            await logout();
-           navigate("/");
+           const exitRoomUrl = tenantPrefix || (effectiveTenant ? `/sala/${effectiveTenant}` : "/");
+           navigate(exitRoomUrl);
            toast('Tu sesión anterior ha finalizado. Por favor ingresa o regístrate para comenzar.', { icon: 'ℹ️' });
            setLoading(false);
            return;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useNavigate } from 'react-router-dom';
 import { getBingoChannel } from '../ably';
 import { Play, Pause, Square, RefreshCcw, CheckCircle2, XCircle, Users, Trophy, Clock, Plus, Trash2, Calendar, Gamepad2, Grid, Settings, List, Volume2, Volume1, VolumeX, Radio, MessageSquare, Save, LogOut, ChevronDown, ChevronUp, HardDrive, Bot, Wallet, DollarSign, Ban, Shield, ShieldCheck, Edit3, Mail, MapPin, Share2, Copy, MessageCircle, X, BellRing, History, Loader2, Image, Upload, Music, Sliders, BarChart2, Sparkles, Gift, Download, Zap, Gauge, FastForward, Timer, PlayCircle, StopCircle, ArrowRight, Check, Key, QrCode, Scan, Star, SlidersHorizontal, Search, CheckSquare, Wrench, Smartphone } from 'lucide-react';
 import { useTTS } from '../hooks/useTTS';
@@ -50,6 +50,7 @@ const getBallColor = (ball: number) => {
 };
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const { user, logout, updatePassword } = useAuth();
   const { slug } = useParams<{ slug?: string }>();
   const currentTenant = slug || (user?.tenant_id && user.tenant_id !== 'global' ? user.tenant_id : undefined);
@@ -57,6 +58,18 @@ export default function AdminDashboard() {
   const { speak, stop, speakNative, setWinnerSpeechActive } = useTTS();
   const lastAnnouncedBallIdRef = useRef<string | null>(null);
   const lastAnnouncedBallTimeRef = useRef<number>(0);
+
+  const handleAdminLogout = async () => {
+    try {
+      await logout();
+      const exitRoomAdminUrl = currentTenant ? `/sala/${currentTenant}/admin/login` : "/admin/login";
+      navigate(exitRoomAdminUrl);
+      toast.success('Sesión de administrador cerrada correctamente');
+    } catch (error) {
+      console.error('Error cerrando sesión de admin:', error);
+      toast.error('Error al cerrar sesión');
+    }
+  };
   
   const [activeTab, setActiveTab] = useState<Tab>('control');
   const [gameState, setGameState] = useState<any>(null);
@@ -2888,7 +2901,7 @@ export default function AdminDashboard() {
             <PWAInstallButton className="hidden sm:flex" />
             <NotificationBell />
             <button 
-              onClick={logout}
+              onClick={handleAdminLogout}
               className="flex items-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border-2 border-red-500/50 rounded-xl font-bold transition"
             >
               <LogOut size={20} />

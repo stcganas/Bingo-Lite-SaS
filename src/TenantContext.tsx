@@ -81,6 +81,27 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             });
             // Actualizar título de la pestaña con el nombre de la sala
             document.title = `${data.name} | Bingo en Vivo Online`;
+
+            // Actualizar dinámicamente el manifest de la PWA para la sala
+            try {
+              let manifestLink = document.querySelector('link[rel="manifest"]') as HTMLLinkElement | null;
+              if (!manifestLink) {
+                manifestLink = document.createElement('link');
+                manifestLink.rel = 'manifest';
+                document.head.appendChild(manifestLink);
+              }
+              manifestLink.href = `/api/manifest/${encodeURIComponent(slug)}.webmanifest`;
+
+              // Si la sala tiene logo personalizado, actualizar favicon y apple-touch-icon
+              if (data.logo_url) {
+                let appleIcon = document.querySelector('link[rel="apple-touch-icon"]') as HTMLLinkElement | null;
+                if (appleIcon) appleIcon.href = data.logo_url;
+                let favicon = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
+                if (favicon) favicon.href = data.logo_url;
+              }
+            } catch (pwaErr) {
+              console.warn('[TenantProvider] Error actualizando PWA manifest:', pwaErr);
+            }
           } else {
             setTenant(fallbackForSlug);
           }
@@ -93,6 +114,14 @@ export const TenantProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } else {
       setTenant(DEFAULT_TENANT);
       document.title = 'Bingo Lite | Bingo Familiar, Bingo Colombia y Bingo Ganador';
+      try {
+        let manifestLink = document.querySelector('link[rel="manifest"]') as HTMLLinkElement | null;
+        if (manifestLink) manifestLink.href = '/manifest.webmanifest';
+        let appleIcon = document.querySelector('link[rel="apple-touch-icon"]') as HTMLLinkElement | null;
+        if (appleIcon) appleIcon.href = '/apple-touch-icon.png';
+        let favicon = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
+        if (favicon) favicon.href = '/favicon.png';
+      } catch (e) {}
     }
   }, [location.pathname]);
 

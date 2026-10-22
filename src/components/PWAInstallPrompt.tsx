@@ -3,12 +3,18 @@ import { Download, X, Share, PlusSquare, CheckCircle, Loader2, ExternalLink } fr
 import { motion, AnimatePresence } from 'motion/react';
 import toast from 'react-hot-toast';
 import { usePWAInstall } from '../hooks/usePWAInstall';
+import { useTenant } from '../TenantContext';
 
 export default function PWAInstallPrompt() {
   const { isInstallable, isInstalled, isIOS, isInstalling, install } = usePWAInstall();
+  const { tenant, tenantSlug } = useTenant();
   const [showPrompt, setShowPrompt] = useState(false);
   const [showIOSModal, setShowIOSModal] = useState(false);
   const [isInsideIframe, setIsInsideIframe] = useState(false);
+
+  const displayAppName = tenantSlug && tenant?.name ? tenant.name : 'Bingo Lite';
+  const displayAppIcon = tenantSlug && tenant?.logo_url ? tenant.logo_url : '/pwa-192x192.png';
+  const displayBadge = tenantSlug ? 'Sala Oficial' : 'App Oficial';
 
   useEffect(() => {
     // Detect if embedded in an iframe (e.g. preview environment)
@@ -74,7 +80,7 @@ export default function PWAInstallPrompt() {
 
     if (result.success) {
       setShowPrompt(false);
-      toast.success('¡Bingo Lite se ha instalado correctamente!', { 
+      toast.success(`¡${displayAppName} se ha instalado correctamente!`, { 
         id: 'pwa-install-success',
         icon: '🎉',
         duration: 5000 
@@ -121,9 +127,12 @@ export default function PWAInstallPrompt() {
               <div className="flex items-center gap-3 min-w-0">
                 <div className="relative shrink-0">
                   <img 
-                    src="/pwa-192x192.png" 
-                    alt="Bingo Lite" 
-                    className="w-11 h-11 rounded-xl shadow-md border border-white/20 object-cover" 
+                    src={displayAppIcon} 
+                    alt={displayAppName} 
+                    className="w-11 h-11 rounded-xl shadow-md border border-white/20 object-cover bg-white" 
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = '/pwa-192x192.png';
+                    }}
                   />
                   <span className="absolute -top-1 -right-1 flex h-3 w-3">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -133,10 +142,10 @@ export default function PWAInstallPrompt() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <h3 className="font-bold text-white text-sm sm:text-base leading-tight truncate">
-                      Instalar Bingo Lite
+                      Instalar {displayAppName}
                     </h3>
                     <span className="text-[10px] bg-amber-400 text-amber-950 font-black px-1.5 py-0.5 rounded-full uppercase tracking-wider shrink-0">
-                      App Oficial
+                      {displayBadge}
                     </span>
                   </div>
                   <p className="text-xs text-blue-100/90 leading-snug line-clamp-1">
@@ -195,11 +204,18 @@ export default function PWAInstallPrompt() {
               </button>
 
               <div className="flex items-center gap-3 mb-4">
-                <img src="/pwa-192x192.png" alt="Bingo Lite" className="w-12 h-12 rounded-2xl shadow-md border border-slate-200 dark:border-slate-700" />
+                <img 
+                  src={displayAppIcon} 
+                  alt={displayAppName} 
+                  className="w-12 h-12 rounded-2xl shadow-md border border-slate-200 dark:border-slate-700 object-cover bg-white" 
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = '/pwa-192x192.png';
+                  }}
+                />
                 <div>
                   <h3 className="text-lg font-bold">Instalar en tu iPhone / iPad</h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Sigue estos 3 pasos rápidos en Safari:
+                    Instala <span className="font-bold text-blue-500 dark:text-blue-400">{displayAppName}</span> en 3 pasos:
                   </p>
                 </div>
               </div>

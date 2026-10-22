@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Download, Share, PlusSquare, CheckCircle, X, Loader2 } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
+import { useTenant } from '../TenantContext';
 import toast from 'react-hot-toast';
 
 interface PWAInstallButtonProps {
@@ -13,7 +14,10 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
   variant = 'primary'
 }) => {
   const { isInstallable, isInstalled, isIOS, isInstalling, install } = usePWAInstall();
+  const { tenant, tenantSlug } = useTenant();
   const [showIOSGuide, setShowIOSGuide] = useState(false);
+
+  const displayAppName = tenantSlug && tenant?.name ? tenant.name : 'Bingo Lite';
 
   // If already running as an installed PWA, hide the button
   if (isInstalled) {
@@ -28,7 +32,7 @@ export const PWAInstallButton: React.FC<PWAInstallButtonProps> = ({
 
     const result = await install();
     if (result.success) {
-      toast.success('¡Bingo Lite se ha instalado con éxito!', { id: 'pwa-btn-success', icon: '🎉' });
+      toast.success(`¡${displayAppName} se ha instalado con éxito!`, { id: 'pwa-btn-success', icon: '🎉' });
       return;
     }
 

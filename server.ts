@@ -12664,10 +12664,69 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Manifest routes
-app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
+// Manifest routes con soporte Multi-Tenant dinámico para salas de Bingo
+app.get(['/manifest.json', '/manifest.webmanifest', '/api/manifest/:slug.webmanifest', '/api/manifest/:slug.json', '/sala/:slug/manifest.webmanifest', '/sala/:slug/manifest.json'], async (req, res) => {
+  const reqSlug = req.params.slug || req.query.slug;
+
+  if (reqSlug && typeof reqSlug === 'string' && reqSlug !== 'favicon.ico') {
+    const cleanSlug = reqSlug.toLowerCase().trim();
+    try {
+      const { data: tenant } = await supabase
+        .from('tenants')
+        .select('id, name, slug, logo_url, primary_color')
+        .or(`slug.eq.${cleanSlug},id.eq.${cleanSlug}`)
+        .maybeSingle();
+
+      const roomName = tenant?.name || `Bingo ${cleanSlug.toUpperCase()}`;
+      const roomLogo = tenant?.logo_url && tenant.logo_url.trim().length > 0 
+        ? tenant.logo_url 
+        : '/pwa-512x512.png';
+      const roomThemeColor = tenant?.primary_color || '#2563eb';
+
+      const customManifest = {
+        id: `/sala/${cleanSlug}`,
+        name: roomName,
+        short_name: roomName.length > 12 ? roomName.substring(0, 12) : roomName,
+        description: `App oficial para jugar en la sala ${roomName} en Bingo Lite.`,
+        start_url: `/sala/${cleanSlug}`,
+        scope: `/sala/${cleanSlug}`,
+        display: 'standalone',
+        background_color: '#07091f',
+        theme_color: roomThemeColor,
+        orientation: 'portrait',
+        gcm_sender_id: '482941778795',
+        icons: [
+          {
+            src: roomLogo,
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: roomLogo,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: roomLogo,
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
+          }
+        ]
+      };
+
+      res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+      return res.json(customManifest);
+    } catch (err) {
+      console.warn('[Manifest] Error generating custom tenant manifest:', err);
+    }
+  }
+
+  // Manifest global por defecto
   const distPath = path.join(process.cwd(), 'dist');
-  const manifestPath = path.join(distPath, req.path.substring(1));
+  const manifestPath = path.join(distPath, 'manifest.webmanifest');
 
   if (fs.existsSync(manifestPath)) {
     res.setHeader('Content-Type', 'application/manifest+json');
@@ -12675,13 +12734,12 @@ app.get(['/manifest.json', '/manifest.webmanifest'], (req, res) => {
   }
 
   // Fallback to public folder in dev
-  const publicPath = path.join(process.cwd(), 'public', req.path.substring(1));
+  const publicPath = path.join(process.cwd(), 'public', 'manifest.webmanifest');
   if (fs.existsSync(publicPath)) {
     res.setHeader('Content-Type', 'application/manifest+json');
     return res.sendFile(publicPath);
   }
 
-  // If not found, let it go to 404 or SPA fallback
   res.status(404).send('Manifest not found');
 });
 
