@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   Sparkles, ShieldCheck, Zap, Users, Trophy, Radio, Wallet, 
@@ -21,33 +21,40 @@ export default function SaaSMarketingLanding() {
   const [roomSearchResults, setRoomSearchResults] = useState<any[]>([]);
   const [isSearchingRooms, setIsSearchingRooms] = useState(false);
   const [showRoomResults, setShowRoomResults] = useState(false);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
 
+  // Cargar salas al escribir o sugerencias al enfocar
   useEffect(() => {
     const query = searchRoomQuery.trim();
-    if (!query) {
-      setRoomSearchResults([]);
-      setIsSearchingRooms(false);
-      return;
-    }
-
     setIsSearchingRooms(true);
+
     const timer = setTimeout(async () => {
       try {
         const res = await apiFetch(`/api/tenants/search?q=${encodeURIComponent(query)}`);
         if (res.ok) {
           const data = await res.json();
           setRoomSearchResults(Array.isArray(data) ? data : []);
-          setShowRoomResults(true);
         }
       } catch (err) {
         console.warn('Error al buscar salas:', err);
       } finally {
         setIsSearchingRooms(false);
       }
-    }, 250);
+    }, query ? 180 : 0);
 
     return () => clearTimeout(timer);
   }, [searchRoomQuery]);
+
+  // Cerrar resultados al hacer click fuera
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target as Node)) {
+        setShowRoomResults(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Formulario de nueva sala con administrador independiente
   const [roomForm, setRoomForm] = useState({
@@ -247,7 +254,7 @@ export default function SaaSMarketingLanding() {
           </div>
 
           {/* Buscador Inteligente de Salas de Juegos (Diseño prudente y compacto) */}
-          <div className="max-w-xl mx-auto mb-14 text-left relative z-30">
+          <div ref={searchContainerRef} className="max-w-xl mx-auto mb-14 text-left relative z-30">
             <div className="bg-slate-900/80 backdrop-blur-md rounded-2xl p-2.5 sm:p-3 border border-slate-800 shadow-xl">
               <div className="flex items-center justify-between px-2 mb-2">
                 <span className="text-xs font-black text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -264,10 +271,8 @@ export default function SaaSMarketingLanding() {
                     setSearchRoomQuery(e.target.value);
                     setShowRoomResults(true);
                   }}
-                  onFocus={() => {
-                    if (roomSearchResults.length > 0) setShowRoomResults(true);
-                  }}
-                  placeholder="Ej: Bingo Ganador, BL-2026, demo..."
+                  onFocus={() => setShowRoomResults(true)}
+                  placeholder="Ej: Bingo Lite, DEMO2026, LITE777..."
                   className="w-full bg-slate-950/80 border border-slate-800/90 focus:border-blue-500 rounded-xl py-2.5 pl-10 pr-9 text-white font-semibold text-sm outline-none transition placeholder:text-slate-500 shadow-inner"
                 />
                 <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -278,7 +283,6 @@ export default function SaaSMarketingLanding() {
                     type="button"
                     onClick={() => {
                       setSearchRoomQuery('');
-                      setRoomSearchResults([]);
                       setShowRoomResults(false);
                     }}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 rounded-full"
@@ -289,7 +293,7 @@ export default function SaaSMarketingLanding() {
               </div>
 
               {/* Resultados flotantes */}
-              {showRoomResults && searchRoomQuery.trim() && (
+              {showRoomResults && (
                 <div className="absolute left-0 right-0 mt-2 bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden divide-y divide-slate-800/80 max-h-64 overflow-y-auto z-50">
                   {roomSearchResults.length > 0 ? (
                     roomSearchResults.map((room) => (

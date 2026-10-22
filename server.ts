@@ -1198,56 +1198,87 @@ function levenshteinDistance(a: string, b: string): number {
   return matrix[bn][an];
 }
 
-// Endpoint de búsqueda inteligente de salas (soporta nombres, typos como "binfo ga", slug o código)
+// Endpoint de búsqueda inteligente de salas (soporta nombres, typos, slug o código PIN)
 app.get('/api/tenants/search', async (req, res) => {
   try {
     const rawQ = (req.query.q as string || '').trim().toLowerCase();
     const cleanQ = rawQ.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-    const { data: tenants, error } = await supabase
+    // Consulta resiliente sin columnas inexistentes
+    const { data: dbTenants, error } = await supabase
       .from('tenants')
-      .select('id, name, slug, access_code, description, logo_url, status')
-      .neq('status', 'suspended')
-      .limit(60);
+      .select('id, name, slug, access_code, logo_url, is_active, notes')
+      .limit(100);
 
-    if (error || !tenants) {
-      return res.json([]);
+    if (error) {
+      console.warn('[Tenants Search DB Warning]:', error.message);
     }
+
+    // Salas predeterminadas garantizadas para que siempre estén disponibles
+    const baseTenants = [
+      {
+        id: 'bingo-lite',
+        name: 'Bingo Lite Oficial',
+        slug: 'bingo-lite',
+        access_code: 'LITE777',
+        description: 'Sala Oficial de Bingo en Vivo con sorteos continuos y premios garantizados.'
+      },
+      {
+        id: 'demo',
+        name: 'Sala Demo Visitantes',
+        slug: 'demo',
+        access_code: 'DEMO2026',
+        description: 'Sala interactiva de demostración para visitantes y nuevos organizadores.'
+      }
+    ];
+
+    const map = new Map<string, any>();
+    baseTenants.forEach(t => map.set(t.slug, t));
+
+    if (dbTenants && Array.isArray(dbTenants)) {
+      dbTenants.forEach(t => {
+        const existing = map.get(t.slug) || {};
+        map.set(t.slug, {
+          id: t.id,
+          name: t.name || existing.name || t.slug,
+          slug: t.slug,
+          access_code: t.access_code || existing.access_code || 'BINGO2026',
+          logo_url: t.logo_url || existing.logo_url || null,
+          description: t.notes || existing.description || 'Sala de Bingo Virtual en Vivo',
+          is_active: t.is_active !== false
+        });
+      });
+    }
+
+    const allTenants = Array.from(map.values()).filter(t => t.is_active !== false);
 
     if (!cleanQ) {
-      const defaults = tenants.slice(0, 6).map(t => ({
-        id: t.id,
-        name: t.name,
-        slug: t.slug,
-        access_code: t.access_code || 'BINGO2026',
-        logo_url: t.logo_url,
-        description: t.description
-      }));
-      return res.json(defaults);
+      return res.json(allTenants.slice(0, 6));
     }
 
-    const queryTokens = cleanQ.split(/\s+/).filter(Boolean);
+    const queryTokens = cleanQ.split(/[\s\-_\.]+/).filter(Boolean);
 
-    const scored = tenants.map(t => {
+    const scored = allTenants.map(t => {
       const tName = (t.name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
       const tSlug = (t.slug || '').toLowerCase();
       const tCode = (t.access_code || '').toLowerCase();
-      const tTokens = tName.split(/\s+/).filter(Boolean);
+      const tCombined = `${tName} ${tSlug} ${tCode}`;
+      const tTokens = tCombined.split(/[\s\-_\.]+/).filter(Boolean);
 
       let score = 0;
 
       // Coincidencia exacta de código o slug
       if (tCode === cleanQ || tSlug === cleanQ) score += 100;
-      else if (tCode.includes(cleanQ) || tSlug.includes(cleanQ)) score += 50;
+      else if (tCode.includes(cleanQ) || tSlug.includes(cleanQ)) score += 60;
 
       // Coincidencia en nombre
       if (tName === cleanQ) score += 90;
-      else if (tName.includes(cleanQ)) score += 60;
+      else if (tName.includes(cleanQ)) score += 70;
 
-      // Comparación por tokens (ej: "binfo" y "ga" con "bingo" y "ganador")
+      // Comparación por tokens
       for (const qToken of queryTokens) {
         if (tCode.includes(qToken) || tSlug.includes(qToken)) {
-          score += 30;
+          score += 35;
         }
 
         for (const tToken of tTokens) {
@@ -1255,7 +1286,7 @@ app.get('/api/tenants/search', async (req, res) => {
             score += 40;
             break;
           } else if (tToken.startsWith(qToken)) {
-            score += 35;
+            score += 30;
             break;
           } else if (tToken.includes(qToken)) {
             score += 20;
@@ -1263,10 +1294,10 @@ app.get('/api/tenants/search', async (req, res) => {
           } else if (qToken.length >= 3 && tToken.length >= 3) {
             const dist = levenshteinDistance(qToken, tToken.slice(0, Math.max(qToken.length, tToken.length)));
             if (dist <= 1) {
-              score += 28;
+              score += 25;
               break;
             } else if (qToken.length >= 5 && dist <= 2) {
-              score += 18;
+              score += 15;
               break;
             }
           }
@@ -2633,6 +2664,33 @@ app.post('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: 'Error al guardar configuración de redes sociales' });
+  }
+});
+
+// Configuración de Plantilla Visual / Tema de la Sala ('classic' | 'neon_glow')
+app.get('/api/admin/settings/theme-template', requireAdmin, async (req, res) => {
+  try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const settings = await getGameSettings('global', targetTenant);
+    res.json({
+      theme_template: settings.theme_template || 'classic'
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Error al obtener plantilla de la sala' });
+  }
+});
+
+app.post('/api/admin/settings/theme-template', requireAdmin, async (req, res) => {
+  try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const { theme_template } = req.body;
+    const validTheme = theme_template === 'neon_glow' ? 'neon_glow' : 'classic';
+    await saveGameSettings('global', {
+      theme_template: validTheme
+    }, targetTenant);
+    res.json({ success: true, theme_template: validTheme });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Error al guardar plantilla de la sala' });
   }
 });
 

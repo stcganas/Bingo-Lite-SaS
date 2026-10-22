@@ -11,6 +11,7 @@ import clsx from 'clsx';
 import { apiFetch } from '../utils/api';
 import { motion, AnimatePresence } from 'motion/react';
 import WhatsAppLogo from '../components/WhatsAppLogo';
+import NeonGlowRoomTemplate from '../components/NeonGlowRoomTemplate';
 
 export default function Home() {
   const navigate = useNavigate();
@@ -28,6 +29,24 @@ export default function Home() {
   const [showUserNotFound, setShowUserNotFound] = useState(false);
   const [timeLeft, setTimeLeft] = useState<{ days: number, hours: number, minutes: number, seconds: number } | null>(null);
   const phoneInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Sistema de plantillas: 'classic' (original por defecto) o 'neon_glow' (neón vip)
+  const [roomTheme, setRoomTheme] = useState<'classic' | 'neon_glow'>(() => {
+    try {
+      const saved = localStorage.getItem(`bingo_room_theme_${tenantSlug || 'default'}`);
+      if (saved === 'neon_glow' || saved === 'classic') return saved;
+    } catch (e) {}
+    return 'classic';
+  });
+
+  const toggleRoomTheme = () => {
+    const nextTheme = roomTheme === 'classic' ? 'neon_glow' : 'classic';
+    setRoomTheme(nextTheme);
+    try {
+      localStorage.setItem(`bingo_room_theme_${tenantSlug || 'default'}`, nextTheme);
+      toast.success(nextTheme === 'neon_glow' ? 'Plantilla Neón Glow VIP activada ✨' : 'Plantilla Clásica original activada 🎲');
+    } catch (e) {}
+  };
 
   // Estados para solicitud técnica de recuperación de contraseña
   const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
@@ -250,22 +269,60 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative pb-24">
+    <>
       <Toaster position="top-center" />
-      {/* Top Bar (Admin link hidden but accessible) */}
-      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-        {user?.isSuperAdmin && (
-          <Link 
-            to="/super-admin" 
-            className="px-4 py-2 bg-blue-600 text-white rounded-full text-xs font-black uppercase tracking-widest shadow-lg hover:bg-blue-700 transition flex items-center gap-2"
-          >
-            <Shield size={16} /> Super Admin
-          </Link>
-        )}
-        <Link to="/admin" className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white/70 hover:text-white hover:bg-white/20 transition flex items-center justify-center">
-          <Shield size={20} />
-        </Link>
-      </div>
+      {roomTheme === 'neon_glow' ? (
+        <NeonGlowRoomTemplate
+          tenant={tenant}
+          tenantSlug={tenantSlug}
+          tenantPrefix={tenantPrefix}
+          featuredGame={featuredGame}
+          freeGames={freeGames}
+          timeLeft={timeLeft}
+          settings={settings}
+          user={user}
+          loginPlayer={loginPlayer}
+          phone={phone}
+          setPhone={setPhone}
+          password={password}
+          setPassword={setPassword}
+          showPassword={showPassword}
+          setShowPassword={setShowPassword}
+          loading={loading}
+          handleLogin={handleLogin}
+          phoneInputRef={phoneInputRef}
+          scrollToLogin={scrollToLogin}
+          setShowWhatsappModal={setShowWhatsappModal}
+          setShowPasswordResetModal={setShowPasswordResetModal}
+          checkIsFree={checkIsFree}
+          onSwitchTheme={toggleRoomTheme}
+        />
+      ) : (
+        <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative pb-24">
+          {/* Top Bar (Admin link y botón para alternar a plantilla Neón VIP) */}
+          <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleRoomTheme}
+              className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-full text-xs font-black uppercase tracking-wider shadow-lg flex items-center gap-1.5 transition transform hover:scale-105 active:scale-95 cursor-pointer"
+              title="Cambiar a diseño Neón Glow VIP"
+            >
+              <Sparkles size={13} className="text-yellow-300" />
+              <span>Tema Neón VIP</span>
+            </button>
+
+            {user?.isSuperAdmin && (
+              <Link 
+                to="/super-admin" 
+                className="px-4 py-2 bg-blue-600 text-white rounded-full text-xs font-black uppercase tracking-widest shadow-lg hover:bg-blue-700 transition flex items-center gap-2"
+              >
+                <Shield size={16} /> Super Admin
+              </Link>
+            )}
+            <Link to="/admin" className="p-2 bg-white/10 backdrop-blur-md rounded-full text-white/70 hover:text-white hover:bg-white/20 transition flex items-center justify-center">
+              <Shield size={20} />
+            </Link>
+          </div>
 
       {/* Hero Section */}
       <div className="relative bg-blue-700 text-white pt-12 pb-20 px-6 rounded-b-[2.5rem] shadow-2xl overflow-hidden">
@@ -751,6 +808,8 @@ export default function Home() {
           </div>
         </motion.button>
       )}
+        </div>
+      )}
 
       {/* WhatsApp Community Modal */}
       <AnimatePresence>
@@ -1036,6 +1095,6 @@ export default function Home() {
       </AnimatePresence>
 
       <FloatingChatAgent />
-    </div>
+    </>
   );
 }

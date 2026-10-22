@@ -661,12 +661,44 @@ export default function AdminDashboard() {
         }
       })
       .catch(() => {});
+
+    apiFetch('/api/admin/settings/theme-template')
+      .then(res => res.json())
+      .then(data => {
+        if (data?.theme_template) setRoomThemeTemplate(data.theme_template);
+      })
+      .catch(() => {});
   }, [slug, user?.tenant_id]);
 
   const [socialShareMessage, setSocialShareMessage] = useState('');
   const [socialShareImageUrl, setSocialShareImageUrl] = useState('');
   const [isSavingSocialShare, setIsSavingSocialShare] = useState(false);
   const [isUploadingSocialImage, setIsUploadingSocialImage] = useState(false);
+
+  // Plantilla visual de la sala: 'classic' o 'neon_glow'
+  const [roomThemeTemplate, setRoomThemeTemplate] = useState<'classic' | 'neon_glow'>('classic');
+  const [isSavingRoomTheme, setIsSavingRoomTheme] = useState(false);
+
+  const handleSaveRoomTheme = async (newTheme: 'classic' | 'neon_glow') => {
+    setIsSavingRoomTheme(true);
+    setRoomThemeTemplate(newTheme);
+    try {
+      const res = await apiFetch('/api/admin/settings/theme-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ theme_template: newTheme })
+      });
+      if (res.ok) {
+        toast.success(`Plantilla cambiada a ${newTheme === 'neon_glow' ? 'Neón Glow VIP ✨' : 'Clásica (Original) 🎲'} exitosamente.`);
+      } else {
+        toast.error('Error al guardar plantilla');
+      }
+    } catch (e) {
+      toast.error('Error de conexión');
+    } finally {
+      setIsSavingRoomTheme(false);
+    }
+  };
 
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isSavingAutoplay, setIsSavingAutoplay] = useState(false);
@@ -6305,6 +6337,72 @@ export default function AdminDashboard() {
               </h2>
               
               <div className="space-y-6">
+
+                {/* Módulo de Plantilla Visual de la Sala */}
+                <div className="pt-2 pb-2 border-b border-slate-100">
+                  <h3 className="text-lg font-black text-slate-800 mb-2 flex items-center gap-2">
+                    <Sparkles className="text-purple-600" /> Plantilla Visual de la Sala
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4 font-medium">
+                    Elige el diseño visual activo para esta sala. La plantilla <b>Clásica</b> es la predeterminada; puedes alternar a la plantilla <b>Neón Glow VIP</b> según la ocasión o evento.
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Opción Clásica */}
+                    <div 
+                      onClick={() => handleSaveRoomTheme('classic')}
+                      className={clsx(
+                        "p-4 rounded-2xl border-2 cursor-pointer transition flex flex-col justify-between",
+                        roomThemeTemplate === 'classic'
+                          ? "bg-blue-50/70 border-blue-500 shadow-md ring-2 ring-blue-500/20"
+                          : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                      )}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-black text-slate-900 text-sm">Plantilla Clásica (Original)</span>
+                          {roomThemeTemplate === 'classic' && (
+                            <span className="px-2 py-0.5 bg-blue-600 text-white rounded-full text-[10px] font-black uppercase">Activa</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                          Diseño sobrio original con tarjetas limpias, contador regresivo formal y estructura tradicional.
+                        </p>
+                      </div>
+                      <div className="mt-4 pt-2 border-t border-slate-200/60 text-right">
+                        <span className="text-xs font-black text-blue-600">Por Defecto</span>
+                      </div>
+                    </div>
+
+                    {/* Opción Neón Glow VIP */}
+                    <div 
+                      onClick={() => handleSaveRoomTheme('neon_glow')}
+                      className={clsx(
+                        "p-4 rounded-2xl border-2 cursor-pointer transition flex flex-col justify-between",
+                        roomThemeTemplate === 'neon_glow'
+                          ? "bg-purple-950/10 border-purple-500 shadow-md ring-2 ring-purple-500/20"
+                          : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                      )}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-black text-purple-900 text-sm flex items-center gap-1.5">
+                            <Sparkles size={14} className="text-purple-600" /> Neón Glow VIP ✨
+                          </span>
+                          {roomThemeTemplate === 'neon_glow' && (
+                            <span className="px-2 py-0.5 bg-purple-600 text-white rounded-full text-[10px] font-black uppercase">Activa</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-500 font-medium leading-relaxed">
+                          Diseño espacial oscuro con balotas 3D flotantes, coronas doradas, resplandor neón cyan/fucsia y botones luminosos.
+                        </p>
+                      </div>
+                      <div className="mt-4 pt-2 border-t border-purple-100 text-right">
+                        <span className="text-xs font-black text-purple-600">Estilo Evento / Especial</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
 
                 {/* Módulo de Configuración de Redes Sociales (Facebook & WhatsApp) */}
                 <div className="pt-2">
