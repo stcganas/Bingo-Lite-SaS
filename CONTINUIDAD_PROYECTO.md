@@ -129,6 +129,13 @@
     - **Solución Blindada:** 
       - En `AdminDashboard.tsx`, se refactorizó la comprobación para validar la existencia de `cardNum`, `a.card_number` y recorrer de forma segura el arreglo `a.winners` usando `String(val)`.
       - En `PlayerDashboard.tsx` y `Home.tsx`, se protegieron todas las conversiones de números de cartón, identificadores y cuentas regresivas frente a valores `null` o `undefined`.
+18. **Buscador SaaS, Registro sin Juego Activo y Módulo de Tickets de Recuperación de Claves:**
+    - **Buscador de Salas:** Ubicado únicamente en la página principal (`/` - `SaaSMarketingLanding.tsx`) debajo de los botones principales, retirado de salas individuales (`Home.tsx`).
+    - **Registro Flexible de Jugadores:** Se habilitó el registro aún sin juegos activos o programados. Los cartones gratuitos se asignan de forma automática cuando se programa y activa un juego gratis; los botones de compra de cartones quedan atenuados y deshabilitados si no hay juego de pago activo disponible. Selector de cartones ajustado a 1 por defecto.
+    - **Recuperación de Contraseña por Tickets:**
+      - En `Home.tsx`: Enlace y modal para radicar solicitud técnica con advertencia de restablecimiento temporal a `123456`.
+      - En `AdminDashboard.tsx`: Pestaña "Tickets Claves 🔐" con botón para restablecer la contraseña a `123456` y envío automático de notificación push OneSignal al jugador (`"su contraseña se restablecio a 123456 personalicela lo mas pronto."`).
+      - Migración DDL: Creado `migration_password_reset_tickets.sql`.
 
 ---
 
