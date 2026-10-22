@@ -860,29 +860,48 @@ export default function Home() {
           <LogIn size={18} /> INGRESAR
         </button>
       </div>
-      {/* Floating WhatsApp Button */}
-      {settings?.whatsapp_group_link && (
+      {/* Botones Flotantes en la Página Principal: Regalar Cartones y Redes Sociales (WhatsApp) */}
+      <div className="fixed left-4 sm:left-6 bottom-24 md:bottom-8 z-40 flex flex-col items-start gap-2.5 sm:gap-3 pointer-events-none">
+        {/* Botón Flotante para Regalar Cartones en la Página Principal */}
         <motion.button
-          initial={{ opacity: 0, y: 100, scale: 0.5 }}
+          initial={{ opacity: 0, y: 30, scale: 0.8 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          transition={{ type: 'spring', damping: 15, stiffness: 100, delay: 1 }}
-          onClick={() => setShowWhatsappModal(true)}
-          className="fixed bottom-24 md:bottom-8 left-6 z-40 group flex items-center gap-2.5 bg-[#25D366] hover:bg-[#20ba5a] text-white p-2.5 px-3.5 md:p-3.5 md:px-5 rounded-full shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 border-2 border-white/30"
+          transition={{ type: 'spring', damping: 15, stiffness: 100, delay: 0.8 }}
+          onClick={() => setShowGiftModal(true)}
+          className="pointer-events-auto flex items-center gap-2.5 py-2.5 px-3.5 sm:py-3 sm:px-5 bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 hover:from-purple-500 hover:to-indigo-500 text-white rounded-full font-black text-xs sm:text-sm uppercase tracking-wider shadow-2xl border-2 border-white/60 hover:scale-105 active:scale-95 transition-all cursor-pointer group"
+          title="Regalar 1 Cartón Gratis de Bienvenida a tus Amigos 🎁"
         >
-          <div className="relative flex items-center justify-center shrink-0">
-            <div className="absolute inset-0 bg-white rounded-full animate-ping opacity-25 scale-150"></div>
-            <WhatsAppLogo size={32} className="md:w-9 md:h-9" />
+          <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-yellow-400 text-purple-950 flex items-center justify-center shrink-0 shadow-md group-hover:rotate-12 transition-transform">
+            <Gift size={16} className="sm:w-[18px] sm:h-[18px] animate-bounce" />
           </div>
-          <div className="flex flex-col items-start pl-0.5 text-left">
-            <span className="text-[10px] font-black uppercase tracking-wider text-emerald-100 opacity-90 leading-none mb-0.5">
-              Comunidad VIP
-            </span>
-            <span className="text-xs md:text-sm font-black leading-tight whitespace-nowrap">
-              Únete al WhatsApp
-            </span>
-          </div>
+          <span className="hidden sm:inline">🎁 Regalar Cartones</span>
+          <span className="sm:hidden font-extrabold text-[11px]">🎁 Regalar</span>
         </motion.button>
-      )}
+
+        {/* Floating WhatsApp / Redes Sociales Button */}
+        {settings?.whatsapp_group_link && (
+          <motion.button
+            initial={{ opacity: 0, y: 30, scale: 0.8 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ type: 'spring', damping: 15, stiffness: 100, delay: 1 }}
+            onClick={() => setShowWhatsappModal(true)}
+            className="pointer-events-auto group flex items-center gap-2.5 bg-[#25D366] hover:bg-[#20ba5a] text-white p-2.5 px-3.5 md:p-3.5 md:px-5 rounded-full shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 border-2 border-white/30 cursor-pointer"
+          >
+            <div className="relative flex items-center justify-center shrink-0">
+              <div className="absolute inset-0 bg-white rounded-full animate-ping opacity-25 scale-150"></div>
+              <WhatsAppLogo size={32} className="md:w-9 md:h-9" />
+            </div>
+            <div className="flex flex-col items-start pl-0.5 text-left">
+              <span className="text-[10px] font-black uppercase tracking-wider text-emerald-100 opacity-90 leading-none mb-0.5">
+                Comunidad VIP
+              </span>
+              <span className="text-xs md:text-sm font-black leading-tight whitespace-nowrap">
+                Únete al WhatsApp
+              </span>
+            </div>
+          </motion.button>
+        )}
+      </div>
         </div>
 
       {/* WhatsApp Community Modal */}
@@ -1168,20 +1187,7 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      {/* Botón Flotante para Regalar Cartones en la Página Principal */}
-      <div className="fixed left-6 bottom-6 z-40">
-        <button
-          onClick={() => setShowGiftModal(true)}
-          className="flex items-center gap-2.5 py-3 px-4 sm:px-5 bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-700 text-white rounded-full font-black text-xs sm:text-sm uppercase tracking-wider shadow-2xl border-2 border-white/60 hover:scale-105 active:scale-95 transition cursor-pointer group"
-          title="Regalar 1 Cartón Gratis de Bienvenida a tus Amigos 🎁"
-        >
-          <div className="w-8 h-8 rounded-full bg-yellow-400 text-purple-950 flex items-center justify-center shrink-0 shadow-md group-hover:rotate-12 transition-transform">
-            <Gift size={18} className="animate-bounce" />
-          </div>
-          <span className="hidden sm:inline">🎁 Regalar Cartones</span>
-          <span className="sm:hidden">🎁 Regalar</span>
-        </button>
-      </div>
+
 
       {/* Modal para Regalar Cartones e Invitar Amigos */}
       <AnimatePresence>
