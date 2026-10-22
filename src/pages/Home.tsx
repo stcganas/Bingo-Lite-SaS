@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Ticket, Shield, LogIn, Clock, Trophy, Zap, Star, ChevronRight, Phone, CheckCircle2, Building, ArrowRight, Calendar, MessageCircle, X, Bell, Users, Award, Plus, Key, Gift, ShieldCheck, Lock, Eye, EyeOff } from 'lucide-react';
+import { Ticket, Shield, LogIn, Clock, Trophy, Zap, Star, ChevronRight, Phone, CheckCircle2, Building, ArrowRight, Calendar, MessageCircle, X, Bell, Users, Award, Plus, Key, Gift, ShieldCheck, Lock, Eye, EyeOff, Search, Loader2, Sparkles } from 'lucide-react';
 import { formatCurrency } from '../utils/format';
 import { useAuth } from '../AuthContext';
 import { useTenant } from '../TenantContext';
@@ -29,6 +29,12 @@ export default function Home() {
   const [timeLeft, setTimeLeft] = useState<{ days: number, hours: number, minutes: number, seconds: number } | null>(null);
   const phoneInputRef = React.useRef<HTMLInputElement>(null);
 
+  // Estados para búsqueda inteligente de salas
+  const [searchRoomQuery, setSearchRoomQuery] = useState('');
+  const [roomSearchResults, setRoomSearchResults] = useState<any[]>([]);
+  const [isSearchingRooms, setIsSearchingRooms] = useState(false);
+  const [showRoomResults, setShowRoomResults] = useState(false);
+
   // Auto scroll to top on load
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -40,6 +46,34 @@ export default function Home() {
       setRoomCode(tenant.access_code);
     }
   }, [tenant?.access_code]);
+
+  // Búsqueda inteligente de salas con debounce
+  useEffect(() => {
+    const query = searchRoomQuery.trim();
+    if (!query) {
+      setRoomSearchResults([]);
+      setIsSearchingRooms(false);
+      return;
+    }
+
+    setIsSearchingRooms(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await apiFetch(`/api/tenants/search?q=${encodeURIComponent(query)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setRoomSearchResults(Array.isArray(data) ? data : []);
+          setShowRoomResults(true);
+        }
+      } catch (err) {
+        console.warn('Error al buscar salas:', err);
+      } finally {
+        setIsSearchingRooms(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [searchRoomQuery]);
 
   const checkIsFree = (g: any) => {
     if (!g) return false;
@@ -298,7 +332,114 @@ export default function Home() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 px-4 -mt-12 relative z-10 max-w-lg mx-auto w-full space-y-8">
+      <div className="flex-1 px-4 -mt-12 relative z-10 max-w-lg mx-auto w-full space-y-6">
+        
+        {/* Buscador Inteligente de Salas de Juegos */}
+        <div className="bg-white/95 backdrop-blur-md rounded-3xl p-5 shadow-2xl border-2 border-blue-500/30 relative">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-blue-100 text-blue-600 rounded-xl">
+                <Search size={18} className="stroke-[2.5]" />
+              </div>
+              <div>
+                <h3 className="font-black text-slate-800 text-sm sm:text-base uppercase tracking-tight flex items-center gap-1.5">
+                  Buscar mi Sala de Juegos <Sparkles size={14} className="text-amber-500 fill-amber-400" />
+                </h3>
+                <p className="text-[10px] text-slate-500 font-bold">Ingresa el código o nombre de tu sala</p>
+              </div>
+            </div>
+            {tenantSlug && (
+              <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-black text-[9px] uppercase tracking-wider">
+                Activa: {tenant.name}
+              </span>
+            )}
+          </div>
+
+          <div className="relative mt-2">
+            <input 
+              type="text"
+              placeholder="Ej: Bingo Ganador, BL-2026, demo..."
+              value={searchRoomQuery}
+              onChange={(e) => {
+                setSearchRoomQuery(e.target.value);
+                setShowRoomResults(true);
+              }}
+              onFocus={() => {
+                if (roomSearchResults.length > 0) setShowRoomResults(true);
+              }}
+              className="w-full pl-10 pr-9 py-3 bg-slate-50 border-2 border-slate-200 focus:border-blue-500 focus:bg-white rounded-2xl outline-none font-bold text-slate-800 text-sm transition placeholder:text-slate-400"
+            />
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            {isSearchingRooms ? (
+              <Loader2 className="absolute right-3.5 top-1/2 -translate-y-1/2 text-blue-500 animate-spin" size={16} />
+            ) : searchRoomQuery ? (
+              <button 
+                type="button"
+                onClick={() => {
+                  setSearchRoomQuery('');
+                  setRoomSearchResults([]);
+                  setShowRoomResults(false);
+                }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full"
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+
+          {/* Desplegable de resultados de salas inteligentes */}
+          {showRoomResults && searchRoomQuery.trim() && (
+            <div className="mt-3 bg-white rounded-2xl border-2 border-slate-100 shadow-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto z-30">
+              {roomSearchResults.length > 0 ? (
+                roomSearchResults.map((room) => (
+                  <div
+                    key={room.id}
+                    onClick={() => {
+                      setShowRoomResults(false);
+                      setSearchRoomQuery('');
+                      if (room.slug === 'bingo-lite' || room.slug === 'default') {
+                        navigate('/');
+                      } else {
+                        navigate(`/sala/${room.slug}`);
+                      }
+                    }}
+                    className="p-3 hover:bg-blue-50 transition flex items-center justify-between gap-3 cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white font-black text-sm flex items-center justify-center shrink-0 shadow-md">
+                        {room.logo_url ? (
+                          <img src={room.logo_url} alt={room.name} className="w-full h-full object-cover rounded-xl" />
+                        ) : (
+                          room.name.slice(0, 2).toUpperCase()
+                        )}
+                      </div>
+                      <div className="truncate">
+                        <p className="font-black text-slate-800 text-sm truncate group-hover:text-blue-600 transition">
+                          {room.name}
+                        </p>
+                        <p className="text-[10px] text-slate-500 font-bold flex items-center gap-1.5">
+                          <span className="text-emerald-600 font-black">PIN: {room.access_code}</span>
+                          <span>•</span>
+                          <span className="text-slate-400">/sala/{room.slug}</span>
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="px-3 py-1.5 bg-blue-600 group-hover:bg-blue-700 text-white rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-1 shadow-sm shrink-0"
+                    >
+                      Entrar <ArrowRight size={13} />
+                    </button>
+                  </div>
+                ))
+              ) : !isSearchingRooms ? (
+                <div className="p-4 text-center text-slate-400 text-xs font-bold">
+                  No se encontraron salas con "{searchRoomQuery}". Intenta con el nombre o PIN.
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
         
         {/* Quick Bingo Indicator */}
         <QuickBingoIndicator onBuyCard={scrollToLogin} />
@@ -315,14 +456,15 @@ export default function Home() {
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10"></div>
               <div className="absolute bottom-0 left-0 w-24 h-24 bg-yellow-400/10 rounded-full blur-xl -ml-6 -mb-6"></div>
               
-              <div className="inline-block px-3 py-1 bg-yellow-400 text-yellow-950 rounded-full text-[10px] font-black uppercase tracking-[0.2em] mb-3 border border-yellow-200 shadow-lg animate-pulse">
+              {/* Aviso de Juego Gratuito / Programado / En Vivo - Agrandado */}
+              <div className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-yellow-400 text-yellow-950 rounded-full text-xs sm:text-sm font-black uppercase tracking-[0.15em] mb-3 border-2 border-yellow-200 shadow-xl animate-pulse">
                 {checkIsFree(featuredGame)
                   ? (featuredGame.status === 'playing' ? '🎉 ¡JUEGO GRATIS EN VIVO!' : '🎉 ¡JUEGO GRATUITO PROGRAMADO!')
-                  : (featuredGame.status === 'playing' ? '¡JUEGO EN VIVO!' : 'PRÓXIMO JUEGO PREMIUM')}
+                  : (featuredGame.status === 'playing' ? '🔥 ¡JUEGO EN VIVO!' : '⭐ PRÓXIMO JUEGO PREMIUM')}
               </div>
 
               <div className="relative z-20 mb-3 flex justify-center">
-                <div className="bg-red-600 text-white font-black text-[10px] uppercase tracking-[0.2em] px-3 py-1 rounded-full border-2 border-red-500 shadow-[0_0_15px_rgba(220,38,38,0.7)] animate-pulse">
+                <div className="bg-red-600 text-white font-black text-[10px] uppercase tracking-[0.2em] px-3.5 py-1 rounded-full border-2 border-red-500 shadow-[0_0_15px_rgba(220,38,38,0.7)] animate-pulse">
                   {checkIsFree(featuredGame) ? 'Inscripción Abierta' : 'Venta Abierta'}
                 </div>
               </div>
@@ -333,7 +475,7 @@ export default function Home() {
             </div>
             
             <div className="p-6">
-              <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-2 gap-4 mb-4">
                 <div className="bg-emerald-50 rounded-3xl p-4 text-center border border-emerald-100 shadow-sm relative overflow-hidden group">
                   <div className="absolute inset-0 bg-emerald-100 opacity-0 group-hover:opacity-20 transition-opacity"></div>
                   <span className="block text-[10px] font-black text-emerald-600 uppercase mb-1 tracking-widest relative z-10">Premio Mayor</span>
@@ -352,63 +494,71 @@ export default function Home() {
                     )}
                   </span>
                 </div>
-                <div className="bg-slate-900 rounded-[2rem] p-4 text-center border border-slate-700 col-span-2 shadow-xl">
-                  <span className="block text-[10px] font-black text-yellow-400 uppercase mb-2 tracking-[0.2em] opacity-80">Fecha de Sorteo</span>
-                  <span className="block text-sm font-black text-white flex items-center justify-center gap-3">
-                    <Calendar size={16} className="text-yellow-400" /> 
-                    {new Date(featuredGame.start_time).toLocaleDateString('es-ES', { 
-                      weekday: 'long', 
-                      day: 'numeric', 
-                      month: 'long', 
-                      hour: '2-digit', 
-                      minute: '2-digit' 
-                    })}
-                  </span>
+              </div>
+
+              {/* Tarjeta Fusionada: Fecha de Sorteo y Contador Regresivo */}
+              <div className="bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 rounded-3xl p-5 text-white shadow-2xl mb-6 border border-slate-700/60 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 rounded-full blur-2xl pointer-events-none" />
+                <div className="flex flex-col items-center text-center space-y-3 relative z-10">
+                  <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-slate-800/90 border border-slate-700 text-[11px] sm:text-xs font-black text-yellow-300 uppercase tracking-wider shadow-inner">
+                    <Calendar size={14} className="text-yellow-400 shrink-0" />
+                    <span>
+                      {new Date(featuredGame.start_time).toLocaleDateString('es-ES', { 
+                        weekday: 'long', 
+                        day: 'numeric', 
+                        month: 'long', 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                      })}
+                    </span>
+                  </div>
+
+                  {timeLeft && (
+                    <div className="w-full pt-1">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-2">EL SORTEO INICIA EN:</p>
+                      <div className="flex justify-center items-center gap-3 sm:gap-5">
+                        <div className="flex flex-col items-center">
+                          <span className="text-2xl sm:text-3xl font-black text-white leading-none mb-1">{timeLeft.days}</span>
+                          <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Días</span>
+                        </div>
+                        <div className="text-slate-700 font-black text-xl sm:text-2xl">:</div>
+                        <div className="flex flex-col items-center">
+                          <span className="text-2xl sm:text-3xl font-black text-white leading-none mb-1">{String(timeLeft?.hours ?? 0).padStart(2, '0')}</span>
+                          <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Horas</span>
+                        </div>
+                        <div className="text-slate-700 font-black text-xl sm:text-2xl">:</div>
+                        <div className="flex flex-col items-center">
+                          <span className="text-2xl sm:text-3xl font-black text-white leading-none mb-1">{String(timeLeft?.minutes ?? 0).padStart(2, '0')}</span>
+                          <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Min</span>
+                        </div>
+                        <div className="text-slate-700 font-black text-xl sm:text-2xl">:</div>
+                        <div className="flex flex-col items-center">
+                          <span className="text-2xl sm:text-3xl font-black text-yellow-400 leading-none mb-1">{String(timeLeft?.seconds ?? 0).padStart(2, '0')}</span>
+                          <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Seg</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
-              {timeLeft && (
-                <div className="bg-gradient-to-b from-slate-800 to-slate-950 rounded-3xl p-5 text-white shadow-2xl mb-6 border border-slate-700/50">
-                  <p className="text-center text-[10px] font-black text-slate-400 uppercase tracking-[0.3em] mb-4">INICIA EN:</p>
-                  <div className="flex justify-center gap-5">
-                    <div className="flex flex-col items-center">
-                      <span className="text-3xl font-black text-white leading-none mb-1">{timeLeft.days}</span>
-                      <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Días</span>
-                    </div>
-                    <div className="text-slate-700 font-black text-2xl">:</div>
-                    <div className="flex flex-col items-center">
-                      <span className="text-3xl font-black text-white leading-none mb-1">{String(timeLeft?.hours ?? 0).padStart(2, '0')}</span>
-                      <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Horas</span>
-                    </div>
-                    <div className="text-slate-700 font-black text-2xl">:</div>
-                    <div className="flex flex-col items-center">
-                      <span className="text-3xl font-black text-white leading-none mb-1">{String(timeLeft?.minutes ?? 0).padStart(2, '0')}</span>
-                      <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Min</span>
-                    </div>
-                    <div className="text-slate-700 font-black text-2xl">:</div>
-                    <div className="flex flex-col items-center">
-                      <span className="text-3xl font-black text-yellow-400 leading-none mb-1">{String(timeLeft?.seconds ?? 0).padStart(2, '0')}</span>
-                      <span className="text-[9px] uppercase font-black text-slate-500 tracking-wider">Seg</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {checkIsFree(featuredGame) ? (
+              {/* Botones: Jugar (lleva a login inferior) y Registrarse (lleva a registro de sala) */}
+              <div className="grid grid-cols-2 gap-3 sm:gap-4 pt-1">
                 <button 
-                  onClick={() => navigate(`${tenantPrefix ? `${tenantPrefix}/register` : '/register'}?gameId=${featuredGame.id}&free=true`)}
-                  className="w-full py-5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-500 text-white font-black text-xl rounded-3xl shadow-xl shadow-emerald-500/30 transform transition active:scale-[0.98] flex items-center justify-center gap-3 border-b-4 border-emerald-700 uppercase tracking-wide"
+                  onClick={scrollToLogin}
+                  className="py-4 px-3 sm:px-4 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-600 hover:from-emerald-400 hover:to-teal-500 text-white font-black text-base sm:text-lg rounded-2xl sm:rounded-3xl shadow-xl shadow-emerald-500/25 transform transition active:scale-[0.98] flex items-center justify-center gap-2 border-b-4 border-emerald-700 uppercase tracking-wide cursor-pointer"
+                  title="Ingresa con tu teléfono y clave para jugar"
                 >
-                  <Gift size={24} className="animate-bounce" /> ¡OBTENER MIS 2 CARTONES GRATIS!
+                  <LogIn size={20} className="shrink-0" /> Jugar
                 </button>
-              ) : (
                 <button 
-                  onClick={() => navigate(`${tenantPrefix ? `${tenantPrefix}/register` : '/register'}?gameId=${featuredGame.id}`)}
-                  className="w-full py-5 bg-gradient-to-r from-yellow-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-yellow-950 font-black text-xl rounded-3xl shadow-xl shadow-yellow-500/20 transform transition active:scale-[0.98] flex items-center justify-center gap-3 border-b-4 border-yellow-600 uppercase tracking-wide"
+                  onClick={() => navigate(`${tenantPrefix ? `${tenantPrefix}/register` : '/register'}?gameId=${featuredGame.id}${checkIsFree(featuredGame) ? '&free=true' : ''}`)}
+                  className="py-4 px-3 sm:px-4 bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-500 hover:from-yellow-300 hover:to-yellow-400 text-yellow-950 font-black text-base sm:text-lg rounded-2xl sm:rounded-3xl shadow-xl shadow-yellow-500/25 transform transition active:scale-[0.98] flex items-center justify-center gap-2 border-b-4 border-yellow-600 uppercase tracking-wide cursor-pointer"
+                  title="Crear cuenta para participar en esta sala"
                 >
-                  <Ticket size={24} /> ¡COMPRAR MI CARTÓN!
+                  <Ticket size={20} className="shrink-0" /> Registrarse
                 </button>
-              )}
+              </div>
             </div>
           </div>
         ) : (

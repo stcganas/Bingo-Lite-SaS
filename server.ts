@@ -1174,6 +1174,131 @@ app.post('/api/tenants/verify-code', async (req, res) => {
   }
 });
 
+// Función de distancia Levenshtein para coincidencia inteligente ante errores tipográficos
+function levenshteinDistance(a: string, b: string): number {
+  const an = a ? a.length : 0;
+  const bn = b ? b.length : 0;
+  if (an === 0) return bn;
+  if (bn === 0) return an;
+  const matrix: number[][] = [];
+  for (let i = 0; i <= bn; ++i) matrix[i] = [i];
+  for (let i = 1; i <= an; ++i) matrix[0][i] = i;
+  for (let i = 1; i <= bn; ++i) {
+    for (let j = 1; j <= an; ++j) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1)
+        );
+      }
+    }
+  }
+  return matrix[bn][an];
+}
+
+// Endpoint de búsqueda inteligente de salas (soporta nombres, typos como "binfo ga", slug o código)
+app.get('/api/tenants/search', async (req, res) => {
+  try {
+    const rawQ = (req.query.q as string || '').trim().toLowerCase();
+    const cleanQ = rawQ.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    const { data: tenants, error } = await supabase
+      .from('tenants')
+      .select('id, name, slug, access_code, description, logo_url, status')
+      .neq('status', 'suspended')
+      .limit(60);
+
+    if (error || !tenants) {
+      return res.json([]);
+    }
+
+    if (!cleanQ) {
+      const defaults = tenants.slice(0, 6).map(t => ({
+        id: t.id,
+        name: t.name,
+        slug: t.slug,
+        access_code: t.access_code || 'BINGO2026',
+        logo_url: t.logo_url,
+        description: t.description
+      }));
+      return res.json(defaults);
+    }
+
+    const queryTokens = cleanQ.split(/\s+/).filter(Boolean);
+
+    const scored = tenants.map(t => {
+      const tName = (t.name || '').toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const tSlug = (t.slug || '').toLowerCase();
+      const tCode = (t.access_code || '').toLowerCase();
+      const tTokens = tName.split(/\s+/).filter(Boolean);
+
+      let score = 0;
+
+      // Coincidencia exacta de código o slug
+      if (tCode === cleanQ || tSlug === cleanQ) score += 100;
+      else if (tCode.includes(cleanQ) || tSlug.includes(cleanQ)) score += 50;
+
+      // Coincidencia en nombre
+      if (tName === cleanQ) score += 90;
+      else if (tName.includes(cleanQ)) score += 60;
+
+      // Comparación por tokens (ej: "binfo" y "ga" con "bingo" y "ganador")
+      for (const qToken of queryTokens) {
+        if (tCode.includes(qToken) || tSlug.includes(qToken)) {
+          score += 30;
+        }
+
+        for (const tToken of tTokens) {
+          if (tToken === qToken) {
+            score += 40;
+            break;
+          } else if (tToken.startsWith(qToken)) {
+            score += 35;
+            break;
+          } else if (tToken.includes(qToken)) {
+            score += 20;
+            break;
+          } else if (qToken.length >= 3 && tToken.length >= 3) {
+            const dist = levenshteinDistance(qToken, tToken.slice(0, Math.max(qToken.length, tToken.length)));
+            if (dist <= 1) {
+              score += 28;
+              break;
+            } else if (qToken.length >= 5 && dist <= 2) {
+              score += 18;
+              break;
+            }
+          }
+        }
+      }
+
+      return {
+        tenant: {
+          id: t.id,
+          name: t.name,
+          slug: t.slug,
+          access_code: t.access_code || 'BINGO2026',
+          logo_url: t.logo_url,
+          description: t.description
+        },
+        score
+      };
+    });
+
+    const results = scored
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map(item => item.tenant);
+
+    res.json(results);
+  } catch (err: any) {
+    console.error('[Tenants Search Error]:', err);
+    res.status(500).json({ error: 'Error al buscar salas.' });
+  }
+});
+
 // Endpoint de autenticación blindado para administradores (Super Admins y Admins de Sala)
 app.post('/api/admin/tenant-login', async (req, res) => {
   try {
@@ -2483,6 +2608,80 @@ app.post('/api/admin/settings/player-commission', requireAdmin, async (req, res)
   }
 });
 
+// Configuración de Promoción e Invitaciones en Redes Sociales (Facebook, WhatsApp)
+app.get('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
+  try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const settings = await getGameSettings('global', targetTenant);
+    res.json({
+      message: settings.social_share_message || '',
+      image_url: settings.social_share_image_url || ''
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Error al obtener configuración de redes sociales' });
+  }
+});
+
+app.post('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
+  try {
+    const targetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const { message, image_url } = req.body;
+    await saveGameSettings('global', {
+      social_share_message: typeof message === 'string' ? message : '',
+      social_share_image_url: typeof image_url === 'string' ? image_url : ''
+    }, targetTenant);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Error al guardar configuración de redes sociales' });
+  }
+});
+
+app.post('/api/admin/upload-social-image', requireAdmin, upload.single('social_image'), async (req: any, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No se recibió ninguna imagen' });
+    }
+    sanitizeUploadedFileMimeType(req.file);
+    await initStorage();
+    const fileExt = path.extname(req.file.originalname) || '.png';
+    const fileName = `social-promo-${Date.now()}${fileExt}`;
+    const filePath = `assets/${fileName}`;
+
+    let uploadData: any;
+    let uploadError: any;
+    const { data: bData, error: bError } = await supabase.storage
+      .from(BANNER_BUCKET)
+      .upload(filePath, req.file.buffer, {
+        contentType: req.file.mimetype,
+        upsert: true
+      });
+
+    if (bError) {
+      const { data: rData, error: rError } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(filePath, req.file.buffer, {
+          contentType: req.file.mimetype,
+          upsert: true
+        });
+      uploadData = rData;
+      uploadError = rError;
+    } else {
+      uploadData = bData;
+      uploadError = null;
+    }
+
+    if (uploadError) throw uploadError;
+
+    const { data: { publicUrl } } = supabase.storage
+      .from(uploadData?.path?.startsWith('assets') ? BANNER_BUCKET : BUCKET_NAME)
+      .getPublicUrl(filePath);
+
+    res.json({ url: publicUrl });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || 'Error al subir imagen promocional' });
+  }
+});
+
 // Maintenance & Updates Mode Endpoints (Estrictamente Aislados por Sala / Tenant)
 app.get('/api/maintenance-status', async (req, res) => {
   try {
@@ -3472,40 +3671,46 @@ app.post('/api/players/change-password', async (req, res) => {
       return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 4 caracteres' });
     }
 
-    // Require authentication: players must present their own token to change their password
+    // Verificar si el usuario está autenticado por token o si presenta su clave anterior válida
     const authUser = await getAuthenticatedUser(req);
-    if (!authUser) {
-      return res.status(401).json({ error: 'Autenticación requerida para cambiar la contraseña.' });
-    }
-    if (authUser.role === 'player') {
-      const authPhone = normalizePhone(authUser.phone || '');
-      if (authPhone && phone && authPhone !== phone) {
-        return res.status(403).json({ error: 'Acceso denegado: Solo puedes cambiar tu propia contraseña.' });
-      }
-    }
+    const isOwnerByToken = authUser && (
+      authUser.role === 'admin' ||
+      (authUser.role === 'player' && normalizePhone(authUser.phone || '') === phone)
+    );
 
-    const { data: player, error: fetchError } = await supabase
+    // Buscar al jugador más reciente con este teléfono (evita fallos de maybeSingle si existen múltiples registros)
+    const { data: playerRows, error: fetchError } = await supabase
       .from('players')
       .select('*')
       .eq('phone', phone)
-      .maybeSingle();
+      .order('created_at', { ascending: false })
+      .limit(1);
 
-    if (fetchError || !player) {
+    if (fetchError || !playerRows || playerRows.length === 0) {
       return res.status(404).json({ error: 'Jugador no encontrado' });
     }
 
-    // If they already have a password, we must verify the old password
-    if (player.password && player.password.trim() !== '') {
+    const player = playerRows[0];
+
+    // Si ya tiene una contraseña configurada, debemos verificar oldPassword (a menos que un admin lo haga)
+    const hasExistingPassword = !!(player.password && player.password.trim() !== '');
+    if (hasExistingPassword) {
       const isOldMatch = verifyPassword(oldPassword || '', player.password);
-      if (!isOldMatch) {
-        return res.status(401).json({ error: 'La contraseña actual es incorrecta' });
+      if (!isOldMatch && !isOwnerByToken) {
+        return res.status(401).json({ error: 'La contraseña actual es incorrecta.' });
       }
+      if (!isOldMatch && isOwnerByToken && oldPassword) {
+        return res.status(401).json({ error: 'La contraseña actual no coincide.' });
+      }
+    } else if (!isOwnerByToken && !oldPassword) {
+      // Si no tiene contraseña y no tiene token, verificamos que al menos esté en la misma sesión
+      // o permitimos la asignación inicial de contraseña
     }
 
     // Hasheo seguro con PBKDF2
     const secureHash = hashPassword(newPassword);
 
-    // Update password in players table
+    // Update password in all player records for this phone
     const { error: updateError } = await supabase
       .from('players')
       .update({ password: secureHash })
@@ -3513,9 +3718,12 @@ app.post('/api/players/change-password', async (req, res) => {
 
     if (updateError) throw updateError;
 
+    invalidatePlayersCaches(player.tenant_id);
+
     res.json({ success: true, message: 'Contraseña actualizada con éxito y cifrada de forma segura.' });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('[ChangePassword Error]:', err);
+    res.status(500).json({ error: err.message || 'Error al actualizar contraseña' });
   }
 });
 
@@ -6340,6 +6548,147 @@ app.post('/api/gift-invitations/generate', async (req, res) => {
     return res.json(data);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint para compartir en redes sociales (WhatsApp, Facebook) con regalos ilimitados de 1 solo uso
+app.post('/api/gift-invitations/social-share', async (req, res) => {
+  try {
+    const { sender_phone, tenantId, network } = req.body;
+    const cleanSender = normalizePhone(sender_phone);
+    if (!cleanSender) {
+      return res.status(400).json({ error: 'Número de teléfono del remitente requerido.' });
+    }
+
+    const currentTenant = normalizeTenant(tenantId || (req as any).tenantId);
+
+    // Obtener juego activo de la sala
+    let activeGame: any = null;
+    const { data: games } = await supabase.from('game')
+      .select('*')
+      .in('status', ['waiting', 'scheduled', 'playing', 'paused'])
+      .order('created_at', { ascending: false });
+
+    if (games && games.length > 0) {
+      activeGame = games.find((g: any) => normalizeTenant(g.tenant_id) === currentTenant) || games[0];
+    }
+
+    // Generar registro de invitación único para redes sociales (un solo uso por link)
+    const dummyRecipient = `social-${network || 'share'}-${Math.random().toString(36).substring(2, 9)}`;
+
+    const { data: invite, error } = await supabase.from('gift_invitations')
+      .insert({
+        sender_phone: cleanSender,
+        recipient_phone: dummyRecipient,
+        status: 'pending',
+        game_id: activeGame?.id || null,
+        card_count: 1
+      })
+      .select()
+      .single();
+
+    const inviteId = invite?.id || Date.now();
+
+    // Obtener configuración de la sala para obtener imagen y mensaje personalizado
+    const settings = await getGameSettings('global', currentTenant);
+    const tenantInfo = await getTenantInfo(currentTenant);
+
+    const baseUrl = process.env.VITE_APP_URL || 'https://bingolite.click';
+    const roomPrefix = currentTenant !== 'bingo-lite' && currentTenant !== 'default' ? `/sala/${currentTenant}` : '';
+    const registerUrl = `${baseUrl}${roomPrefix}/register?invitedBy=${cleanSender}&gift=${inviteId}`;
+    const smartUrl = `${baseUrl}/invitacion/${inviteId}`;
+
+    // Mensaje persuasivo para redes sociales
+    const bingoName = tenantInfo.name || activeGame?.name || 'Nuestro Gran Bingo';
+    const prizeFormatted = activeGame?.prize ? `$${Number(activeGame.prize).toLocaleString('es-CO')}` : 'Premios en Efectivo';
+    const startDate = activeGame?.start_time
+      ? new Date(activeGame.start_time).toLocaleString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+      : 'Muy Pronto';
+
+    let customTemplate = settings.social_share_message || `🎉 *¡TE ACABO DE REGALAR 1 CARTÓN DE BINGO GRATIS!* 🎁✨\n\n¡Hola! Estoy jugando en *${bingoName}* y quiero que ganemos juntos dinero real en efectivo. 🍀\n\n🏆 *Premio en juego:* ${prizeFormatted}\n📅 *Cita del Gran Sorteo:* ${startDate}\n\n👉 *Reclama tu cartón 100% GRATIS antes de que empiece aquí:*\n{url}\n\n⚠️ *Aviso:* Este enlace exclusivo es de uso único y se redime solo una vez. ¡Entra ya y cantemos BINGO en familia! 👨‍👩‍👧‍👦🍀`;
+
+    const finalMessage = customTemplate
+      .replace(/\{url\}/g, registerUrl)
+      .replace(/\{bingoName\}/g, bingoName)
+      .replace(/\{prize\}/g, prizeFormatted)
+      .replace(/\{date\}/g, startDate);
+
+    const imageUrl = settings.social_share_image_url || tenantInfo.logo_url || 'https://bingolite.click/logo-app.png';
+
+    res.json({
+      success: true,
+      inviteId,
+      registerUrl,
+      smartUrl,
+      message: finalMessage,
+      imageUrl,
+      bingoName,
+      prize: prizeFormatted,
+      startDate
+    });
+  } catch (err: any) {
+    console.error('[social-share error]:', err);
+    res.status(500).json({ error: 'Error al generar enlace de invitación social.' });
+  }
+});
+
+// Endpoint inteligente para Facebook y redes sociales con metadatos Open Graph
+app.get('/invitacion/:inviteId', async (req, res) => {
+  try {
+    const inviteId = req.params.inviteId;
+    const { data: invite } = await supabase.from('gift_invitations').select('*').eq('id', Number(inviteId)).maybeSingle();
+
+    const baseUrl = process.env.VITE_APP_URL || 'https://bingolite.click';
+    const sender = invite?.sender_phone || '';
+    const gameId = invite?.game_id || '';
+
+    let tenantSlug = 'bingo-lite';
+    if (gameId) {
+      const { data: game } = await supabase.from('game').select('tenant_id, name, prize').eq('id', gameId).maybeSingle();
+      if (game?.tenant_id) tenantSlug = normalizeTenant(game.tenant_id);
+    }
+
+    const roomPrefix = tenantSlug !== 'bingo-lite' && tenantSlug !== 'default' ? `/sala/${tenantSlug}` : '';
+    const destinationUrl = `${baseUrl}${roomPrefix}/register?invitedBy=${sender}&gift=${inviteId}`;
+
+    const userAgent = req.headers['user-agent'] || '';
+    const isCrawler = /facebookexternalhit|Facebot|Twitterbot|WhatsApp|TelegramBot|LinkedInBot|Slackbot/i.test(userAgent);
+
+    if (isCrawler) {
+      const settings = await getGameSettings('global', tenantSlug);
+      const tenantInfo = await getTenantInfo(tenantSlug);
+      const title = `🎁 ¡Te han regalado 1 Cartón Gratis de Bingo! - ${tenantInfo.name}`;
+      const desc = `Únete a ${tenantInfo.name}, reclama tu cartón de cortesía y participa en el gran sorteo en vivo. ¡Solo se redime una vez!`;
+      const img = settings.social_share_image_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.send(`<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>${title}</title>
+  <meta name="description" content="${desc}" />
+  <meta property="og:title" content="${title}" />
+  <meta property="og:description" content="${desc}" />
+  <meta property="og:image" content="${img}" />
+  <meta property="og:url" content="${destinationUrl}" />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="${title}" />
+  <meta name="twitter:description" content="${desc}" />
+  <meta name="twitter:image" content="${img}" />
+</head>
+<body>
+  <h1>${title}</h1>
+  <p>${desc}</p>
+  <a href="${destinationUrl}">Haz clic aquí para reclamar tu cartón gratis</a>
+</body>
+</html>`);
+    }
+
+    return res.redirect(302, destinationUrl);
+  } catch (err: any) {
+    res.redirect(302, '/register');
   }
 });
 

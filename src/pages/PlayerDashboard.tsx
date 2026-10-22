@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Trophy, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock, Grid, Volume2, VolumeX, Radio, Maximize2, Minimize2, X, MessageSquare, Bot, Sparkles, Wallet, LogOut, Plus, Share2, Copy, MessageCircle, ChevronDown, ChevronUp, Users, List, BellRing, PlusCircle, Key, ShieldCheck, History } from 'lucide-react';
+import { Trophy, RefreshCw, AlertCircle, CheckCircle2, XCircle, Clock, Grid, Volume2, VolumeX, Radio, Maximize2, Minimize2, X, MessageSquare, Bot, Sparkles, Wallet, LogOut, Plus, Share2, Copy, MessageCircle, ChevronDown, ChevronUp, Users, List, BellRing, PlusCircle, Key, ShieldCheck, History, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 import toast from 'react-hot-toast';
 import { motion, AnimatePresence } from 'motion/react';
@@ -327,6 +327,7 @@ ${refUrl}
   const [invitePhone, setInvitePhone] = useState('');
   const [isFetchingStats, setIsFetchingStats] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
+  const [isSharingSocial, setIsSharingSocial] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -3971,124 +3972,163 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
               initial={{ opacity: 0, x: -20, scale: 0.95 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, x: -20, scale: 0.95 }}
-              className="bg-white p-6 rounded-3xl shadow-2xl border-2 border-blue-100 w-80 mb-2"
+              className="bg-white p-6 rounded-3xl shadow-2xl border-2 border-blue-100 w-84 sm:w-96 mb-2"
             >
-              <div className="flex justify-between items-center mb-4 border-b pb-2">
-                <h3 className="font-black text-slate-800 flex items-center gap-2">
-                  <Share2 size={18} className="text-blue-500" /> Compartir Registro
-                </h3>
+              <div className="flex justify-between items-center mb-3 border-b pb-2">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-gradient-to-tr from-blue-600 to-indigo-600 rounded-xl text-white shadow-md">
+                    <Share2 size={18} />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-slate-800 text-sm leading-none">Compartir Invitación</h3>
+                    <span className="text-[10px] text-emerald-600 font-extrabold uppercase tracking-wider">🎁 1 Cartón Gratis de Regalo</span>
+                  </div>
+                </div>
                 <button 
                   onClick={() => setIsShareOpen(false)}
-                  className="text-slate-400 hover:text-slate-600 transition-colors"
+                  className="text-slate-400 hover:text-slate-600 transition-colors p-1"
                 >
                   <X size={20} />
                 </button>
               </div>
-              
+
               <div className="space-y-4">
-                <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
-                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Tu Enlace</p>
-                  <div className="flex gap-2">
-                    <input 
-                      type="text" 
-                      readOnly 
-                      value="https://bingolite.click/register"
-                      className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-600 focus:outline-none"
-                    />
-                    <button 
-                      onClick={() => {
-                        navigator.clipboard.writeText("https://bingolite.click/register");
-                        toast.success('¡Enlace copiado!');
-                      }}
-                      className="p-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-                    >
-                      <Copy size={16} />
-                    </button>
-                  </div>
+                <div className="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-3">
+                  <p className="text-[11px] text-amber-900 font-bold leading-snug">
+                    🎉 <b>¡Invita a tus amigos y familiares!</b> Cada persona que se registre con tu invitación recibe <b>1 CARTÓN GRATIS</b> de bienvenida. Puedes enviar todas las invitaciones que quieras.
+                  </p>
                 </div>
 
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2.5">
+                  {/* Botón WhatsApp Nativo */}
                   <button 
-                    onClick={() => {
-                      const url = "https://bingolite.click/register";
-                      const bingoName = gameState?.title || 'nuestro gran bingo';
-                      const startDate = gameState?.start_time ? new Date(gameState.start_time).toLocaleString('es-CO', { dateStyle: 'long', timeStyle: 'short' }) : 'próximamente';
-                      const groupLink = gameState?.whatsapp_group_link || 'https://chat.whatsapp.com/CDgs5mXL8HWGJjbJn0VxHk';
+                    disabled={isSharingSocial}
+                    onClick={async () => {
+                      if (isSharingSocial) return;
+                      setIsSharingSocial(true);
+                      try {
+                        const res = await apiFetch('/api/gift-invitations/social-share', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            sender_phone: user?.phone || player?.phone,
+                            sender_name: player?.name || user?.name || 'Tu amigo(a)',
+                            tenantId: effectiveTenant,
+                            network: 'whatsapp'
+                          })
+                        });
+                        if (!res.ok) throw new Error('Error al generar enlace');
+                        const data = await res.json();
+                        const message = data.message || `¡Hola! Te regalo 1 CARTÓN GRATIS de Bingo. Regístrate aquí: ${data.registerUrl}`;
+                        const encoded = encodeURIComponent(message);
+                        const nativeUrl = `whatsapp://send?text=${encoded}`;
+                        const webUrl = `https://api.whatsapp.com/send?text=${encoded}`;
 
-                      let defaultTemplate = `¡Hola! 👋 ¡Tengo una excelente noticia para ti! Te acabo de regalar un CARTÓN 100% GRATIS 🎁 para que juegues y ganes conmigo en *${bingoName}*.
-
-📅 Anota la cita: ¡El juego será el *${startDate}*!
-
-Hay premios fantásticos con saldo real para tu billetera, sorteos increíbles y muchísima emoción en vivo. 🎉`;
-
-                      if (gameState?.active_lottery && gameState?.active_draw) {
-                        defaultTemplate += `\n\n🎰 ¡Y atención especial! Tu cartón de regalo participa con las últimas tres cifras de la lotería nocturna en juego para la noche. 🍀`;
+                        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+                        if (isMobile) {
+                          window.location.href = nativeUrl;
+                        } else {
+                          const a = document.createElement('a');
+                          a.href = nativeUrl;
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove?.();
+                          setTimeout(() => {
+                            window.open(webUrl, '_blank');
+                          }, 500);
+                        }
+                        toast.success('🎁 ¡Abriendo WhatsApp con tu regalo de 1 cartón!');
+                      } catch (err) {
+                        toast.error('No se pudo generar la invitación. Intenta de nuevo.');
+                      } finally {
+                        setIsSharingSocial(false);
                       }
-
-                      defaultTemplate += `\n\n1️⃣ *Paso 1: Reclama tu regalo* 🎁
-Regístrate totalmente GRATIS usando mi invitación oficial aquí:
-👉 {url}
-
-2️⃣ *Paso 2: Únete al VIP (¡Fundamental!)* 🚨
-Es *estrictamente fundamental* que te unas a nuestro Grupo VIP de WhatsApp para validar tu jugada. Por ahí anunciamos los premios, daremos inducción, resolvemos dudas en tiempo real y publicamos nuevos juegos.
-
-📲 Únete a nuestro Grupo VIP aquí:
-👉 ${groupLink}
-
-¡Entra ya mismo y prepárate para cantar BINGO en familia! Nos vemos allí. 👨‍👩‍👧‍👦🍀`;
-
-                      const message = (gameState?.whatsapp_template || defaultTemplate).replace('{url}', url);
-                      const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
-                      window.open(whatsappUrl, '_blank');
                     }}
-                    className="flex items-center justify-center gap-2 py-2.5 px-4 bg-[#25D366] hover:bg-[#128C7E] text-white font-bold text-sm rounded-xl transition shadow-md active:scale-95"
+                    className={clsx(
+                      "flex items-center justify-center gap-2.5 py-3 px-4 bg-[#25D366] hover:bg-[#128C7E] text-white font-black text-sm rounded-xl transition shadow-md active:scale-95 cursor-pointer",
+                      isSharingSocial && "opacity-70 cursor-not-allowed"
+                    )}
                   >
-                    <MessageCircle size={18} /> WhatsApp
+                    {isSharingSocial ? <Loader2 size={18} className="animate-spin" /> : <MessageCircle size={20} />}
+                    <span>Compartir en WhatsApp</span>
                   </button>
+
+                  {/* Botón Facebook con OpenGraph inteligente */}
                   <button 
-                    onClick={() => {
-                      const url = "https://bingolite.click/register";
-                      const bingoName = gameState?.title || 'nuestro gran bingo';
-                      const startDate = gameState?.start_time ? new Date(gameState.start_time).toLocaleString('es-CO', { dateStyle: 'long', timeStyle: 'short' }) : 'próximamente';
-                      const groupLink = gameState?.whatsapp_group_link || 'https://chat.whatsapp.com/CDgs5mXL8HWGJjbJn0VxHk';
-
-                      let defaultTemplate = `¡Hola! 👋 ¡Tengo una excelente noticia para ti! Te acabo de regalar un CARTÓN 100% GRATIS 🎁 para que juegues y ganes conmigo en *${bingoName}*.
-
-📅 Anota la cita: ¡El juego será el *${startDate}*!
-
-Hay premios fantásticos con saldo real para tu billetera, sorteos increíbles y muchísima emoción en vivo. 🎉`;
-
-                      if (gameState?.active_lottery && gameState?.active_draw) {
-                        defaultTemplate += `\n\n🎰 ¡Y atención especial! Tu cartón de regalo participa con las últimas tres cifras de la lotería nocturna en juego para la noche. 🍀`;
-                      }
-
-                      defaultTemplate += `\n\n1️⃣ *Paso 1: Reclama tu regalo* 🎁
-Regístrate totalmente GRATIS usando mi invitación oficial aquí:
-👉 {url}
-
-2️⃣ *Paso 2: Únete al VIP (¡Fundamental!)* 🚨
-Es *estrictamente fundamental* que te unas a nuestro Grupo VIP de WhatsApp para validar tu jugada. Por ahí anunciamos los premios, daremos inducción, resolvemos dudas en tiempo real y publicamos nuevos juegos.
-
-📲 Únete a nuestro Grupo VIP aquí:
-👉 ${groupLink}
-
-¡Entra ya mismo y prepárate para cantar BINGO en familia! Nos vemos allí. 👨‍👩‍👧‍👦🍀`;
-
-                      const message = (gameState?.whatsapp_template || defaultTemplate).replace('{url}', url);
-                      if (navigator.share) {
-                        navigator.share({
-                          title: 'Registro Bingo Online',
-                          text: message,
-                          url: url
-                        }).catch(console.error);
-                      } else {
-                        navigator.clipboard.writeText(`${message}\n\n${url}`);
-                        toast.success('¡Copiado para compartir!');
+                    disabled={isSharingSocial}
+                    onClick={async () => {
+                      if (isSharingSocial) return;
+                      setIsSharingSocial(true);
+                      try {
+                        const res = await apiFetch('/api/gift-invitations/social-share', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            sender_phone: user?.phone || player?.phone,
+                            sender_name: player?.name || user?.name || 'Tu amigo(a)',
+                            tenantId: effectiveTenant,
+                            network: 'facebook'
+                          })
+                        });
+                        if (!res.ok) throw new Error('Error al generar enlace');
+                        const data = await res.json();
+                        const targetUrl = data.smartUrl || data.registerUrl;
+                        const fbShareUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(targetUrl)}`;
+                        window.open(fbShareUrl, '_blank', 'width=650,height=520,location=no,toolbar=no');
+                        toast.success('🎁 ¡Abriendo Facebook para publicar tu invitación!');
+                      } catch (err) {
+                        toast.error('No se pudo generar la invitación para Facebook.');
+                      } finally {
+                        setIsSharingSocial(false);
                       }
                     }}
-                    className="flex items-center justify-center gap-2 py-2.5 px-4 bg-blue-500 hover:bg-blue-600 text-white font-bold text-sm rounded-xl transition shadow-md active:scale-95"
+                    className={clsx(
+                      "flex items-center justify-center gap-2.5 py-3 px-4 bg-[#1877F2] hover:bg-[#166fe5] text-white font-black text-sm rounded-xl transition shadow-md active:scale-95 cursor-pointer",
+                      isSharingSocial && "opacity-70 cursor-not-allowed"
+                    )}
                   >
-                    <Share2 size={18} /> Otras Redes
+                    {isSharingSocial ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
+                        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                      </svg>
+                    )}
+                    <span>Publicar en Facebook</span>
+                  </button>
+
+                  {/* Copiar enlace con regalo */}
+                  <button 
+                    disabled={isSharingSocial}
+                    onClick={async () => {
+                      if (isSharingSocial) return;
+                      setIsSharingSocial(true);
+                      try {
+                        const res = await apiFetch('/api/gift-invitations/social-share', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            sender_phone: user?.phone || player?.phone,
+                            sender_name: player?.name || user?.name || 'Tu amigo(a)',
+                            tenantId: effectiveTenant,
+                            network: 'general'
+                          })
+                        });
+                        if (!res.ok) throw new Error('Error al generar enlace');
+                        const data = await res.json();
+                        const copyText = `${data.message}\n\n👉 Enlace de registro con 1 cartón gratis: ${data.registerUrl}`;
+                        await navigator.clipboard.writeText(copyText);
+                        toast.success('🎁 ¡Enlace copiado con 1 cartón gratis de regalo!');
+                      } catch (err) {
+                        toast.error('No se pudo copiar el enlace.');
+                      } finally {
+                        setIsSharingSocial(false);
+                      }
+                    }}
+                    className="flex items-center justify-center gap-2 py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer border border-slate-200 active:scale-95"
+                  >
+                    <Copy size={16} />
+                    <span>Copiar Enlace con 1 Cartón Gratis</span>
                   </button>
                 </div>
               </div>
@@ -4192,13 +4232,14 @@ Es *estrictamente fundamental* que te unas a nuestro Grupo VIP de WhatsApp para 
                       }
                       setIsChangingPassword(true);
                       try {
-                        const response = await fetch('/api/players/change-password', {
+                        const targetPhone = user?.phone || player?.phone;
+                        const response = await apiFetch('/api/players/change-password', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
-                            phone: user?.phone,
-                            oldPassword,
-                            newPassword
+                            phone: targetPhone,
+                            oldPassword: oldPassword.trim(),
+                            newPassword: newPassword.trim()
                           })
                         });
                         const data = await response.json();

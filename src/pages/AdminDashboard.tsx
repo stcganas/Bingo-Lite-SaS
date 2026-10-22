@@ -645,7 +645,22 @@ export default function AdminDashboard() {
         }
       })
       .catch(() => {});
+
+    apiFetch('/api/admin/settings/social-share')
+      .then(res => res.json())
+      .then(data => {
+        if (data) {
+          if (data.message) setSocialShareMessage(data.message);
+          if (data.image_url) setSocialShareImageUrl(data.image_url);
+        }
+      })
+      .catch(() => {});
   }, [slug, user?.tenant_id]);
+
+  const [socialShareMessage, setSocialShareMessage] = useState('');
+  const [socialShareImageUrl, setSocialShareImageUrl] = useState('');
+  const [isSavingSocialShare, setIsSavingSocialShare] = useState(false);
+  const [isUploadingSocialImage, setIsUploadingSocialImage] = useState(false);
 
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isSavingAutoplay, setIsSavingAutoplay] = useState(false);
@@ -6048,6 +6063,144 @@ export default function AdminDashboard() {
               </h2>
               
               <div className="space-y-6">
+
+                {/* Módulo de Configuración de Redes Sociales (Facebook & WhatsApp) */}
+                <div className="pt-2">
+                  <h3 className="text-lg font-black text-slate-800 mb-2 flex items-center gap-2">
+                    <Share2 className="text-blue-600" /> Promoción en Redes Sociales (Facebook & WhatsApp)
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4 font-medium">
+                    Personaliza el mensaje persuasivo y la imagen que se mostrarán en Facebook y WhatsApp cuando los jugadores compartan la invitación. Cada enlace regala automáticamente <b>1 cartón gratis</b> (1 uso por persona, invitaciones ilimitadas).
+                  </p>
+
+                  <div className="bg-gradient-to-br from-blue-50/70 via-indigo-50/40 to-slate-50 p-5 rounded-2xl border-2 border-blue-200/80 space-y-4 shadow-sm">
+                    {/* Mensaje de Invitación */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <MessageCircle size={15} className="text-[#25D366]" /> Mensaje Persuasivo de Invitación (WhatsApp / Redes)
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={socialShareMessage}
+                        onChange={(e) => setSocialShareMessage(e.target.value)}
+                        placeholder="Ej: ¡Hola! 👋 ¡Tengo un regalo especial para ti! Te acabo de obsequiar 1 CARTÓN 100% GRATIS 🎁 para jugar en nuestro bingo y ganar dinero real a tu Nequi. Únete gratis con este enlace:"
+                        className="w-full p-3.5 border-2 border-slate-200 rounded-xl focus:border-blue-500 outline-none font-medium text-slate-800 text-sm bg-white"
+                      />
+                      <p className="text-[11px] text-slate-500 font-medium">
+                        💡 Puedes dejarlo en blanco para usar la plantilla persuasiva automática del sistema con la fecha, premios y cartón de regalo.
+                      </p>
+                    </div>
+
+                    {/* Imagen personalizada para Facebook OpenGraph */}
+                    <div className="space-y-2 pt-2 border-t border-blue-100">
+                      <label className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <Image size={15} className="text-[#1877F2]" /> Imagen Promocional para Facebook / OpenGraph
+                      </label>
+
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="url"
+                          value={socialShareImageUrl}
+                          onChange={(e) => setSocialShareImageUrl(e.target.value)}
+                          placeholder="https://ejemplo.com/imagen-promocional.jpg"
+                          className="flex-1 p-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 outline-none font-medium text-slate-800 text-sm bg-white"
+                        />
+                        <label className={clsx(
+                          "px-4 py-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition border shadow-sm",
+                          isUploadingSocialImage
+                            ? "bg-slate-200 text-slate-500 cursor-not-allowed border-slate-300"
+                            : "bg-blue-600 hover:bg-blue-700 text-white border-blue-700 active:scale-95"
+                        )}>
+                          {isUploadingSocialImage ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                          <span>{isUploadingSocialImage ? 'Subiendo...' : 'Subir Imagen'}</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={isUploadingSocialImage}
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              setIsUploadingSocialImage(true);
+                              try {
+                                const formData = new FormData();
+                                formData.append('social_image', file);
+                                const res = await apiFetch('/api/admin/upload-social-image', {
+                                  method: 'POST',
+                                  body: formData
+                                });
+                                if (!res.ok) throw new Error('Error al subir la imagen');
+                                const data = await res.json();
+                                if (data.url) {
+                                  setSocialShareImageUrl(data.url);
+                                  toast.success('¡Imagen subida y lista para compartir!');
+                                }
+                              } catch (err: any) {
+                                toast.error(err.message || 'Error al subir la imagen');
+                              } finally {
+                                setIsUploadingSocialImage(false);
+                                e.target.value = '';
+                              }
+                            }}
+                          />
+                        </label>
+                      </div>
+
+                      {socialShareImageUrl && (
+                        <div className="relative mt-2 p-2 bg-white rounded-xl border border-blue-200 inline-block shadow-sm">
+                          <img
+                            src={socialShareImageUrl}
+                            alt="Vista previa para Facebook"
+                            className="h-28 w-auto max-w-full rounded-lg object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setSocialShareImageUrl('')}
+                            className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full hover:bg-red-600 shadow"
+                            title="Quitar imagen"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      )}
+                      <p className="text-[11px] text-slate-500 font-medium">
+                        🖼️ Esta imagen aparecerá automáticamente en el feed de Facebook cuando los jugadores compartan la invitación. (Recomendado: 1200x630 px).
+                      </p>
+                    </div>
+
+                    {/* Botón Guardar */}
+                    <button
+                      type="button"
+                      disabled={isSavingSocialShare}
+                      onClick={async () => {
+                        setIsSavingSocialShare(true);
+                        try {
+                          const res = await apiFetch('/api/admin/settings/social-share', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              message: socialShareMessage,
+                              image_url: socialShareImageUrl
+                            })
+                          });
+                          if (!res.ok) throw new Error('Error al guardar');
+                          toast.success('¡Configuración de redes sociales guardada correctamente!');
+                        } catch (err) {
+                          toast.error('Error al guardar configuración de redes');
+                        } finally {
+                          setIsSavingSocialShare(false);
+                        }
+                      }}
+                      className={clsx(
+                        "w-full py-3 px-6 text-white font-black rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-md",
+                        isSavingSocialShare ? "bg-slate-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700 active:scale-95"
+                      )}
+                    >
+                      {isSavingSocialShare ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+                      Guardar Configuración de Redes Sociales
+                    </button>
+                  </div>
+                </div>
 
                 <div className="pt-2">
                   <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
