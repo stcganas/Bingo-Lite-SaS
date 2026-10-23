@@ -46,8 +46,8 @@ export default function Home() {
   const [socialInviteData, setSocialInviteData] = useState<any>(null);
   const [isGeneratingSocialLink, setIsGeneratingSocialLink] = useState(false);
 
-  const fetchSocialShareData = async () => {
-    if (socialInviteData) return socialInviteData;
+  const fetchSocialShareData = async (targetNetwork = 'general') => {
+    if (socialInviteData && socialInviteData._network === targetNetwork) return socialInviteData;
     setIsGeneratingSocialLink(true);
     try {
       const tenantKey = tenantSlug || tenant?.slug || 'bingo-lite';
@@ -57,11 +57,12 @@ export default function Home() {
         body: JSON.stringify({
           sender_phone: user?.phone || '',
           tenantId: tenantKey,
-          network: 'general'
+          network: targetNetwork
         })
       });
       if (res.ok) {
         const data = await res.json();
+        data._network = targetNetwork;
         setSocialInviteData(data);
         return data;
       }
@@ -75,13 +76,17 @@ export default function Home() {
 
   const handleOpenSocialShareModal = async () => {
     setShowSocialShareModal(true);
-    await fetchSocialShareData();
+    await fetchSocialShareData('whatsapp');
   };
 
   const handleSocialShareWhatsApp = async () => {
-    const data = socialInviteData || (await fetchSocialShareData());
+    const data = await fetchSocialShareData('whatsapp');
     const fallbackUrl = window.location.href;
-    const msg = data?.message || `🎉 ¡Te invito a jugar en ${tenant?.name || 'Bingo Live'}! Reclama tu cartón gratis: ${fallbackUrl}`;
+    const smartLink = data?.smartUrl || data?.registerUrl || fallbackUrl;
+    let msg = data?.message || `🎉 ¡Te invito a jugar en ${tenant?.name || 'Bingo Live'}! Reclama tu cartón gratis:\n${smartLink}`;
+    if (!msg.includes(smartLink)) {
+      msg = `${msg.trim()}\n\n👉 *Reclama tu cartón gratis aquí:*\n${smartLink}`;
+    }
     const encoded = encodeURIComponent(msg);
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     if (isMobile) {
@@ -93,7 +98,7 @@ export default function Home() {
   };
 
   const handleSocialShareFacebook = async () => {
-    const data = socialInviteData || (await fetchSocialShareData());
+    const data = await fetchSocialShareData('facebook');
     const shareUrl = data?.smartUrl || data?.registerUrl || window.location.href;
     window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(shareUrl)}`, '_blank', 'width=600,height=500');
     toast.success('¡Abriendo Facebook para compartir tu invitación!');

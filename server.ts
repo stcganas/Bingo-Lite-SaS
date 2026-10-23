@@ -3164,9 +3164,23 @@ app.post('/api/admin/settings/theme-template', requireAdmin, async (req, res) =>
 const ogImageCache = new Map<string, { buffer: Buffer; contentType: string; timestamp: number }>();
 
 // Endpoint de imagen Open Graph ultraligera optimizada (<300KB) para WhatsApp, Facebook y Twitter
-app.get('/api/og-image/:tenantId?', async (req, res) => {
+app.get([
+  '/api/og-image/promo.jpg',
+  '/api/og-image/image.jpg',
+  '/api/og-image/:tenantId/promo.jpg',
+  '/api/og-image/:tenantId/image.jpg',
+  '/api/og-image/:tenantId.jpg',
+  '/api/og-image/:tenantId?',
+  '/api/og-image'
+], async (req, res) => {
   try {
-    const rawTenant = req.params.tenantId || req.query.tenant || req.query.sala || 'bingo-lite';
+    let rawTenant = req.params.tenantId || req.query.tenant || req.query.sala || 'bingo-lite';
+    if (rawTenant === 'promo' || rawTenant === 'image') {
+      rawTenant = (req.query.tenant as string) || (req.query.sala as string) || 'bingo-lite';
+    }
+    if (typeof rawTenant === 'string') {
+      rawTenant = rawTenant.replace(/\.(jpe?g|png)$/i, '');
+    }
     const tenantSlug = normalizeTenant(rawTenant);
     const cacheKey = `og_${tenantSlug}`;
     const cached = ogImageCache.get(cacheKey);
@@ -3200,8 +3214,8 @@ app.get('/api/og-image/:tenantId?', async (req, res) => {
       const arrayBuffer = await response.arrayBuffer();
       const inputBuffer = Buffer.from(arrayBuffer);
 
-      // Si ya es un JPEG ligero (<250KB), servirlo directamente
-      if (inputBuffer.length <= 250 * 1024 && (rawImg.includes('.jpg') || rawImg.includes('.jpeg'))) {
+      // Si ya es un JPEG ligero (<150KB), servirlo directamente
+      if (inputBuffer.length <= 150 * 1024 && (rawImg.includes('.jpg') || rawImg.includes('.jpeg'))) {
         ogImageCache.set(cacheKey, { buffer: inputBuffer, contentType: 'image/jpeg', timestamp: now });
         res.setHeader('Content-Type', 'image/jpeg');
         res.setHeader('Content-Length', inputBuffer.length);
@@ -3209,9 +3223,9 @@ app.get('/api/og-image/:tenantId?', async (req, res) => {
         return res.send(inputBuffer);
       }
 
-      // Optimizar con Jimp para WhatsApp (<300KB estricto, 800px máx, calidad 75)
+      // Optimizar con Jimp para WhatsApp (<200KB estricto, 600px máx, calidad 75)
       const jimpImg = await Jimp.read(inputBuffer);
-      const maxDim = 800;
+      const maxDim = 600;
       if (jimpImg.bitmap.width > maxDim || jimpImg.bitmap.height > maxDim) {
         const scale = Math.min(maxDim / jimpImg.bitmap.width, maxDim / jimpImg.bitmap.height);
         jimpImg.resize({ w: Math.round(jimpImg.bitmap.width * scale), h: Math.round(jimpImg.bitmap.height * scale) });
@@ -7716,8 +7730,8 @@ app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (re
       rawImg = rawImg.replace('http://', 'https://');
     }
 
-    // URL optimizada dinámicamente (<300KB) para que WhatsApp móvil y Facebook carguen la miniatura al 100% de éxito
-    const optimizedOgImageUrl = `${baseUrl}/api/og-image/${tenantSlug}`;
+    // URL optimizada dinámicamente con extensión .jpg (<150KB) para que WhatsApp móvil, WhatsApp Web y Facebook carguen la miniatura
+    const optimizedOgImageUrl = `${baseUrl}/api/og-image/${tenantSlug}/promo.jpg`;
 
     const userAgent = req.headers['user-agent'] || '';
     const isCrawler = /facebookexternalhit|Facebot|Twitterbot|WhatsApp|TelegramBot|LinkedInBot|Slackbot|Discordbot|Pinterest|SkypeUriPreview/i.test(userAgent);
@@ -7741,8 +7755,8 @@ app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (re
   <meta property="og:description" content="${escapeHtml(desc)}" />
   <meta property="og:image" content="${optimizedOgImageUrl}" />
   <meta property="og:image:secure_url" content="${optimizedOgImageUrl}" />
-  <meta property="og:image:width" content="800" />
-  <meta property="og:image:height" content="800" />
+  <meta property="og:image:width" content="600" />
+  <meta property="og:image:height" content="600" />
   <meta property="og:image:type" content="image/jpeg" />
   <meta property="og:image:alt" content="${escapeHtml(title)}" />
 
@@ -7764,7 +7778,7 @@ app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (re
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #ffffff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center;">
   <div style="max-width: 480px; width: 100%; background: #1e293b; padding: 28px; border-radius: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid #334155;">
-    ${rawImg ? `<img src="${rawImg}" alt="${escapeHtml(title)}" style="max-width: 100%; height: auto; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);" />` : ''}
+    <img src="${optimizedOgImageUrl}" alt="${escapeHtml(title)}" style="max-width: 100%; height: auto; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);" />
     <h1 style="font-size: 20px; font-weight: 800; margin-bottom: 10px; color: #f8fafc;">${escapeHtml(title)}</h1>
     <p style="font-size: 14px; color: #94a3b8; line-height: 1.5; margin-bottom: 24px;">${escapeHtml(desc)}</p>
     <a href="${destinationUrl}" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 9999px; font-weight: 800; font-size: 15px; box-shadow: 0 4px 16px rgba(37,99,235,0.4);">
@@ -15368,7 +15382,7 @@ async function startServer() {
           }
 
           const canonicalUrl = `${baseUrl}${req.originalUrl || req.url}`;
-          const optimizedOgImageUrl = `${baseUrl}/api/og-image/${tenantSlug}`;
+          const optimizedOgImageUrl = `${baseUrl}/api/og-image/${tenantSlug}/promo.jpg`;
           const title = tenantInfo?.name ? `${tenantInfo.name} | Gran Bingo Online en Vivo` : 'Bingo Lite | Bingo Familiar, Bingo Colombia y Bingo Ganador';
           const desc = settings.social_share_message
             ? settings.social_share_message.replace(/\{.*?\}/g, '').trim().substring(0, 200)
@@ -15380,7 +15394,7 @@ async function startServer() {
           if (fs.existsSync(indexPath)) {
             let html = await fs.promises.readFile(indexPath, 'utf-8');
             html = html
-              .replace(/<meta\s+property="og:image"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:image" content="${escapeHtml(optimizedOgImageUrl)}" />\n    <meta property="og:image:secure_url" content="${escapeHtml(optimizedOgImageUrl)}" />\n    <meta property="og:image:width" content="800" />\n    <meta property="og:image:height" content="800" />`)
+              .replace(/<meta\s+property="og:image"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:image" content="${escapeHtml(optimizedOgImageUrl)}" />\n    <meta property="og:image:secure_url" content="${escapeHtml(optimizedOgImageUrl)}" />\n    <meta property="og:image:width" content="600" />\n    <meta property="og:image:height" content="600" />`)
               .replace(/<meta\s+property="og:url"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:url" content="${escapeHtml(canonicalUrl)}" />`)
               .replace(/<meta\s+property="og:title"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:title" content="${escapeHtml(title)}" />`)
               .replace(/<meta\s+property="og:description"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:description" content="${escapeHtml(desc)}" />`)

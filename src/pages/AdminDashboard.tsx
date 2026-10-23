@@ -6952,6 +6952,15 @@ export default function AdminDashboard() {
                           <p className="text-xs text-blue-900 font-mono break-all select-all">{lastGeneratedSmartUrl}</p>
                         </div>
                       )}
+
+                      <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-200 text-left text-xs text-emerald-900 space-y-1">
+                        <p className="font-black flex items-center gap-1.5 text-emerald-800">
+                          <Sparkles size={14} className="text-emerald-600" /> Clave para que la imagen cargue en WhatsApp:
+                        </p>
+                        <p className="leading-relaxed text-[11px] text-emerald-800/90">
+                          WhatsApp descarga automáticamente la miniatura optimizada (<b className="font-bold">.jpg ultraligera</b>). Al hacer clic en <i>Probar en WhatsApp</i> o al pegar el enlace en un chat, <b>espera 1 a 2 segundos</b> antes de presionar Enviar para que WhatsApp descargue la tarjeta con la imagen en pantalla.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
