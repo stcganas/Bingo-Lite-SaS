@@ -17,6 +17,15 @@ import { GoogleGenAI } from '@google/genai';
 const gameSettingsCache = new Map<string, { value: any, timestamp: number }>();
 const SETTINGS_CACHE_TTL = 30000; // 30 seconds
 
+function escapeHtml(str: any): string {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function resolveSettingsKey(gameIdOrScope: number | string, tenantId?: string): { key: string; tenant: string } {
   if (gameIdOrScope === 'platform_landing') {
     return { key: 'saas_landing_maintenance', tenant: 'global' };
@@ -3073,11 +3082,17 @@ app.post('/api/admin/settings/player-commission', requireAdmin, async (req, res)
 // Configuración de Promoción e Invitaciones en Redes Sociales (Facebook, WhatsApp)
 app.get('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
   try {
-    const targetTenant = (req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req);
+    const rawTenant = (req.query.tenantId as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite';
+    const targetTenant = normalizeTenant(rawTenant);
     const settings = await getGameSettings('global', targetTenant);
+    let defaultSettings: any = null;
+    if (targetTenant !== 'bingo-lite') {
+      defaultSettings = await getGameSettings('global', 'bingo-lite');
+    }
+    const tenantInfo = await getTenantInfo(targetTenant);
     res.json({
-      message: settings.social_share_message || '',
-      image_url: settings.social_share_image_url || ''
+      message: settings.social_share_message || defaultSettings?.social_share_message || '',
+      image_url: settings.social_share_image_url || defaultSettings?.social_share_image_url || tenantInfo?.banner_url || ''
     });
   } catch (err: any) {
     res.status(500).json({ error: 'Error al obtener configuración de redes sociales' });
@@ -3086,13 +3101,30 @@ app.get('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
 
 app.post('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
   try {
-    const targetTenant = (req.body.tenant_id as string) || (req as any).tenantId || getTenantIdFromRequest(req);
+    const adminUser = (req as any).adminUser;
+    const rawTenant = (adminUser && !adminUser.isSuperAdmin && adminUser.tenant_id)
+      ? adminUser.tenant_id
+      : ((req.body.tenant_id as string) || (req as any).tenantId || getTenantIdFromRequest(req) || 'bingo-lite');
+    const targetTenant = normalizeTenant(rawTenant);
     const { message, image_url } = req.body;
     await saveGameSettings('global', {
       social_share_message: typeof message === 'string' ? message : '',
       social_share_image_url: typeof image_url === 'string' ? image_url : ''
     }, targetTenant);
-    res.json({ success: true });
+
+    if (image_url && typeof image_url === 'string') {
+      try {
+        await supabase
+          .from('tenants')
+          .update({ banner_url: image_url, updated_at: new Date().toISOString() })
+          .or(`id.eq.${targetTenant},slug.eq.${targetTenant}`);
+        tenantsCache.delete(targetTenant);
+      } catch (tErr) {
+        console.warn('[social-share] Warning updating tenant banner_url:', tErr);
+      }
+    }
+
+    res.json({ success: true, image_url, message });
   } catch (err: any) {
     res.status(500).json({ error: 'Error al guardar configuración de redes sociales' });
   }
@@ -7473,14 +7505,18 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
 
     // Obtener configuración de la sala para obtener imagen y mensaje personalizado
     const settings = await getGameSettings('global', currentTenant);
+    let defaultSettings: any = null;
+    if (currentTenant !== 'bingo-lite') {
+      defaultSettings = await getGameSettings('global', 'bingo-lite');
+    }
     const tenantInfo = await getTenantInfo(currentTenant);
 
-    const baseUrl = process.env.VITE_APP_URL || 'https://bingolite.click';
+    const baseUrl = (process.env.VITE_APP_URL || 'https://bingolite.click').replace(/\/+$/, '');
     const roomPrefix = currentTenant !== 'bingo-lite' && currentTenant !== 'default' ? `/sala/${currentTenant}` : '';
     const registerUrl = cleanSender
       ? `${baseUrl}${roomPrefix}/register?invitedBy=${cleanSender}&gift=${inviteId}`
       : `${baseUrl}${roomPrefix}/register?gift=${inviteId}`;
-    const smartUrl = `${baseUrl}/invitacion/${inviteId}`;
+    const smartUrl = `${baseUrl}${roomPrefix}/invitacion/${inviteId}`;
 
     // Mensaje persuasivo para redes sociales
     const bingoName = tenantInfo.name || activeGame?.name || 'Nuestro Gran Bingo';
@@ -7489,7 +7525,7 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
       ? new Date(activeGame.start_time).toLocaleString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
       : 'Muy Pronto';
 
-    let customTemplate = settings.social_share_message || `🎉 *¡TE INVITO A JUGAR EN ${bingoName.toUpperCase()}!* 🎁✨\n\n¡Hola! Ven y participa con nosotros para ganar dinero real en efectivo. 🍀\n\n🏆 *Premio en juego:* ${prizeFormatted}\n📅 *Cita del Gran Sorteo:* ${startDate}\n\n👉 *Regístrate y reclama 1 CARTÓN GRATIS de bienvenida aquí:*\n{url}\n\n¡Entra ya mismo y cantemos BINGO en familia! 👨‍👩‍👧‍👦🍀`;
+    let customTemplate = settings.social_share_message || defaultSettings?.social_share_message || `🎉 *¡TE INVITO A JUGAR EN ${bingoName.toUpperCase()}!* 🎁✨\n\n¡Hola! Ven y participa con nosotros para ganar dinero real en efectivo. 🍀\n\n🏆 *Premio en juego:* ${prizeFormatted}\n📅 *Cita del Gran Sorteo:* ${startDate}\n\n👉 *Regístrate y reclama 1 CARTÓN GRATIS de bienvenida aquí:*\n{url}\n\n¡Entra ya mismo y cantemos BINGO en familia! 👨‍👩‍👧‍👦🍀`;
 
     const finalMessage = customTemplate
       .replace(/\{url\}/g, smartUrl)
@@ -7497,7 +7533,13 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
       .replace(/\{prize\}/g, prizeFormatted)
       .replace(/\{date\}/g, startDate);
 
-    const imageUrl = settings.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || 'https://bingolite.click/logo-app.png';
+    let promoImg = settings.social_share_image_url || defaultSettings?.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
+    if (promoImg && !promoImg.startsWith('http://') && !promoImg.startsWith('https://')) {
+      promoImg = `${baseUrl}${promoImg.startsWith('/') ? '' : '/'}${promoImg}`;
+    }
+    if (promoImg && promoImg.startsWith('http://') && (promoImg.includes('bingolite.click') || promoImg.includes('supabase.co'))) {
+      promoImg = promoImg.replace('http://', 'https://');
+    }
 
     res.json({
       success: true,
@@ -7505,7 +7547,7 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
       registerUrl,
       smartUrl,
       message: finalMessage,
-      imageUrl,
+      imageUrl: promoImg,
       bingoName,
       prize: prizeFormatted,
       startDate
@@ -7517,17 +7559,17 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
 });
 
 // Endpoint inteligente para Facebook y redes sociales con metadatos Open Graph
-app.get('/invitacion/:inviteId', async (req, res) => {
+app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (req, res) => {
   try {
     const inviteId = req.params.inviteId;
     const { data: invite } = await supabase.from('gift_invitations').select('*').eq('id', Number(inviteId)).maybeSingle();
 
-    const baseUrl = process.env.VITE_APP_URL || 'https://bingolite.click';
+    const baseUrl = (process.env.VITE_APP_URL || 'https://bingolite.click').replace(/\/+$/, '');
     const sender = invite?.sender_phone || '';
     const gameId = invite?.game_id || '';
 
-    let tenantSlug = invite?.tenant_id ? normalizeTenant(invite.tenant_id) : 'bingo-lite';
-    if (!invite?.tenant_id && gameId) {
+    let tenantSlug = invite?.tenant_id ? normalizeTenant(invite.tenant_id) : (req.params.slug ? normalizeTenant(req.params.slug) : 'bingo-lite');
+    if ((!tenantSlug || tenantSlug === 'bingo-lite' || tenantSlug === 'default') && gameId) {
       const { data: game } = await supabase.from('game').select('tenant_id, name, prize').eq('id', gameId).maybeSingle();
       if (game?.tenant_id) tenantSlug = normalizeTenant(game.tenant_id);
     }
@@ -7537,44 +7579,88 @@ app.get('/invitacion/:inviteId', async (req, res) => {
       ? `${baseUrl}${roomPrefix}/register?invitedBy=${sender}&gift=${inviteId}`
       : `${baseUrl}${roomPrefix}/register?gift=${inviteId}`;
 
-    const userAgent = req.headers['user-agent'] || '';
-    const isCrawler = /facebookexternalhit|Facebot|Twitterbot|WhatsApp|TelegramBot|LinkedInBot|Slackbot/i.test(userAgent);
+    // Canonical Smart URL: DEBE APUNTAR AL ENLACE INTELIGENTE MISMO, NUNCA A LA URL DE DESTINO SPA
+    // Facebook scraper utiliza og:url como la URL canónica absoluta que indexa.
+    const canonicalSmartUrl = `${baseUrl}${roomPrefix}/invitacion/${inviteId}`;
 
-    if (isCrawler) {
-      const settings = await getGameSettings('global', tenantSlug);
-      const tenantInfo = await getTenantInfo(tenantSlug);
-      const title = `🎁 ¡Te han regalado 1 Cartón Gratis de Bingo! - ${tenantInfo.name}`;
-      const desc = settings.social_share_message
-        ? settings.social_share_message.replace(/\{.*?\}/g, '').substring(0, 200)
-        : `Únete a ${tenantInfo.name}, reclama tu cartón de cortesía y participa en el gran sorteo en vivo. ¡Solo se redime una vez!`;
-      const img = settings.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
+    const settings = await getGameSettings('global', tenantSlug);
+    let defaultSettings: any = null;
+    if (tenantSlug !== 'bingo-lite') {
+      defaultSettings = await getGameSettings('global', 'bingo-lite');
+    }
+    const tenantInfo = await getTenantInfo(tenantSlug);
 
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.send(`<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="utf-8" />
-  <title>${title}</title>
-  <meta name="description" content="${desc}" />
-  <meta property="og:title" content="${title}" />
-  <meta property="og:description" content="${desc}" />
-  <meta property="og:image" content="${img}" />
-  <meta property="og:url" content="${destinationUrl}" />
-  <meta property="og:type" content="website" />
-  <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="${title}" />
-  <meta name="twitter:description" content="${desc}" />
-  <meta name="twitter:image" content="${img}" />
-</head>
-<body>
-  <h1>${title}</h1>
-  <p>${desc}</p>
-  <a href="${destinationUrl}">Haz clic aquí para reclamar tu cartón gratis</a>
-</body>
-</html>`);
+    const title = `🎁 ¡Te han regalado 1 Cartón Gratis de Bingo! - ${tenantInfo.name || 'Bingo Lite'}`;
+    const desc = settings.social_share_message
+      ? settings.social_share_message.replace(/\{.*?\}/g, '').trim().substring(0, 200)
+      : (defaultSettings?.social_share_message
+          ? defaultSettings.social_share_message.replace(/\{.*?\}/g, '').trim().substring(0, 200)
+          : `Únete a ${tenantInfo.name || 'Bingo Lite'}, reclama tu cartón de cortesía y participa en el gran sorteo en vivo. ¡Solo se redime una vez!`);
+
+    let img = settings.social_share_image_url || defaultSettings?.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
+    if (img && !img.startsWith('http://') && !img.startsWith('https://')) {
+      img = `${baseUrl}${img.startsWith('/') ? '' : '/'}${img}`;
+    }
+    if (img && img.startsWith('http://') && (img.includes('bingolite.click') || img.includes('supabase.co'))) {
+      img = img.replace('http://', 'https://');
     }
 
-    return res.redirect(302, destinationUrl);
+    const imgType = img.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+
+    const userAgent = req.headers['user-agent'] || '';
+    const isCrawler = /facebookexternalhit|Facebot|Twitterbot|WhatsApp|TelegramBot|LinkedInBot|Slackbot|Discordbot|Pinterest|SkypeUriPreview/i.test(userAgent);
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=60');
+
+    return res.send(`<!DOCTYPE html>
+<html lang="es" prefix="og: https://ogp.me/ns# fb: https://ogp.me/ns/fb#">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtml(title)}</title>
+  <meta name="description" content="${escapeHtml(desc)}" />
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:site_name" content="${escapeHtml(tenantInfo.name || 'Bingo Lite')}" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="${canonicalSmartUrl}" />
+  <meta property="og:title" content="${escapeHtml(title)}" />
+  <meta property="og:description" content="${escapeHtml(desc)}" />
+  <meta property="og:image" content="${img}" />
+  <meta property="og:image:secure_url" content="${img}" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:type" content="${imgType}" />
+  <meta property="og:image:alt" content="${escapeHtml(title)}" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:url" content="${canonicalSmartUrl}" />
+  <meta name="twitter:title" content="${escapeHtml(title)}" />
+  <meta name="twitter:description" content="${escapeHtml(desc)}" />
+  <meta name="twitter:image" content="${img}" />
+  <meta name="twitter:image:alt" content="${escapeHtml(title)}" />
+
+  ${isCrawler ? '' : `
+  <!-- Redirección instantánea al registro para navegadores reales -->
+  <meta http-equiv="refresh" content="0;url=${destinationUrl}" />
+  <script>
+    window.location.replace(${JSON.stringify(destinationUrl)});
+  </script>
+  `}
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #ffffff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center;">
+  <div style="max-width: 480px; width: 100%; background: #1e293b; padding: 28px; border-radius: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid #334155;">
+    ${img ? `<img src="${img}" alt="${escapeHtml(title)}" style="max-width: 100%; height: auto; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);" />` : ''}
+    <h1 style="font-size: 20px; font-weight: 800; margin-bottom: 10px; color: #f8fafc;">${escapeHtml(title)}</h1>
+    <p style="font-size: 14px; color: #94a3b8; line-height: 1.5; margin-bottom: 24px;">${escapeHtml(desc)}</p>
+    <a href="${destinationUrl}" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 9999px; font-weight: 800; font-size: 15px; box-shadow: 0 4px 16px rgba(37,99,235,0.4);">
+      Reclamar mi Cartón Gratis 🎁
+    </a>
+  </div>
+</body>
+</html>`);
   } catch (err: any) {
     res.redirect(302, '/register');
   }
@@ -15146,7 +15232,58 @@ async function startServer() {
       next();
     });
 
-    app.get('*', (req, res) => {
+    app.get('*', async (req, res) => {
+      const userAgent = req.headers['user-agent'] || '';
+      const isCrawler = /facebookexternalhit|Facebot|Twitterbot|WhatsApp|TelegramBot|LinkedInBot|Slackbot|Discordbot|Pinterest|SkypeUriPreview/i.test(userAgent);
+
+      if (isCrawler) {
+        try {
+          const matchRoom = req.path.match(/^\/sala\/([a-zA-Z0-9_-]+)/);
+          const tenantSlug = matchRoom ? normalizeTenant(matchRoom[1]) : 'bingo-lite';
+          const settings = await getGameSettings('global', tenantSlug);
+          let defaultSettings: any = null;
+          if (tenantSlug !== 'bingo-lite') {
+            defaultSettings = await getGameSettings('global', 'bingo-lite');
+          }
+          const tenantInfo = await getTenantInfo(tenantSlug);
+          const baseUrl = (process.env.VITE_APP_URL || 'https://bingolite.click').replace(/\/+$/, '');
+          let promoImage = settings.social_share_image_url || defaultSettings?.social_share_image_url || tenantInfo?.banner_url || tenantInfo?.logo_url || `${baseUrl}/pwa-512x512.png`;
+          if (promoImage && !promoImage.startsWith('http://') && !promoImage.startsWith('https://')) {
+            promoImage = `${baseUrl}${promoImage.startsWith('/') ? '' : '/'}${promoImage}`;
+          }
+          if (promoImage && promoImage.startsWith('http://') && (promoImage.includes('bingolite.click') || promoImage.includes('supabase.co'))) {
+            promoImage = promoImage.replace('http://', 'https://');
+          }
+
+          const canonicalUrl = `${baseUrl}${req.originalUrl || req.url}`;
+          const title = tenantInfo?.name ? `${tenantInfo.name} | Gran Bingo Online en Vivo` : 'Bingo Lite | Bingo Familiar, Bingo Colombia y Bingo Ganador';
+          const desc = settings.social_share_message
+            ? settings.social_share_message.replace(/\{.*?\}/g, '').trim().substring(0, 200)
+            : (defaultSettings?.social_share_message
+                ? defaultSettings.social_share_message.replace(/\{.*?\}/g, '').trim().substring(0, 200)
+                : 'Juega al mejor Bingo Online en vivo. Disfruta con amigos y gana premios reales.');
+
+          const indexPath = path.join(process.cwd(), 'dist', 'index.html');
+          if (fs.existsSync(indexPath)) {
+            let html = await fs.promises.readFile(indexPath, 'utf-8');
+            html = html
+              .replace(/<meta\s+property="og:image"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:image" content="${escapeHtml(promoImage)}" />\n    <meta property="og:image:secure_url" content="${escapeHtml(promoImage)}" />\n    <meta property="og:image:width" content="1200" />\n    <meta property="og:image:height" content="630" />`)
+              .replace(/<meta\s+property="og:url"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:url" content="${escapeHtml(canonicalUrl)}" />`)
+              .replace(/<meta\s+property="og:title"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:title" content="${escapeHtml(title)}" />`)
+              .replace(/<meta\s+property="og:description"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:description" content="${escapeHtml(desc)}" />`)
+              .replace(/<meta\s+name="twitter:image"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:image" content="${escapeHtml(promoImage)}" />`)
+              .replace(/<meta\s+name="twitter:title"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:title" content="${escapeHtml(title)}" />`)
+              .replace(/<meta\s+name="twitter:description"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:description" content="${escapeHtml(desc)}" />`);
+
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+            res.setHeader('Cache-Control', 'no-cache');
+            return res.send(html);
+          }
+        } catch (crawlerErr) {
+          console.warn('[Crawler SPA fallback error]:', crawlerErr);
+        }
+      }
+
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
