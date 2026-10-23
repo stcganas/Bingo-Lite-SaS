@@ -2542,10 +2542,11 @@ Regístrate totalmente GRATIS usando mi invitación oficial aquí:
                         onClick={async () => {
                           if (player?.phone && gameState?.id) {
                             try {
-                              const res = await apiFetch(`/api/players/claim-free-cards?tenantId=${encodeURIComponent(cleanTenant)}`, {
+                              const tenantKey = effectiveTenant || 'bingo-lite';
+                              const res = await apiFetch(`/api/players/claim-free-cards?tenantId=${encodeURIComponent(tenantKey)}`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ phone: player.phone, name: player.name, gameId: gameState.id, tenantId: cleanTenant })
+                                body: JSON.stringify({ phone: player.phone, name: player.name, gameId: gameState.id, tenantId: tenantKey })
                               });
                               if (res.ok) {
                                 toast.success('¡Tus 2 cartones gratis han sido asignados! 🎉');

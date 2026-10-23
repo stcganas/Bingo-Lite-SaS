@@ -203,7 +203,7 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
-    if (user && (user.role === 'admin' || user.role === 'superadmin')) {
+    if (user && (user.role === 'admin' || user.isSuperAdmin)) {
       const roomTenant = currentTenant || user.tenant_id || 'bingo-lite';
       loginOneSignal(user.uid, user.email || user.phone, 'admin', roomTenant).catch(() => {});
     }
@@ -5409,7 +5409,7 @@ export default function AdminDashboard() {
 
           {/* INVITACIONES Y REGALOS DE CORTESÍA (MULTI-TENANT) */}
           {activeTab === 'invitations' && (
-            <AdminInvitations currentTenant={currentTenant} isSuperAdmin={user?.role === 'superadmin' || isSuperAdmin} />
+            <AdminInvitations currentTenant={currentTenant} isSuperAdmin={Boolean(user?.isSuperAdmin)} />
           )}
 
           {/* NOTIFICATIONS TAB */}

@@ -3181,7 +3181,7 @@ app.get([
     if (typeof rawTenant === 'string') {
       rawTenant = rawTenant.replace(/\.(jpe?g|png)$/i, '');
     }
-    const tenantSlug = normalizeTenant(rawTenant);
+    const tenantSlug = normalizeTenant(typeof rawTenant === 'string' ? rawTenant : String(rawTenant || ''));
     const cacheKey = `og_${tenantSlug}`;
     const cached = ogImageCache.get(cacheKey);
     const now = Date.now();
