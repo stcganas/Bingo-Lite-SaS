@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Ticket, Shield, LogIn, Clock, Trophy, Zap, Star, ChevronRight, Phone, CheckCircle2, Building, ArrowRight, Calendar, MessageCircle, X, Bell, Users, Award, Plus, Key, Gift, ShieldCheck, Lock, Eye, EyeOff, Search, Loader2, Sparkles, Share2, Copy } from 'lucide-react';
+import { Ticket, Shield, LogIn, Clock, Trophy, Zap, Star, ChevronRight, Phone, CheckCircle2, Building, ArrowRight, Calendar, MessageCircle, X, Bell, Users, Award, Plus, Key, Gift, ShieldCheck, Lock, Eye, EyeOff, Search, Loader2, Sparkles, Share2, Copy, BookOpen } from 'lucide-react';
 import { formatCurrency } from '../utils/format';
 import { useAuth } from '../AuthContext';
 import { useTenant } from '../TenantContext';
@@ -31,23 +31,7 @@ export default function Home() {
   const [hasPaidGames, setHasPaidGames] = useState<boolean>(false);
   const phoneInputRef = React.useRef<HTMLInputElement>(null);
 
-  // Sistema de plantillas: 'classic' (original por defecto) o 'neon_glow' (neón vip)
-  const [roomTheme, setRoomTheme] = useState<'classic' | 'neon_glow'>(() => {
-    try {
-      const saved = localStorage.getItem(`bingo_room_theme_${tenantSlug || 'default'}`);
-      if (saved === 'neon_glow' || saved === 'classic') return saved;
-    } catch (e) {}
-    return 'classic';
-  });
 
-  const toggleRoomTheme = () => {
-    const nextTheme = roomTheme === 'classic' ? 'neon_glow' : 'classic';
-    setRoomTheme(nextTheme);
-    try {
-      localStorage.setItem(`bingo_room_theme_${tenantSlug || 'default'}`, nextTheme);
-      toast.success(nextTheme === 'neon_glow' ? 'Plantilla Neón Glow VIP activada ✨' : 'Plantilla Clásica original activada 🎲');
-    } catch (e) {}
-  };
 
   // Estados para solicitud técnica de recuperación de contraseña
   const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
@@ -361,31 +345,11 @@ export default function Home() {
     }
   };
 
-  const isCosmic = roomTheme === 'neon_glow';
-
   return (
     <>
-      <div className={clsx(
-        "min-h-screen flex flex-col font-sans relative pb-24 transition-colors duration-500",
-        isCosmic ? "bg-[#09031c] text-slate-100" : "bg-slate-50 text-slate-900"
-      )}>
-        {/* Top Bar (Admin link y botón para alternar a plantilla Cósmica VIP) */}
+      <div className="min-h-screen flex flex-col font-sans relative pb-24 bg-slate-50 text-slate-900">
+        {/* Top Bar (Enlaces administrativos) */}
         <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={toggleRoomTheme}
-            className={clsx(
-              "px-3 py-1.5 rounded-full text-xs font-black uppercase tracking-wider shadow-lg flex items-center gap-1.5 transition transform hover:scale-105 active:scale-95 cursor-pointer border",
-              isCosmic 
-                ? "bg-slate-900/90 hover:bg-slate-800 text-yellow-300 border-yellow-400/50 shadow-[0_0_15px_rgba(234,179,8,0.3)]"
-                : "bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white border-transparent"
-            )}
-            title={isCosmic ? "Cambiar a diseño Clásico Original" : "Cambiar a diseño Cósmico VIP"}
-          >
-            <Sparkles size={13} className={isCosmic ? "text-yellow-400" : "text-yellow-300"} />
-            <span>{isCosmic ? 'Tema Clásico 🎲' : 'Tema Cósmico VIP ✨'}</span>
-          </button>
-
           {user?.isSuperAdmin && (
             <Link 
               to="/super-admin" 
@@ -405,12 +369,7 @@ export default function Home() {
         </div>
 
         {/* Hero Section */}
-        <div className={clsx(
-          "relative text-white pt-12 pb-20 px-6 rounded-b-[2.5rem] shadow-2xl overflow-hidden transition-all duration-500",
-          isCosmic 
-            ? "bg-gradient-to-b from-[#180a3c] via-[#201054] to-[#0c0424] shadow-[0_20px_50px_rgba(139,92,246,0.35)] border-b-2 border-amber-400/40" 
-            : "bg-blue-700 shadow-2xl"
-        )}>
+        <div className="relative text-white pt-10 pb-16 px-6 rounded-b-[2.5rem] shadow-2xl overflow-hidden transition-all duration-500 bg-blue-700">
           {/* Header Background Image */}
           {settings?.header_image_url && settings.header_image_url !== 'none' && (
             <div 
@@ -424,7 +383,7 @@ export default function Home() {
           
           <div className="relative z-20 flex flex-col items-center text-center">
             {/* Logo personalizado de la sala si está configurado */}
-            {tenant.logo_url && (
+            {tenant.logo_url ? (
               <div className="mb-4 flex items-center justify-center">
                 <img 
                   src={tenant.logo_url} 
@@ -432,104 +391,86 @@ export default function Home() {
                   className="h-16 md:h-20 w-auto max-w-[220px] object-contain drop-shadow-xl rounded-2xl bg-white/10 p-2 backdrop-blur-md border border-white/20" 
                 />
               </div>
+            ) : (
+              <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/20 backdrop-blur-md text-[10px] font-black text-yellow-300 border border-white/10 shadow-lg animate-pulse uppercase tracking-[0.2em] mb-4">
+                <Star size={12} className="fill-yellow-300" /> ¡El Bingo Más Regalón!
+              </div>
             )}
 
-            {tenantSlug ? (
-              <div className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-900/90 backdrop-blur-md text-xs font-black text-amber-300 border border-amber-400/50 shadow-2xl mb-4">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
-                <span>🏢 SALA: {tenant.name.toUpperCase()}</span>
-              {tenant.access_code && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(tenant.access_code || '');
-                    toast.success(`Código de sala copiado: ${tenant.access_code}`);
-                  }}
-                  title="Clic para copiar código de acceso seguro"
-                  className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-400/30 text-[10px] font-mono flex items-center gap-1 transition active:scale-95 cursor-pointer"
-                >
-                  <Key size={10} className="text-emerald-300" />
-                  PIN: {tenant.access_code}
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/20 backdrop-blur-md text-[10px] font-black text-yellow-300 border border-white/10 shadow-lg animate-pulse uppercase tracking-[0.2em] mb-4">
-              <Star size={12} className="fill-yellow-300" /> ¡El Bingo Más Regalón!
-            </div>
-          )}
+            <p className="text-blue-100 text-sm md:text-base font-bold max-w-md drop-shadow-md leading-snug mb-5">
+              {tenant.description || settings?.header_subtitle || 'Juega desde tu celular, gana premios al instante y diviértete en grande.'}
+            </p>
 
-          <h1 className="text-5xl md:text-7xl font-black tracking-tighter mb-3 drop-shadow-2xl leading-[0.9]">
-            {tenantSlug ? (
-              <>SALA <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-yellow-500">{tenant.name.toUpperCase()}</span></>
-            ) : settings?.header_title?.split(' ').map((word: string, i: number) => (
-              <React.Fragment key={i}>
-                {i > 0 && ' '}
-                {i === settings?.header_title?.split(' ').length - 1 ? (
-                   <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-yellow-500">{word}</span>
-                ) : word}
-              </React.Fragment>
-            )) || <>BINGO <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-yellow-500">ONLINE</span></>}
-          </h1>
-
-          <p className="text-blue-100 text-base md:text-lg font-bold max-w-md drop-shadow-md leading-snug mb-6">
-            {tenant.description || settings?.header_subtitle || 'Juega desde tu celular, gana premios al instante y diviértete en grande.'}
-          </p>
-
-          {/* Button LEER PRIMERO ¡AQUÍ ESTOY! placed right after subtitle, centered */}
-          <div className="flex justify-center w-full">
-            <Link 
-              to={tenantPrefix ? `${tenantPrefix}/dynamics` : "/dynamics"}
-              className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-500 text-yellow-950 font-black text-xs md:text-sm uppercase tracking-wider shadow-2xl hover:scale-105 active:scale-95 transition-all border-2 border-white/50 group relative"
-            >
-              <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-red-500"></span>
-              </span>
-              <motion.span 
-                animate={{ x: [0, 4, 0] }}
-                transition={{ repeat: Infinity, duration: 1.5 }}
-                className="text-lg"
+            {/* Botón Leer Instrucciones */}
+            <div className="flex justify-center w-full">
+              <Link 
+                to={tenantPrefix ? `${tenantPrefix}/dynamics` : "/dynamics"}
+                className="inline-flex items-center gap-2.5 px-6 py-2.5 rounded-full bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-500 text-yellow-950 font-black text-xs md:text-sm uppercase tracking-wider shadow-2xl hover:scale-105 active:scale-95 transition-all border-2 border-white/50 group relative"
               >
-                👋
-              </motion.span>
-              <span>LEER PRIMERO</span>
-              <span className="text-red-700 bg-yellow-100 px-2.5 py-0.5 rounded-full font-black text-[11px] shadow-sm group-hover:scale-105 transition-transform">
-                ¡AQUÍ ESTOY!
-              </span>
-            </Link>
+                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-red-500"></span>
+                </span>
+                <BookOpen size={16} className="text-yellow-950 shrink-0" />
+                <span>Leer Instrucciones</span>
+              </Link>
+            </div>
           </div>
         </div>
-      </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 px-4 -mt-12 relative z-10 max-w-lg mx-auto w-full space-y-6">
+      <div className="flex-1 px-4 -mt-10 relative z-10 max-w-lg mx-auto w-full space-y-4">
         
         {/* Quick Bingo Indicator */}
         <QuickBingoIndicator onBuyCard={scrollToLogin} />
 
+        {/* Título y Código de la Sala colocado sobre la tarjeta de juegos pagos programados */}
+        {(tenantSlug || tenant?.name) && (
+          <div className="bg-slate-900/95 backdrop-blur-md text-white rounded-2xl sm:rounded-3xl p-3 sm:p-3.5 px-4 sm:px-5 shadow-xl border border-slate-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+              <div className="min-w-0">
+                <span className="text-[10px] uppercase font-black tracking-widest text-slate-400 block leading-none mb-0.5">
+                  Sala
+                </span>
+                <h2 className="text-sm sm:text-base font-black text-amber-300 uppercase truncate tracking-tight">
+                  {tenant.name || 'Bingo Live'}
+                </h2>
+              </div>
+            </div>
+
+            {tenant.access_code && (
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(tenant.access_code || '');
+                  toast.success(`Código de sala copiado: ${tenant.access_code}`);
+                }}
+                title="Clic para copiar código de acceso seguro"
+                className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 text-xs font-mono font-bold flex items-center gap-1.5 transition active:scale-95 cursor-pointer shrink-0 shadow-sm"
+              >
+                <Key size={13} className="text-emerald-300" />
+                <span>PIN: {tenant.access_code}</span>
+                <Copy size={11} className="text-emerald-400/70" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Featured Game Promo Card (Free or Paid) */}
         {featuredGame ? (
-          <div className={clsx(
-            "rounded-[2.5rem] overflow-hidden transform transition hover:scale-[1.01]",
-            isCosmic 
-              ? "bg-[#140a32] shadow-[0_0_35px_rgba(147,51,234,0.3)] border-2 border-purple-500/40 text-white" 
-              : "bg-white rounded-[2.5rem] shadow-2xl border border-slate-100"
-          )}>
+          <div className="bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden transform transition hover:scale-[1.01]">
             <div className={clsx(
               "p-6 text-center relative overflow-hidden",
               checkIsFree(featuredGame) 
-                ? (isCosmic ? "bg-gradient-to-br from-emerald-700 via-teal-800 to-slate-950" : "bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-700") 
-                : (isCosmic ? "bg-gradient-to-br from-purple-800 via-indigo-900 to-slate-950" : "bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700")
+                ? "bg-gradient-to-br from-emerald-600 via-teal-600 to-emerald-700" 
+                : "bg-gradient-to-br from-indigo-600 via-blue-600 to-blue-700"
             )}>
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -mr-10 -mt-10"></div>
               <div className="absolute bottom-0 left-0 w-24 h-24 bg-yellow-400/10 rounded-full blur-xl -ml-6 -mb-6"></div>
               
               {/* Aviso de Juego Gratuito / Programado / En Vivo - Agrandado */}
-              <div className={clsx(
-                "inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full text-xs sm:text-sm font-black uppercase tracking-[0.15em] mb-3 border-2 shadow-xl animate-pulse",
-                isCosmic ? "bg-amber-400 text-slate-950 border-amber-300 shadow-[0_0_20px_rgba(251,191,36,0.4)]" : "bg-yellow-400 text-yellow-950 border-yellow-200"
-              )}>
+              <div className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full text-xs sm:text-sm font-black uppercase tracking-[0.15em] mb-3 border-2 shadow-xl animate-pulse bg-yellow-400 text-yellow-950 border-yellow-200">
                 {checkIsFree(featuredGame)
                   ? (featuredGame.status === 'playing' ? '🎉 ¡JUEGO GRATIS EN VIVO!' : '🎉 ¡JUEGO GRATUITO PROGRAMADO!')
                   : (featuredGame.status === 'playing' ? '🔥 ¡JUEGO EN VIVO!' : '⭐ PRÓXIMO JUEGO PREMIUM')}
@@ -548,27 +489,21 @@ export default function Home() {
             
             <div className="p-6">
               <div className="grid grid-cols-2 gap-4 mb-4">
-                <div className={clsx(
-                  "rounded-3xl p-4 text-center shadow-sm relative overflow-hidden group",
-                  isCosmic ? "bg-slate-900/90 border border-purple-500/30 text-white" : "bg-emerald-50 border border-emerald-100 text-emerald-700"
-                )}>
+                <div className="rounded-3xl p-4 text-center shadow-sm relative overflow-hidden group bg-emerald-50 border border-emerald-100 text-emerald-700">
                   <div className="absolute inset-0 bg-emerald-100 opacity-0 group-hover:opacity-20 transition-opacity"></div>
-                  <span className={clsx("block text-[10px] font-black uppercase mb-1 tracking-widest relative z-10", isCosmic ? "text-amber-400" : "text-emerald-600")}>Premio Mayor</span>
-                  <span className={clsx("block text-2xl font-black flex items-center justify-center gap-1.5 relative z-10", isCosmic ? "text-yellow-300" : "text-emerald-700")}>
+                  <span className="block text-[10px] font-black uppercase mb-1 tracking-widest relative z-10 text-emerald-600">Premio Mayor</span>
+                  <span className="block text-2xl font-black flex items-center justify-center gap-1.5 relative z-10 text-emerald-700">
                     <Trophy size={20} className="text-yellow-500 fill-yellow-500" /> {formatCurrency(featuredGame.prize)}
                   </span>
                 </div>
-                <div className={clsx(
-                  "rounded-3xl p-4 text-center shadow-sm relative overflow-hidden group",
-                  isCosmic ? "bg-slate-900/90 border border-purple-500/30 text-white" : "bg-blue-50 border border-blue-100 text-blue-700"
-                )}>
+                <div className="rounded-3xl p-4 text-center shadow-sm relative overflow-hidden group bg-blue-50 border border-blue-100 text-blue-700">
                   <div className="absolute inset-0 bg-blue-100 opacity-0 group-hover:opacity-20 transition-opacity"></div>
-                  <span className={clsx("block text-[10px] font-black uppercase mb-1 tracking-widest relative z-10", isCosmic ? "text-cyan-400" : "text-blue-600")}>Costo Cartón</span>
-                  <span className={clsx("block text-xl sm:text-2xl font-black flex items-center justify-center gap-1 relative z-10", isCosmic ? "text-cyan-300" : "text-blue-700")}>
+                  <span className="block text-[10px] font-black uppercase mb-1 tracking-widest relative z-10 text-blue-600">Costo Cartón</span>
+                  <span className="block text-xl sm:text-2xl font-black flex items-center justify-center gap-1 relative z-10 text-blue-700">
                     {checkIsFree(featuredGame) ? (
                       <span className="text-emerald-400 font-extrabold text-lg sm:text-xl">¡GRATIS! 🎁</span>
                     ) : (
-                      <><Ticket size={20} className={isCosmic ? "text-cyan-400" : "text-blue-500"} /> {formatCurrency(featuredGame.card_value)}</>
+                      <><Ticket size={20} className="text-blue-500" /> {formatCurrency(featuredGame.card_value)}</>
                     )}
                   </span>
                 </div>
@@ -736,15 +671,9 @@ export default function Home() {
 
         {/* Secondary CTA - Login */}
         <div id="login-section" className="relative group max-w-2xl mx-auto mb-16">
-          <div className={clsx(
-            "absolute -inset-1 rounded-[3rem] blur-xl opacity-0 group-hover:opacity-100 transition duration-700",
-            isCosmic ? "bg-gradient-to-r from-amber-500/20 via-purple-500/25 to-cyan-500/20" : "bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10"
-          )}></div>
+          <div className="absolute -inset-1 rounded-[3rem] blur-xl opacity-0 group-hover:opacity-100 transition duration-700 bg-gradient-to-r from-emerald-500/10 via-blue-500/10 to-purple-500/10"></div>
           
-          <div className={clsx(
-            "relative border rounded-[2.75rem] p-6 sm:p-10 shadow-2xl overflow-hidden min-h-[420px] flex flex-col justify-center",
-            isCosmic ? "border-purple-500/40 shadow-[0_0_35px_rgba(168,85,247,0.25)]" : "border-white/10 shadow-2xl"
-          )}>
+          <div className="relative border border-white/10 rounded-[2.75rem] p-6 sm:p-10 shadow-2xl overflow-hidden min-h-[420px] flex flex-col justify-center">
             {/* Background Image with Overlay */}
             {settings?.login_bg_image_url !== 'none' && (
               <div 
