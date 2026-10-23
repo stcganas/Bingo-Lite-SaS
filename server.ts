@@ -7683,6 +7683,297 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
   }
 });
 
+// ============================================================================
+// MÓDULO ADMINISTRATIVO DE RASTREO DE INVITACIONES Y REGALOS (MULTI-TENANT)
+// ============================================================================
+
+// Listar todas las invitaciones de la sala con métricas en tiempo real y buscador
+app.get('/api/admin/gift-invitations', requireAdmin, async (req, res) => {
+  try {
+    const authUser = await getAuthenticatedUser(req);
+    const rawTargetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    let targetTenant = normalizeTenant(rawTargetTenant);
+    if (authUser?.isSuperAdmin && req.query.tenantId) {
+      targetTenant = normalizeTenant(req.query.tenantId as string);
+    }
+
+    const { status, search, page = '1', limit = '100' } = req.query;
+    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+    const limitNum = Math.min(200, Math.max(10, parseInt(limit as string, 10) || 100));
+    const offset = (pageNum - 1) * limitNum;
+
+    // 1. Obtener todas las invitaciones de la sala para calcular métricas globales
+    let countQuery = supabase
+      .from('gift_invitations')
+      .select('id, status, tenant_id');
+
+    if (!authUser?.isSuperAdmin || (req.query.tenantId && req.query.tenantId !== 'all')) {
+      countQuery = countQuery.eq('tenant_id', targetTenant);
+    }
+
+    const { data: allRows, error: countErr } = await countQuery;
+    if (countErr) {
+      console.warn('[gift-invitations] Warning fetching count metrics:', countErr.message);
+    }
+
+    const totalCount = allRows ? allRows.length : 0;
+    const claimedCount = allRows ? allRows.filter((r: any) => r.status === 'claimed').length : 0;
+    const pendingCount = allRows ? allRows.filter((r: any) => r.status === 'pending').length : 0;
+    const conversionRate = totalCount > 0 ? Number(((claimedCount / totalCount) * 100).toFixed(1)) : 0;
+
+    // 2. Query con filtros para los registros
+    let mainQuery = supabase
+      .from('gift_invitations')
+      .select('*');
+
+    if (!authUser?.isSuperAdmin || (req.query.tenantId && req.query.tenantId !== 'all')) {
+      mainQuery = mainQuery.eq('tenant_id', targetTenant);
+    }
+
+    if (status && status !== 'all') {
+      mainQuery = mainQuery.eq('status', String(status));
+    }
+
+    mainQuery = mainQuery.order('id', { ascending: false });
+
+    // Si no hay búsqueda manual, paginar por base de datos
+    if (!search) {
+      mainQuery = mainQuery.range(offset, offset + limitNum - 1);
+    }
+
+    const { data: rows, error: rowsErr } = await mainQuery;
+    if (rowsErr) {
+      return res.status(500).json({ error: 'Error al consultar invitaciones: ' + rowsErr.message });
+    }
+
+    let items = rows || [];
+
+    // Búsqueda en memoria si se especifica término de búsqueda
+    if (search && typeof search === 'string' && search.trim() !== '') {
+      const q = search.trim().toLowerCase();
+      items = items.filter((inv: any) => {
+        const idMatch = String(inv.id).includes(q);
+        const senderMatch = (inv.sender_phone || '').toLowerCase().includes(q) || (inv.sender_name || '').toLowerCase().includes(q);
+        const recipientMatch = (inv.recipient_phone || '').toLowerCase().includes(q);
+        const claimedPhoneMatch = (inv.claimed_by_phone || '').toLowerCase().includes(q);
+        const claimedNameMatch = (inv.claimed_by_name || '').toLowerCase().includes(q);
+        return idMatch || senderMatch || recipientMatch || claimedPhoneMatch || claimedNameMatch;
+      });
+      items = items.slice(offset, offset + limitNum);
+    }
+
+    // 3. Enriquecer con información de los juegos asociados
+    const gameIds = [...new Set(items.map((i: any) => i.game_id).filter(Boolean))];
+    const gamesMap = new Map<number, any>();
+    if (gameIds.length > 0) {
+      const { data: games } = await supabase
+        .from('game')
+        .select('id, name, prize, start_time, status')
+        .in('id', gameIds);
+      if (games) {
+        games.forEach((g: any) => gamesMap.set(g.id, g));
+      }
+    }
+
+    // 4. Buscar nombres de remitentes y receptores en la tabla players
+    const phonesToLookup = new Set<string>();
+    items.forEach((inv: any) => {
+      if (inv.sender_phone && !inv.sender_phone.startsWith('sala-') && !inv.sender_name) {
+        phonesToLookup.add(normalizePhone(inv.sender_phone));
+      }
+      if (inv.recipient_phone && !inv.recipient_phone.startsWith('via-link-') && !inv.recipient_phone.startsWith('social-') && !inv.claimed_by_name) {
+        phonesToLookup.add(normalizePhone(inv.recipient_phone));
+      }
+      if (inv.claimed_by_phone && !inv.claimed_by_name) {
+        phonesToLookup.add(normalizePhone(inv.claimed_by_phone));
+      }
+    });
+
+    const playersNameMap = new Map<string, string>();
+    if (phonesToLookup.size > 0) {
+      const { data: foundPlayers } = await supabase
+        .from('players')
+        .select('phone, name')
+        .in('phone', Array.from(phonesToLookup));
+      if (foundPlayers) {
+        foundPlayers.forEach((p: any) => playersNameMap.set(normalizePhone(p.phone), p.name));
+      }
+    }
+
+    const baseUrl = (process.env.VITE_APP_URL || 'https://bingolite.click').replace(/\/+$/, '');
+
+    const enriched = items.map((inv: any) => {
+      const g = inv.game_id ? gamesMap.get(inv.game_id) : null;
+      const cleanSender = normalizePhone(inv.sender_phone || '');
+      const cleanRecipient = normalizePhone(inv.recipient_phone || '');
+      const cleanClaimed = normalizePhone(inv.claimed_by_phone || '');
+
+      const isRoomSender = !inv.sender_phone || inv.sender_phone.startsWith('sala-');
+      const senderName = inv.sender_name || (isRoomSender ? 'Administración / Sala' : (playersNameMap.get(cleanSender) || 'Jugador'));
+      const claimedName = inv.claimed_by_name || playersNameMap.get(cleanClaimed) || (cleanRecipient ? playersNameMap.get(cleanRecipient) : '') || '';
+
+      const roomPrefix = inv.tenant_id && inv.tenant_id !== 'bingo-lite' && inv.tenant_id !== 'default'
+        ? `/sala/${inv.tenant_id}`
+        : '';
+      const smartUrl = `${baseUrl}${roomPrefix}/invitacion/${inv.id}`;
+
+      return {
+        id: inv.id,
+        tenant_id: inv.tenant_id || 'bingo-lite',
+        sender_phone: inv.sender_phone,
+        sender_name: senderName,
+        is_room_sender: isRoomSender,
+        recipient_phone: inv.recipient_phone,
+        status: inv.status || 'pending',
+        card_count: inv.card_count || 1,
+        created_at: inv.created_at,
+        claimed_at: inv.claimed_at || (inv.status === 'claimed' ? inv.created_at : null),
+        claimed_by_phone: inv.claimed_by_phone || (inv.status === 'claimed' && !inv.recipient_phone?.startsWith('via-link-') && !inv.recipient_phone?.startsWith('social-') ? inv.recipient_phone : null),
+        claimed_by_name: claimedName,
+        game_id: inv.game_id,
+        game_name: g?.name || (inv.game_id ? `Juego #${inv.game_id}` : 'Siguiente Sorteo'),
+        game_prize: g?.prize ? `$${Number(g.prize).toLocaleString('es-CO')}` : null,
+        game_start_time: g?.start_time || null,
+        game_status: g?.status || null,
+        smart_url: smartUrl
+      };
+    });
+
+    res.json({
+      success: true,
+      tenant_id: targetTenant,
+      metrics: {
+        total: totalCount,
+        pending: pendingCount,
+        claimed: claimedCount,
+        conversion_rate: conversionRate
+      },
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalCount
+      },
+      invitations: enriched
+    });
+  } catch (err: any) {
+    console.error('[admin/gift-invitations error]:', err);
+    res.status(500).json({ error: 'Error al obtener invitaciones: ' + err.message });
+  }
+});
+
+// Generar una invitación rápida directamente desde el módulo del admin
+app.post('/api/admin/gift-invitations/generate', requireAdmin, async (req, res) => {
+  try {
+    const rawTargetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const targetTenant = normalizeTenant(rawTargetTenant);
+    const tenantInfo = await getTenantInfo(targetTenant);
+
+    // Buscar juego activo o programado para asociarlo
+    let activeGame: any = null;
+    const { data: games } = await supabase.from('game')
+      .select('*')
+      .in('status', ['waiting', 'scheduled', 'playing', 'paused'])
+      .order('created_at', { ascending: false });
+
+    if (games && games.length > 0) {
+      activeGame = games.find((g: any) => normalizeTenant(g.tenant_id) === targetTenant) || games[0];
+    }
+
+    const dummyRecipient = `admin-gen-${Math.random().toString(36).substring(2, 9)}`;
+    const senderName = req.body.sender_name || tenantInfo.name || 'Sala';
+
+    const insertPayload: any = {
+      sender_phone: `sala-${targetTenant}`,
+      sender_name: senderName,
+      recipient_phone: dummyRecipient,
+      status: 'pending',
+      game_id: req.body.game_id || activeGame?.id || null,
+      card_count: 1,
+      tenant_id: targetTenant
+    };
+
+    let { data: newInvite, error: insErr } = await supabase
+      .from('gift_invitations')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (insErr && insErr.message && insErr.message.includes('sender_name')) {
+      delete insertPayload.sender_name;
+      const resFallback = await supabase
+        .from('gift_invitations')
+        .insert(insertPayload)
+        .select()
+        .single();
+      newInvite = resFallback.data;
+      insErr = resFallback.error;
+    }
+
+    if (insErr) {
+      return res.status(500).json({ error: 'Error al crear invitación: ' + insErr.message });
+    }
+
+    const baseUrl = (process.env.VITE_APP_URL || 'https://bingolite.click').replace(/\/+$/, '');
+    const roomPrefix = targetTenant !== 'bingo-lite' && targetTenant !== 'default' ? `/sala/${targetTenant}` : '';
+    const smartUrl = `${baseUrl}${roomPrefix}/invitacion/${newInvite.id}`;
+
+    res.json({
+      success: true,
+      invitation: newInvite,
+      smartUrl
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Error al generar invitación rápida: ' + err.message });
+  }
+});
+
+// Eliminar / Cancelar una invitación pendiente que no ha sido reclamada
+app.delete('/api/admin/gift-invitations/:id', requireAdmin, async (req, res) => {
+  try {
+    const rawTargetTenant = (req as any).tenantId || getTenantIdFromRequest(req);
+    const targetTenant = normalizeTenant(rawTargetTenant);
+    const inviteId = Number(req.params.id);
+
+    if (!inviteId || isNaN(inviteId)) {
+      return res.status(400).json({ error: 'ID de invitación no válido' });
+    }
+
+    // Verificar que pertenezca al tenant del admin y que siga pendiente
+    const { data: existing } = await supabase
+      .from('gift_invitations')
+      .select('id, status, tenant_id')
+      .eq('id', inviteId)
+      .maybeSingle();
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Invitación no encontrada' });
+    }
+
+    if (normalizeTenant(existing.tenant_id) !== targetTenant) {
+      return res.status(403).json({ error: 'No tienes permiso para gestionar invitaciones de otra sala.' });
+    }
+
+    if (existing.status === 'claimed') {
+      return res.status(400).json({
+        error: 'No se puede eliminar una invitación que ya fue reclamada por un jugador.'
+      });
+    }
+
+    const { error: delErr } = await supabase
+      .from('gift_invitations')
+      .delete()
+      .eq('id', inviteId);
+
+    if (delErr) {
+      return res.status(500).json({ error: delErr.message });
+    }
+
+    res.json({ success: true, message: 'Invitación eliminada correctamente' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Endpoint inteligente para Facebook y redes sociales con metadatos Open Graph
 app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (req, res) => {
   try {
@@ -10698,26 +10989,23 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       (!req.file && payment_method !== 'wallet' && payment_method !== 'gift' && !isFreeGame)
     );
 
-    if (payment_method === 'gift' || invited_by) {
+    if (payment_method === 'gift' || invited_by || invite_id) {
       const cleanInvitedBy = normalizePhone(invited_by);
-      if (!cleanInvitedBy) {
-        return res.status(400).json({ error: 'El número de WhatsApp del amigo que te invitó es requerido.' });
-      }
-
-      // Check if there is a pending gift invitation using invite_id if provided
       let invite: any = null;
+
+      // 1. Si se proporciona invite_id, buscar por ID directo
       if (invite_id) {
-        const { data: idInvite } = await supabase.from('gift_invitations')
-          .select('*')
-          .eq('id', invite_id)
-          .eq('sender_phone', cleanInvitedBy)
-          .maybeSingle();
+        let q = supabase.from('gift_invitations').select('*').eq('id', Number(invite_id));
+        if (cleanInvitedBy) {
+          q = q.eq('sender_phone', cleanInvitedBy);
+        }
+        const { data: idInvite } = await q.maybeSingle();
 
         if (idInvite) {
           if (idInvite.status === 'claimed') {
             return res.status(400).json({
               error: 'Enlace de regalo ya utilizado',
-              message: 'Este enlace de regalo ya fue utilizado y redimido por otro usuario. Cada enlace de regalo solo se puede usar una única vez.'
+              message: 'Este enlace de regalo ya fue utilizado y redimido por otro participante. Cada enlace de cortesía solo se puede usar una única vez.'
             });
           }
           invite = idInvite;
@@ -10729,7 +11017,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         }
       }
 
-      if (!invite) {
+      // 2. Si no vino invite_id, buscar por número del destinatario
+      if (!invite && cleanInvitedBy) {
         const { data: phoneInvite } = await supabase.from('gift_invitations')
           .select('*')
           .eq('sender_phone', cleanInvitedBy)
@@ -10747,7 +11036,8 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
         }
       }
 
-      if (!invite) {
+      // 3. Fallback a invitación genérica pendiente del remitente
+      if (!invite && cleanInvitedBy) {
         const { data: genericInvite } = await supabase.from('gift_invitations')
           .select('*')
           .eq('sender_phone', cleanInvitedBy)
@@ -10761,16 +11051,36 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       if (!invite) {
         return res.status(400).json({
           error: 'No hay regalos disponibles',
-          message: 'No se encontró ningún regalo pendiente disponible con este remitente. El enlace ya fue redimido o se agotaron los 4 regalos disponibles.'
+          message: 'No se encontró ningún regalo pendiente disponible con este remitente o enlace. El regalo ya fue redimido o se agotaron los cupos.'
         });
       }
 
-      // Atomically claim the invitation (ensures strictly one-time use under concurrency)
-      const { data: claimedRow, error: claimErr } = await supabase.from('gift_invitations')
-        .update({ status: 'claimed', recipient_phone: phone })
+      // 4. Canje atómico de la invitación con datos de auditoría de canje
+      const nowIso = new Date().toISOString();
+      const claimPayload: any = {
+        status: 'claimed',
+        recipient_phone: phone,
+        claimed_at: nowIso,
+        claimed_by_phone: phone,
+        claimed_by_name: name || ''
+      };
+
+      let { data: claimedRow, error: claimErr } = await supabase.from('gift_invitations')
+        .update(claimPayload)
         .eq('id', invite.id)
         .eq('status', 'pending')
         .select();
+
+      // Si la base de datos aún no tiene las columnas adicionales, aplicar fallback
+      if (claimErr && claimErr.message && claimErr.message.includes('column')) {
+        const fallbackRes = await supabase.from('gift_invitations')
+          .update({ status: 'claimed', recipient_phone: phone })
+          .eq('id', invite.id)
+          .eq('status', 'pending')
+          .select();
+        claimedRow = fallbackRes.data;
+        claimErr = fallbackRes.error;
+      }
 
       if (claimErr || !claimedRow || claimedRow.length === 0) {
         return res.status(400).json({
@@ -10780,7 +11090,7 @@ app.post('/api/players', upload.single('receipt'), async (req: any, res) => {
       }
 
       finalCardCount = 1;
-      receipt_url = `GIFT_INSTRUCTED_BY_${cleanInvitedBy}`;
+      receipt_url = `GIFT_INSTRUCTED_BY_${cleanInvitedBy || invite.sender_phone || 'SALA'}`;
     } else {
       if (isFreeGame) {
         // Solo juegos gratuitos otorgan 2 cartones gratis

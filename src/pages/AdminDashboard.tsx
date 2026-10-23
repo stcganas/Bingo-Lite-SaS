@@ -27,12 +27,13 @@ import { getProxyUrl, DJSlot, DEFAULT_SLOTS } from '../components/DJConsole';
 import { apiFetch } from '../utils/api';
 import DJConsole from '../components/DJConsole';
 import AdminSellers from "./AdminSellers";
+import AdminInvitations from "./AdminInvitations";
 import VirtualMixer from '../components/VirtualMixer';
 import AIVoiceStudio from '../components/AIVoiceStudio';
 import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
 import defaultLoginBg from '../assets/images/bingo_player_woman_bg_1782074519120.jpg';
 
-type Tab = 'sellers' | 'control' | 'auto_draws' | 'games' | 'patterns' | 'users' | 'all_users' | 'settings' | 'wallet' | 'notifications' | 'tickets' | 'winners_history' | 'free_winners' | 'dj_board' | 'virtual_mixer' | 'statistics_history' | 'lottery_numbers' | 'ai_voice_studio';
+type Tab = 'sellers' | 'control' | 'auto_draws' | 'games' | 'patterns' | 'users' | 'all_users' | 'invitations' | 'settings' | 'wallet' | 'notifications' | 'tickets' | 'winners_history' | 'free_winners' | 'dj_board' | 'virtual_mixer' | 'statistics_history' | 'lottery_numbers' | 'ai_voice_studio';
 
 const getBallLetter = (ball: number) => {
   if (ball >= 1 && ball <= 15) return 'B';
@@ -3036,6 +3037,7 @@ export default function AdminDashboard() {
               { id: 'patterns', icon: <Grid size={16} />, label: 'Patrones', color: 'bg-blue-600' },
               { id: 'users', icon: <Clock size={16} />, label: 'Pagos', color: 'bg-blue-600' },
               { id: 'all_users', icon: <Users size={16} />, label: 'Jugadores', color: 'bg-blue-600' },
+              { id: 'invitations', icon: <Gift size={16} />, label: 'Invitaciones 🎁', color: 'bg-emerald-600' },
               { id: 'sellers', icon: <Users size={16} />, label: 'Sellers', color: 'bg-blue-600' },
               { id: 'wallet', icon: <Wallet size={16} />, label: 'Billeteras', color: 'bg-blue-600' },
               { id: 'notifications', icon: <BellRing size={16} />, label: 'Push', color: 'bg-indigo-600' },
@@ -5403,6 +5405,11 @@ export default function AdminDashboard() {
                 </table>
               </div>
             </div>
+          )}
+
+          {/* INVITACIONES Y REGALOS DE CORTESÍA (MULTI-TENANT) */}
+          {activeTab === 'invitations' && (
+            <AdminInvitations currentTenant={currentTenant} isSuperAdmin={user?.role === 'superadmin' || isSuperAdmin} />
           )}
 
           {/* NOTIFICATIONS TAB */}
