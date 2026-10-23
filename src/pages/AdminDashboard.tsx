@@ -30,6 +30,7 @@ import AdminSellers from "./AdminSellers";
 import VirtualMixer from '../components/VirtualMixer';
 import AIVoiceStudio from '../components/AIVoiceStudio';
 import FreeGamesLeaderboard from '../components/FreeGamesLeaderboard';
+import defaultLoginBg from '../assets/images/bingo_player_woman_bg_1782074519120.jpg';
 
 type Tab = 'sellers' | 'control' | 'auto_draws' | 'games' | 'patterns' | 'users' | 'all_users' | 'settings' | 'wallet' | 'notifications' | 'tickets' | 'winners_history' | 'free_winners' | 'dj_board' | 'virtual_mixer' | 'statistics_history' | 'lottery_numbers' | 'ai_voice_studio';
 
@@ -7298,19 +7299,58 @@ export default function AdminDashboard() {
                   
                   <div className="space-y-4">
                     <div className="bg-slate-50 p-6 rounded-2xl border-2 border-slate-100">
-                      <label className="block text-sm font-bold text-slate-700 mb-4 italic">Imagen del Banner Superior</label>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-4">
+                        <label className="block text-sm font-bold text-slate-700 uppercase tracking-wide">Imagen del Banner / Cabecera Superior</label>
+                        {headerImageUrl && headerImageUrl !== 'none' ? (
+                          <span className="text-[11px] font-black uppercase tracking-wider text-blue-700 bg-blue-100 px-3 py-1 rounded-full border border-blue-200">
+                            🎨 Personalizada
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-3 py-1 rounded-full border border-emerald-200">
+                            ✓ Cabecera por Defecto
+                          </span>
+                        )}
+                      </div>
                       
                       <div className="flex flex-col items-center gap-6">
-                        {headerImageUrl && (
-                          <div className="relative w-full aspect-[4/1] rounded-2xl overflow-hidden shadow-lg border-2 border-slate-200 bg-slate-200">
-                            <img 
-                              src={headerImageUrl} 
-                              alt="Header Preview" 
-                              className="w-full h-full object-cover"
-                              style={{ opacity: headerOpacity }}
-                            />
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/10">
-                              <span className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full text-xs font-black text-slate-800 shadow-sm border border-white/20 uppercase tracking-widest">Vista Previa</span>
+                        {/* Vista Previa o Cartel de Cabecera por Defecto */}
+                        {headerImageUrl && headerImageUrl !== 'none' ? (
+                          <div className="w-full flex flex-col items-center gap-2">
+                            <div className="relative w-full aspect-[4/1] rounded-2xl overflow-hidden shadow-lg border-2 border-slate-200 bg-slate-900">
+                              <img 
+                                src={headerImageUrl} 
+                                alt="Header Preview" 
+                                className="w-full h-full object-cover"
+                                style={{ opacity: headerOpacity }}
+                              />
+                              <div className="absolute inset-0 flex items-center justify-center bg-black/10">
+                                <span className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full text-xs font-black text-slate-800 shadow-sm border border-white/20 uppercase tracking-widest">Vista Previa Cabecera</span>
+                              </div>
+                            </div>
+                            <div className="w-full flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setHeaderImageUrl('');
+                                  toast.success("Imagen de cabecera quitada. Haz clic en 'Aplicar Cambios en la Cabecera' para guardar la cabecera por defecto.");
+                                }}
+                                className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-2 transition active:scale-95 cursor-pointer shadow-sm"
+                                title="Quitar imagen personalizada y volver a la cabecera por defecto"
+                              >
+                                <Trash2 size={15} /> Quitar Imagen (Dejar Cabecera por Defecto)
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="w-full p-5 bg-gradient-to-r from-blue-900/10 via-indigo-900/10 to-blue-900/10 rounded-2xl border-2 border-dashed border-blue-300 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
+                            <div className="flex items-center gap-3.5">
+                              <div className="p-3 bg-blue-600 text-white rounded-2xl shadow-md shrink-0">
+                                <Sparkles size={24} />
+                              </div>
+                              <div>
+                                <p className="font-black text-slate-800 text-sm">Cabecera Oficial por Defecto Activa</p>
+                                <p className="text-xs text-slate-500 font-medium">La sala utiliza el estilo y degradado oficial con el nombre y logo de la sala sin imagen de fondo superpuesta.</p>
+                              </div>
                             </div>
                           </div>
                         )}
@@ -7327,7 +7367,7 @@ export default function AdminDashboard() {
                                 <Upload size={32} className="text-slate-400 group-hover:text-blue-500 mb-3 transition-colors" />
                               )}
                               <p className="mb-2 text-sm text-slate-600 font-bold">
-                                {isUploadingHeader ? "Subiendo imagen..." : <><span className="text-blue-600">Haz clic para subir</span> o arrastra y suelta</>}
+                                {isUploadingHeader ? "Subiendo imagen..." : <><span className="text-blue-600">Haz clic para subir nueva imagen</span> o arrastra y suelta</>}
                               </p>
                               <p className="text-xs text-slate-400 uppercase tracking-tighter">Imagen (PNG, JPG, WEBP hasta 5MB)</p>
                             </div>
@@ -7380,7 +7420,7 @@ export default function AdminDashboard() {
                             type="text" 
                             value={headerImageUrl || ''}
                             onChange={(e) => setHeaderImageUrl(e.target.value)}
-                            placeholder="URL de la imagen..."
+                            placeholder="URL de la imagen (dejar vacío para cabecera por defecto)..."
                             className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-blue-500 outline-none font-bold text-slate-700 text-sm"
                           />
                         </div>
@@ -7438,7 +7478,7 @@ export default function AdminDashboard() {
                           method: 'POST', 
                           headers: { 'Content-Type': 'application/json' }, 
                           body: JSON.stringify({ 
-                            header_image_url: headerImageUrl,
+                            header_image_url: headerImageUrl ? headerImageUrl : 'none',
                             header_title: headerTitle,
                             header_subtitle: headerSubtitle,
                             header_opacity: headerOpacity
@@ -7481,23 +7521,87 @@ export default function AdminDashboard() {
                   
                   <div className="space-y-4">
                     <div className="bg-slate-50 p-6 rounded-2xl border-2 border-slate-100">
-                      <label className="block text-sm font-bold text-slate-700 mb-4 italic">Imagen de Fondo (Login)</label>
+                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-4">
+                        <label className="block text-sm font-bold text-slate-700 uppercase tracking-wide">Imagen de Fondo (Login)</label>
+                        <div className="flex items-center gap-2">
+                          {loginBgImageUrl && loginBgImageUrl !== 'none' && loginBgImageUrl !== 'default' ? (
+                            <span className="text-[11px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-3 py-1 rounded-full border border-emerald-200">
+                              🎨 Personalizado
+                            </span>
+                          ) : loginBgImageUrl === 'none' ? (
+                            <span className="text-[11px] font-black uppercase tracking-wider text-slate-700 bg-slate-200 px-3 py-1 rounded-full border border-slate-300">
+                              ⬛ Sin Fondo
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-black uppercase tracking-wider text-blue-700 bg-blue-100 px-3 py-1 rounded-full border border-blue-200">
+                              ⭐ Oficial por Defecto
+                            </span>
+                          )}
+                        </div>
+                      </div>
                       
                       <div className="flex flex-col items-center gap-6">
-                        {loginBgImageUrl && (
-                          <div className="relative w-full aspect-video rounded-2xl overflow-hidden shadow-lg border-2 border-slate-200 bg-slate-900">
-                            <img 
-                              src={loginBgImageUrl} 
-                              alt="Login Bg Preview" 
-                              className="w-full h-full object-cover"
-                              style={{ opacity: loginBgOpacity }}
-                            />
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/10">
-                              <span className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full text-xs font-black text-slate-800 shadow-sm border border-white/20 uppercase tracking-widest">Vista Previa Login</span>
-                            </div>
-                          </div>
-                        )}
+                        {/* Selector Rápido de Modo */}
+                        <div className="w-full flex flex-wrap gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLoginBgImageUrl('');
+                              toast.success("Fondo oficial por defecto seleccionado.");
+                            }}
+                            className={clsx(
+                              "flex-1 min-w-[150px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition border active:scale-95 cursor-pointer shadow-sm",
+                              (!loginBgImageUrl || loginBgImageUrl === 'default')
+                                ? "bg-emerald-600 text-white border-emerald-700 shadow-md ring-2 ring-emerald-400"
+                                : "bg-white text-slate-700 hover:bg-slate-100 border-slate-300"
+                            )}
+                          >
+                            <Sparkles size={14} /> Fondo por Defecto
+                          </button>
 
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLoginBgImageUrl('none');
+                              toast.success("Opción 'Sin imagen de fondo' seleccionada.");
+                            }}
+                            className={clsx(
+                              "flex-1 min-w-[150px] py-2.5 px-3 rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition border active:scale-95 cursor-pointer shadow-sm",
+                              loginBgImageUrl === 'none'
+                                ? "bg-slate-800 text-white border-slate-900 shadow-md ring-2 ring-slate-500"
+                                : "bg-white text-slate-700 hover:bg-slate-100 border-slate-300"
+                            )}
+                          >
+                            <Ban size={14} /> Quitar Fondo (Sin Imagen)
+                          </button>
+                        </div>
+
+                        {/* Vista Previa */}
+                        <div className="relative w-full aspect-video rounded-2xl overflow-hidden shadow-lg border-2 border-slate-200 bg-slate-900">
+                          {loginBgImageUrl === 'none' ? (
+                            <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-slate-300 p-6 text-center">
+                              <Ban size={36} className="text-slate-500 mb-2" />
+                              <p className="font-black text-white text-sm uppercase tracking-wider">Sin Imagen de Fondo</p>
+                              <p className="text-xs text-slate-400 mt-1 max-w-sm">La tarjeta de login en la página principal tendrá un fondo oscuro limpio con resplandor moderno sin ninguna foto.</p>
+                            </div>
+                          ) : (
+                            <>
+                              <img 
+                                src={(loginBgImageUrl && loginBgImageUrl !== 'default') ? loginBgImageUrl : defaultLoginBg} 
+                                alt="Login Bg Preview" 
+                                className="w-full h-full object-cover"
+                                style={{ opacity: loginBgOpacity }}
+                              />
+                              <div className="absolute inset-0 flex items-center justify-center bg-black/10">
+                                <span className="bg-white/90 backdrop-blur-sm px-4 py-2 rounded-full text-xs font-black text-slate-800 shadow-sm border border-white/20 uppercase tracking-widest flex items-center gap-1.5">
+                                  {(loginBgImageUrl && loginBgImageUrl !== 'default') ? '🎨 Imagen Personalizada' : '⭐ Fondo Oficial por Defecto'}
+                                </span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Subir archivo */}
                         <div className="w-full">
                           <label className={clsx(
                             "group flex flex-col items-center justify-center w-full h-32 border-4 border-dashed rounded-3xl cursor-pointer transition-all duration-300",
@@ -7510,7 +7614,7 @@ export default function AdminDashboard() {
                                 <Upload size={32} className="text-slate-400 group-hover:text-emerald-500 mb-3 transition-colors" />
                               )}
                               <p className="mb-2 text-sm text-slate-600 font-bold">
-                                {isUploadingLoginBg ? "Subiendo imagen..." : <><span className="text-emerald-600">Haz clic para subir</span> o arrastra y suelta</>}
+                                {isUploadingLoginBg ? "Subiendo imagen..." : <><span className="text-emerald-600">Haz clic para subir fondo personalizado</span> o arrastra y suelta</>}
                               </p>
                               <p className="text-xs text-slate-400 uppercase tracking-tighter">Imagen de fondo login (PNG, JPG, hasta 5MB)</p>
                             </div>
@@ -7563,7 +7667,7 @@ export default function AdminDashboard() {
                             type="text" 
                             value={loginBgImageUrl || ''}
                             onChange={(e) => setLoginBgImageUrl(e.target.value)}
-                            placeholder="URL de la imagen de fondo..."
+                            placeholder="URL de la imagen de fondo (dejar vacío para fondo por defecto)..."
                             className="w-full p-3 border-2 border-slate-200 rounded-xl focus:border-emerald-500 outline-none font-bold text-slate-700 text-sm"
                           />
                         </div>
@@ -7598,7 +7702,7 @@ export default function AdminDashboard() {
                           method: 'POST', 
                           headers: { 'Content-Type': 'application/json' }, 
                           body: JSON.stringify({ 
-                            login_bg_image_url: loginBgImageUrl,
+                            login_bg_image_url: loginBgImageUrl === 'none' ? 'none' : (loginBgImageUrl ? loginBgImageUrl : null),
                             login_bg_opacity: loginBgOpacity
                           }) 
                         }).then(res => {

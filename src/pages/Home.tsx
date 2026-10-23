@@ -412,7 +412,7 @@ export default function Home() {
             : "bg-blue-700 shadow-2xl"
         )}>
           {/* Header Background Image */}
-          {settings?.header_image_url && (
+          {settings?.header_image_url && settings.header_image_url !== 'none' && (
             <div 
               className="absolute inset-0 z-0 bg-cover bg-center transition-opacity duration-1000"
               style={{ 
@@ -746,13 +746,17 @@ export default function Home() {
             isCosmic ? "border-purple-500/40 shadow-[0_0_35px_rgba(168,85,247,0.25)]" : "border-white/10 shadow-2xl"
           )}>
             {/* Background Image with Overlay */}
-            <div 
-              className="absolute inset-0 z-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105" 
-              style={{ backgroundImage: `url('${settings?.login_bg_image_url || defaultLoginBg}')` }}
-            />
+            {settings?.login_bg_image_url !== 'none' && (
+              <div 
+                className="absolute inset-0 z-0 bg-cover bg-center transition-transform duration-700 group-hover:scale-105" 
+                style={{ 
+                  backgroundImage: `url('${(settings?.login_bg_image_url && settings.login_bg_image_url !== 'default') ? settings.login_bg_image_url : defaultLoginBg}')` 
+                }}
+              />
+            )}
             <div 
               className="absolute inset-0 z-0 bg-slate-950 backdrop-blur-[0.5px]" 
-              style={{ opacity: Math.max(0.2, 1 - (settings?.login_bg_opacity ?? 0.6)) }}
+              style={{ opacity: settings?.login_bg_image_url === 'none' ? 0.35 : Math.max(0.2, 1 - (settings?.login_bg_opacity ?? 0.6)) }}
             />
 
             <div className="text-left mb-6 relative z-10 px-1 w-full">

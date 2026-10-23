@@ -2379,7 +2379,7 @@ async function getGameFullState(gameId: number) {
     lottery_winner_card_number: settings.lotteryWinnerCardNumber || null,
     active_draw: settings.active_draw === true,
     nequi_number: settings.nequi_number || globalSettings.nequi_number || '3235304996',
-    header_image_url: settings.header_image_url || null,
+    header_image_url: (settings.header_image_url === 'none' || settings.header_image_url === '' || settings.header_image_url === null) ? null : settings.header_image_url,
     header_opacity: settings.header_opacity !== undefined ? settings.header_opacity : 0.4,
     header_title: settings.header_title || 'BINGO ONLINE',
     header_subtitle: settings.header_subtitle || 'Juega desde tu celular, gana premios al instante y diviértete en grande.',
@@ -6259,7 +6259,9 @@ app.get('/api/game', async (req, res) => {
         whatsapp_template: tenantSettings.whatsapp_template || '',
         whatsapp_group_link: tenantSettings.whatsapp_group_link || tenantInfo.whatsapp_group_link || '',
         nequi_number: tenantSettings.nequi_number || tenantInfo.contact_phone || '',
-        header_image_url: tenantSettings.header_image_url || tenantInfo.banner_url || null,
+        header_image_url: (tenantSettings.header_image_url === 'none' || tenantSettings.header_image_url === '' || tenantSettings.header_image_url === null)
+          ? null
+          : (tenantSettings.header_image_url || tenantInfo.banner_url || null),
         header_opacity: tenantSettings.header_opacity !== undefined ? tenantSettings.header_opacity : 0.4,
         header_title: tenantSettings.header_title || tenantInfo.name || 'BINGO ONLINE',
         header_subtitle: tenantSettings.header_subtitle || 'Juega desde tu celular, gana premios al instante y diviértete en grande.',
@@ -7995,11 +7997,24 @@ app.post('/api/game/status', requireAdmin, async (req, res) => {
   if (is_free !== undefined) globalSettingsUpdates.is_free = is_free;
   if (req.body.whatsapp_group_link !== undefined) globalSettingsUpdates.whatsapp_group_link = req.body.whatsapp_group_link;
   if (req.body.nequi_number !== undefined) globalSettingsUpdates.nequi_number = req.body.nequi_number;
-  if (req.body.header_image_url !== undefined) globalSettingsUpdates.header_image_url = req.body.header_image_url;
+  if (req.body.header_image_url !== undefined) {
+    const cleanHeader = (req.body.header_image_url === 'none' || !req.body.header_image_url) 
+      ? (req.body.header_image_url === 'none' ? 'none' : null) 
+      : req.body.header_image_url;
+    globalSettingsUpdates.header_image_url = cleanHeader;
+    if (targetTenant && targetTenant !== 'global' && targetTenant !== 'default') {
+      try {
+        await supabase.from('tenants').update({ banner_url: (cleanHeader && cleanHeader !== 'none') ? cleanHeader : null }).eq('slug', targetTenant);
+        tenantsCache.delete(targetTenant);
+      } catch (e) {}
+    }
+  }
   if (req.body.header_opacity !== undefined) globalSettingsUpdates.header_opacity = req.body.header_opacity;
   if (req.body.header_title !== undefined) globalSettingsUpdates.header_title = req.body.header_title;
   if (req.body.header_subtitle !== undefined) globalSettingsUpdates.header_subtitle = req.body.header_subtitle;
-  if (req.body.login_bg_image_url !== undefined) globalSettingsUpdates.login_bg_image_url = req.body.login_bg_image_url;
+  if (req.body.login_bg_image_url !== undefined) {
+    globalSettingsUpdates.login_bg_image_url = req.body.login_bg_image_url === 'none' ? 'none' : (req.body.login_bg_image_url || null);
+  }
   if (req.body.login_bg_opacity !== undefined) globalSettingsUpdates.login_bg_opacity = req.body.login_bg_opacity;
   if (req.body.bg_volume !== undefined) globalSettingsUpdates.bg_volume = req.body.bg_volume;
   if (req.body.fx_volume !== undefined) globalSettingsUpdates.fx_volume = req.body.fx_volume;
@@ -8119,6 +8134,9 @@ app.post('/api/admin/upload-login-bg', requireAdmin, upload.single('login_bg_ima
       .from(uploadData.path.startsWith('assets') ? BANNER_BUCKET : BUCKET_NAME)
       .getPublicUrl(filePath);
 
+    const targetTenant = (req as any).tenantId || (req as any).adminUser?.tenant_id || getTenantIdFromRequest(req) || 'default';
+    await saveGameSettings('global', { login_bg_image_url: publicUrl }, targetTenant);
+
     res.json({ url: publicUrl });
   } catch (err: any) {
 
@@ -8184,7 +8202,14 @@ app.post('/api/admin/upload-header', requireAdmin, upload.single('header_image')
       .getPublicUrl(filePath);
 
     // Guardar inmediatamente la URL de la cabecera en los ajustes de la base de datos
-    await saveGameSettings('global', { header_image_url: publicUrl });
+    const targetTenant = (req as any).tenantId || (req as any).adminUser?.tenant_id || getTenantIdFromRequest(req) || 'default';
+    await saveGameSettings('global', { header_image_url: publicUrl }, targetTenant);
+    if (targetTenant && targetTenant !== 'global' && targetTenant !== 'default') {
+      try {
+        await supabase.from('tenants').update({ banner_url: publicUrl }).eq('slug', targetTenant);
+        tenantsCache.delete(targetTenant);
+      } catch (e) {}
+    }
 
     res.json({ success: true, url: publicUrl });
   } catch (err: any) {

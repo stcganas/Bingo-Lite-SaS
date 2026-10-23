@@ -401,7 +401,7 @@ ${roomDirectUrl}
       <div className={`max-w-md w-full bg-white rounded-3xl shadow-xl overflow-hidden border-4 ${isFreeGame ? 'border-emerald-500' : 'border-blue-500'}`}>
         <div className={`${isFreeGame ? 'bg-gradient-to-r from-emerald-600 via-emerald-700 to-teal-800' : 'bg-blue-600'} p-6 flex flex-col relative overflow-hidden text-white`}>
           {/* Header Background Image */}
-          {activeGame?.header_image_url && (
+          {activeGame?.header_image_url && activeGame.header_image_url !== 'none' && (
             <div 
               className="absolute inset-0 z-0 bg-cover bg-center"
               style={{ 
