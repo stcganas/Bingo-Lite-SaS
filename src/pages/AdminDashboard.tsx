@@ -702,6 +702,7 @@ export default function AdminDashboard() {
   const [isUploadingSocialImage, setIsUploadingSocialImage] = useState(false);
   const [isGeneratingTestLink, setIsGeneratingTestLink] = useState(false);
   const [lastGeneratedSmartUrl, setLastGeneratedSmartUrl] = useState('');
+  const [socialPreviewTab, setSocialPreviewTab] = useState<'facebook' | 'whatsapp'>('whatsapp');
 
   const handleGenerateAndCopySmartLink = async () => {
     setIsGeneratingTestLink(true);
@@ -721,7 +722,7 @@ export default function AdminDashboard() {
       setLastGeneratedSmartUrl(smartUrl);
       if (navigator.clipboard) {
         await navigator.clipboard.writeText(smartUrl);
-        toast.success('¡Enlace inteligente copiado al portapapeles! Listo para pegar en Facebook.');
+        toast.success('¡Enlace inteligente copiado al portapapeles! Listo para pegar en WhatsApp o Facebook.');
       } else {
         toast.success(`Enlace generado: ${smartUrl}`);
       }
@@ -729,6 +730,33 @@ export default function AdminDashboard() {
     } catch (err: any) {
       toast.error('No se pudo generar el enlace inteligente.');
       return null;
+    } finally {
+      setIsGeneratingTestLink(false);
+    }
+  };
+
+  const handleTestWhatsApp = async () => {
+    setIsGeneratingTestLink(true);
+    try {
+      const res = await apiFetch('/api/gift-invitations/social-share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sender_phone: user?.phone || '',
+          tenantId: currentTenant,
+          network: 'whatsapp'
+        })
+      });
+      if (!res.ok) throw new Error('Error al generar enlace');
+      const data = await res.json();
+      const smartUrl = data.smartUrl || data.registerUrl;
+      setLastGeneratedSmartUrl(smartUrl);
+      const message = data.message || `¡Hola! Te regalo 1 CARTÓN GRATIS de Bingo:\n${smartUrl}`;
+      const encoded = encodeURIComponent(message);
+      window.open(`https://api.whatsapp.com/send?text=${encoded}`, '_blank');
+      toast.success('🎁 ¡Abriendo WhatsApp con tu enlace inteligente e imagen personalizada!');
+    } catch (err: any) {
+      toast.error('No se pudo generar la invitación para WhatsApp.');
     } finally {
       setIsGeneratingTestLink(false);
     }
@@ -6700,54 +6728,118 @@ export default function AdminDashboard() {
 
                       {socialShareImageUrl && (
                         <div className="space-y-3 pt-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
-                              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                              Simulación de Publicación en Facebook
-                            </span>
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            {/* Selector de Pestañas WhatsApp vs Facebook */}
+                            <div className="inline-flex p-1 bg-slate-200/80 rounded-xl gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setSocialPreviewTab('whatsapp')}
+                                className={clsx(
+                                  "px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 cursor-pointer",
+                                  socialPreviewTab === 'whatsapp'
+                                    ? "bg-[#25D366] text-white shadow-sm"
+                                    : "text-slate-600 hover:text-slate-800"
+                                )}
+                              >
+                                <MessageCircle size={14} /> Vista WhatsApp
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSocialPreviewTab('facebook')}
+                                className={clsx(
+                                  "px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 cursor-pointer",
+                                  socialPreviewTab === 'facebook'
+                                    ? "bg-[#1877F2] text-white shadow-sm"
+                                    : "text-slate-600 hover:text-slate-800"
+                                )}
+                              >
+                                <Share2 size={14} /> Vista Facebook
+                              </button>
+                            </div>
+
                             <button
                               type="button"
                               onClick={() => setSocialShareImageUrl('')}
-                              className="text-xs text-red-500 hover:text-red-700 font-bold flex items-center gap-1"
+                              className="text-xs text-red-500 hover:text-red-700 font-bold flex items-center gap-1 self-start sm:self-auto cursor-pointer"
                             >
                               <X size={14} /> Quitar imagen
                             </button>
                           </div>
 
-                          {/* Simulación visual de Feed de Facebook */}
-                          <div className="bg-white rounded-xl border border-slate-300 shadow-sm overflow-hidden max-w-md">
-                            <div className="p-3 flex items-center gap-2.5 border-b border-slate-100">
-                              <div className="w-9 h-9 rounded-full bg-blue-600 text-white font-black flex items-center justify-center text-xs shadow-sm">
-                                B
+                          {/* Simulación según la red seleccionada */}
+                          {socialPreviewTab === 'whatsapp' ? (
+                            /* Simulación visual de Mensaje de WhatsApp */
+                            <div className="bg-[#EFEAE2] p-4 rounded-2xl border border-[#DAD3CC] shadow-inner max-w-md">
+                              <div className="bg-white rounded-2xl shadow-sm overflow-hidden border border-black/5 text-left">
+                                {/* Tarjeta de Enlace Inteligente WhatsApp */}
+                                <div className="bg-[#f0f2f5] p-2 m-2 rounded-xl border border-slate-200/70">
+                                  <div className="relative aspect-[1.91/1] sm:aspect-video w-full rounded-lg overflow-hidden bg-slate-800 mb-2">
+                                    <img
+                                      src={socialShareImageUrl}
+                                      alt="Vista previa para WhatsApp"
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </div>
+                                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">BINGOLITE.CLICK</p>
+                                  <p className="text-xs font-black text-slate-800 line-clamp-1">🎁 ¡Te han regalado 1 Cartón Gratis de Bingo!</p>
+                                  <p className="text-[11px] text-slate-500 line-clamp-1">Reclama tu cartón de cortesía y participa en el gran sorteo en vivo.</p>
+                                </div>
+
+                                {/* Texto del Mensaje */}
+                                <div className="px-3 pb-2 pt-1 text-xs text-slate-800 space-y-1.5 leading-relaxed font-normal whitespace-pre-line">
+                                  {socialShareMessage || (
+                                    <>
+                                      <p className="font-bold text-slate-900">🎉 *¡TE INVITO A JUGAR EN {currentTenant?.toUpperCase() || 'BINGO LITE'}!* 🎁✨</p>
+                                      <p>¡Hola! Ven y participa con nosotros para ganar dinero real en efectivo. 🍀</p>
+                                      <p>¡Entra ya mismo y cantemos BINGO en familia! 👨‍👩‍👧‍👦🍀</p>
+                                    </>
+                                  )}
+                                  <p className="text-blue-600 font-semibold underline break-all">
+                                    {lastGeneratedSmartUrl || `https://bingolite.click/invitacion/ejemplo`}
+                                  </p>
+                                  <div className="flex justify-end items-center gap-1 text-[10px] text-slate-400 font-medium pt-1">
+                                    <span>hace un momento</span>
+                                    <span className="text-blue-500 font-bold">✓✓</span>
+                                  </div>
+                                </div>
                               </div>
-                              <div className="text-left">
-                                <p className="text-xs font-black text-slate-800 leading-tight">Bingo Lite / {currentTenant || 'Sala Principal'}</p>
-                                <p className="text-[10px] text-slate-400 font-medium">Publicidad · Compartido con Enlace Inteligente · 🌐</p>
+                            </div>
+                          ) : (
+                            /* Simulación visual de Feed de Facebook */
+                            <div className="bg-white rounded-xl border border-slate-300 shadow-sm overflow-hidden max-w-md">
+                              <div className="p-3 flex items-center gap-2.5 border-b border-slate-100">
+                                <div className="w-9 h-9 rounded-full bg-blue-600 text-white font-black flex items-center justify-center text-xs shadow-sm">
+                                  B
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-xs font-black text-slate-800 leading-tight">Bingo Lite / {currentTenant || 'Sala Principal'}</p>
+                                  <p className="text-[10px] text-slate-400 font-medium">Publicidad · Compartido con Enlace Inteligente · 🌐</p>
+                                </div>
+                              </div>
+
+                              <p className="px-3 py-2 text-xs text-slate-700 font-normal line-clamp-2">
+                                {socialShareMessage || "🎉 ¡TE INVITO A JUGAR EN NUESTRO BINGO! 🎁✨ Reclama tu cartón gratis de bienvenida y gana dinero real en el sorteo en vivo."}
+                              </p>
+
+                              <div className="relative aspect-[1.91/1] bg-slate-900 w-full overflow-hidden flex items-center justify-center border-y border-slate-200">
+                                <img
+                                  src={socialShareImageUrl}
+                                  alt="Vista previa para Facebook"
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+
+                              <div className="p-3 bg-slate-50 text-left">
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">BINGOLITE.CLICK</p>
+                                <p className="text-xs font-black text-slate-800 truncate">🎁 ¡Te han regalado 1 Cartón Gratis de Bingo!</p>
+                                <p className="text-[11px] text-slate-500 line-clamp-1">Reclama tu cartón de cortesía y participa en el gran sorteo en vivo.</p>
                               </div>
                             </div>
-
-                            <p className="px-3 py-2 text-xs text-slate-700 font-normal line-clamp-2">
-                              {socialShareMessage || "🎉 ¡TE INVITO A JUGAR EN NUESTRO BINGO! 🎁✨ Reclama tu cartón gratis de bienvenida y gana dinero real en el sorteo en vivo."}
-                            </p>
-
-                            <div className="relative aspect-[1.91/1] bg-slate-900 w-full overflow-hidden flex items-center justify-center border-y border-slate-200">
-                              <img
-                                src={socialShareImageUrl}
-                                alt="Vista previa para Facebook"
-                                className="w-full h-full object-cover"
-                              />
-                            </div>
-
-                            <div className="p-3 bg-slate-50 text-left">
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">BINGOLITE.CLICK</p>
-                              <p className="text-xs font-black text-slate-800 truncate">🎁 ¡Te han regalado 1 Cartón Gratis de Bingo!</p>
-                              <p className="text-[11px] text-slate-500 line-clamp-1">Reclama tu cartón de cortesía y participa en el gran sorteo en vivo.</p>
-                            </div>
-                          </div>
+                          )}
                         </div>
                       )}
                       <p className="text-[11px] text-slate-500 font-medium">
-                        🖼️ Esta imagen aparecerá automáticamente en el feed de Facebook cuando los jugadores compartan la invitación. (Recomendado: 1200x630 px).
+                        🖼️ Esta imagen aparecerá automáticamente en <b>WhatsApp y Facebook</b> cuando los jugadores compartan la invitación. (Recomendado: 1200x630 o cuadrada 800x800).
                       </p>
                     </div>
 
@@ -6784,16 +6876,16 @@ export default function AdminDashboard() {
                       Guardar Configuración de Redes Sociales
                     </button>
 
-                    {/* Herramientas de Prueba y Enlace Inteligente */}
+                    {/* Herramientas de Prueba y Enlaces para WhatsApp y Facebook */}
                     <div className="pt-3 border-t border-blue-200/80 space-y-2">
                       <p className="text-xs font-black text-slate-700 flex items-center gap-1.5 uppercase tracking-wider">
-                        <Sparkles size={14} className="text-amber-500" /> Pruebas y Enlace Inteligente para Facebook
+                        <Sparkles size={14} className="text-amber-500" /> Pruebas y Enlaces para WhatsApp y Facebook
                       </p>
                       <p className="text-[11px] text-slate-500">
-                        Genera un enlace con tu imagen personalizada. Si Facebook todavía muestra la imagen anterior por caché, pulsa <b>"Probar en Depurador de Facebook"</b> y haz clic en <i>"Scrape Again"</i> para refrescar la vista previa.
+                        Prueba en vivo tu enlace inteligente. En WhatsApp la imagen se genera automáticamente al incluir el enlace al final del mensaje.
                       </p>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 pt-1">
                         <button
                           type="button"
                           disabled={isGeneratingTestLink}
@@ -6802,6 +6894,35 @@ export default function AdminDashboard() {
                         >
                           {isGeneratingTestLink ? <Loader2 size={15} className="animate-spin" /> : <Copy size={15} />}
                           Copiar Enlace
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isGeneratingTestLink}
+                          onClick={handleTestWhatsApp}
+                          className="py-2.5 px-3 bg-[#25D366] hover:bg-[#20ba59] text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+                        >
+                          <MessageCircle size={15} />
+                          Probar en WhatsApp
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={isGeneratingTestLink}
+                          onClick={async () => {
+                            let url = lastGeneratedSmartUrl;
+                            if (!url) {
+                              url = await handleGenerateAndCopySmartLink();
+                            }
+                            if (url) {
+                              const fbShare = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`;
+                              window.open(fbShare, '_blank', 'width=650,height=520');
+                            }
+                          }}
+                          className="py-2.5 px-3 bg-[#1877F2] hover:bg-[#166fe5] text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
+                        >
+                          <Share2 size={15} />
+                          Publicar Facebook
                         </button>
 
                         <button
@@ -6821,26 +6942,7 @@ export default function AdminDashboard() {
                           className="py-2.5 px-3 bg-white hover:bg-slate-50 border-2 border-slate-300 text-slate-700 font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
                         >
                           <ExternalLink size={15} className="text-blue-600" />
-                          Depurador Facebook
-                        </button>
-
-                        <button
-                          type="button"
-                          disabled={isGeneratingTestLink}
-                          onClick={async () => {
-                            let url = lastGeneratedSmartUrl;
-                            if (!url) {
-                              url = await handleGenerateAndCopySmartLink();
-                            }
-                            if (url) {
-                              const fbShare = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`;
-                              window.open(fbShare, '_blank', 'width=650,height=520');
-                            }
-                          }}
-                          className="py-2.5 px-3 bg-[#1877F2] hover:bg-[#166fe5] text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 shadow-sm active:scale-95 cursor-pointer"
-                        >
-                          <Share2 size={15} />
-                          Publicar Prueba
+                          Depurador Meta
                         </button>
                       </div>
 

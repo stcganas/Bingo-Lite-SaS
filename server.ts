@@ -3124,6 +3124,9 @@ app.post('/api/admin/settings/social-share', requireAdmin, async (req, res) => {
       }
     }
 
+    // Invalida la caché de imagen Open Graph para WhatsApp y Facebook
+    ogImageCache.delete(`og_${targetTenant}`);
+
     res.json({ success: true, image_url, message });
   } catch (err: any) {
     res.status(500).json({ error: 'Error al guardar configuración de redes sociales' });
@@ -3157,6 +3160,78 @@ app.post('/api/admin/settings/theme-template', requireAdmin, async (req, res) =>
   }
 });
 
+// Caché en memoria para imágenes Open Graph optimizadas para WhatsApp (<300KB)
+const ogImageCache = new Map<string, { buffer: Buffer; contentType: string; timestamp: number }>();
+
+// Endpoint de imagen Open Graph ultraligera optimizada (<300KB) para WhatsApp, Facebook y Twitter
+app.get('/api/og-image/:tenantId?', async (req, res) => {
+  try {
+    const rawTenant = req.params.tenantId || req.query.tenant || req.query.sala || 'bingo-lite';
+    const tenantSlug = normalizeTenant(rawTenant);
+    const cacheKey = `og_${tenantSlug}`;
+    const cached = ogImageCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && (now - cached.timestamp < 300000)) { // 5 minutos de caché
+      res.setHeader('Content-Type', cached.contentType);
+      res.setHeader('Content-Length', cached.buffer.length);
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=600');
+      return res.send(cached.buffer);
+    }
+
+    const settings = await getGameSettings('global', tenantSlug);
+    let defaultSettings: any = null;
+    if (tenantSlug !== 'bingo-lite') {
+      defaultSettings = await getGameSettings('global', 'bingo-lite');
+    }
+    const tenantInfo = await getTenantInfo(tenantSlug);
+    const baseUrl = (process.env.VITE_APP_URL || 'https://bingolite.click').replace(/\/+$/, '');
+    let rawImg = settings.social_share_image_url || defaultSettings?.social_share_image_url || tenantInfo?.banner_url || tenantInfo?.logo_url;
+
+    if (!rawImg) {
+      return res.redirect(302, `${baseUrl}/pwa-512x512.png`);
+    }
+    if (!rawImg.startsWith('http://') && !rawImg.startsWith('https://')) {
+      rawImg = `${baseUrl}${rawImg.startsWith('/') ? '' : '/'}${rawImg}`;
+    }
+
+    try {
+      const response = await fetch(rawImg);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const arrayBuffer = await response.arrayBuffer();
+      const inputBuffer = Buffer.from(arrayBuffer);
+
+      // Si ya es un JPEG ligero (<250KB), servirlo directamente
+      if (inputBuffer.length <= 250 * 1024 && (rawImg.includes('.jpg') || rawImg.includes('.jpeg'))) {
+        ogImageCache.set(cacheKey, { buffer: inputBuffer, contentType: 'image/jpeg', timestamp: now });
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Content-Length', inputBuffer.length);
+        res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=600');
+        return res.send(inputBuffer);
+      }
+
+      // Optimizar con Jimp para WhatsApp (<300KB estricto, 800px máx, calidad 75)
+      const jimpImg = await Jimp.read(inputBuffer);
+      const maxDim = 800;
+      if (jimpImg.bitmap.width > maxDim || jimpImg.bitmap.height > maxDim) {
+        const scale = Math.min(maxDim / jimpImg.bitmap.width, maxDim / jimpImg.bitmap.height);
+        jimpImg.resize({ w: Math.round(jimpImg.bitmap.width * scale), h: Math.round(jimpImg.bitmap.height * scale) });
+      }
+      const optimizedBuffer = await jimpImg.getBuffer('image/jpeg', { quality: 75 });
+
+      ogImageCache.set(cacheKey, { buffer: optimizedBuffer, contentType: 'image/jpeg', timestamp: now });
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Content-Length', optimizedBuffer.length);
+      res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=600');
+      return res.send(optimizedBuffer);
+    } catch (procErr) {
+      console.warn('[og-image] Fallo al procesar compresión de imagen, usando original:', procErr);
+      return res.redirect(302, rawImg);
+    }
+  } catch (err: any) {
+    res.redirect(302, 'https://bingolite.click/pwa-512x512.png');
+  }
+});
+
 app.post('/api/admin/upload-social-image', requireAdmin, upload.single('social_image'), async (req: any, res) => {
   try {
     if (!req.file) {
@@ -3164,7 +3239,29 @@ app.post('/api/admin/upload-social-image', requireAdmin, upload.single('social_i
     }
     sanitizeUploadedFileMimeType(req.file);
     await initStorage();
-    const fileExt = path.extname(req.file.originalname) || '.png';
+
+    const adminUser = req.adminUser;
+    const targetTenant = (adminUser?.tenant_id || req.body?.tenant_id || getTenantIdFromRequest(req) || 'bingo-lite').toLowerCase();
+
+    // Optimizar imagen para WhatsApp y redes sociales (máx 1200px, compresión JPEG calidad 80)
+    let uploadBuffer = req.file.buffer;
+    let uploadMime = req.file.mimetype;
+    let fileExt = '.jpg';
+    try {
+      const img = await Jimp.read(req.file.buffer);
+      const maxDim = 1200;
+      if (img.bitmap.width > maxDim || img.bitmap.height > maxDim) {
+        const scale = Math.min(maxDim / img.bitmap.width, maxDim / img.bitmap.height);
+        img.resize({ w: Math.round(img.bitmap.width * scale), h: Math.round(img.bitmap.height * scale) });
+      }
+      uploadBuffer = await img.getBuffer('image/jpeg', { quality: 80 });
+      uploadMime = 'image/jpeg';
+      fileExt = '.jpg';
+    } catch (jimpErr) {
+      console.warn('[upload-social-image] No se pudo recomprimir con Jimp, usando búfer original:', jimpErr);
+      fileExt = path.extname(req.file.originalname) || '.png';
+    }
+
     const fileName = `social-promo-${Date.now()}${fileExt}`;
     const filePath = `assets/${fileName}`;
 
@@ -3172,16 +3269,16 @@ app.post('/api/admin/upload-social-image', requireAdmin, upload.single('social_i
     let uploadError: any;
     const { data: bData, error: bError } = await supabase.storage
       .from(BANNER_BUCKET)
-      .upload(filePath, req.file.buffer, {
-        contentType: req.file.mimetype,
+      .upload(filePath, uploadBuffer, {
+        contentType: uploadMime,
         upsert: true
       });
 
     if (bError) {
       const { data: rData, error: rError } = await supabase.storage
         .from(BUCKET_NAME)
-        .upload(filePath, req.file.buffer, {
-          contentType: req.file.mimetype,
+        .upload(filePath, uploadBuffer, {
+          contentType: uploadMime,
           upsert: true
         });
       uploadData = rData;
@@ -3196,6 +3293,9 @@ app.post('/api/admin/upload-social-image', requireAdmin, upload.single('social_i
     const { data: { publicUrl } } = supabase.storage
       .from(uploadData?.path?.startsWith('assets') ? BANNER_BUCKET : BUCKET_NAME)
       .getPublicUrl(filePath);
+
+    // Invalidar caché en memoria
+    ogImageCache.delete(`og_${targetTenant}`);
 
     res.json({ url: publicUrl });
   } catch (err: any) {
@@ -7525,13 +7625,24 @@ app.post('/api/gift-invitations/social-share', async (req, res) => {
       ? new Date(activeGame.start_time).toLocaleString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
       : 'Muy Pronto';
 
-    let customTemplate = settings.social_share_message || defaultSettings?.social_share_message || `🎉 *¡TE INVITO A JUGAR EN ${bingoName.toUpperCase()}!* 🎁✨\n\n¡Hola! Ven y participa con nosotros para ganar dinero real en efectivo. 🍀\n\n🏆 *Premio en juego:* ${prizeFormatted}\n📅 *Cita del Gran Sorteo:* ${startDate}\n\n👉 *Regístrate y reclama 1 CARTÓN GRATIS de bienvenida aquí:*\n{url}\n\n¡Entra ya mismo y cantemos BINGO en familia! 👨‍👩‍👧‍👦🍀`;
+    let customTemplate = settings.social_share_message || defaultSettings?.social_share_message || `🎉 *¡TE INVITO A JUGAR EN ${bingoName.toUpperCase()}!* 🎁✨\n\n¡Hola! Ven y participa con nosotros para ganar dinero real en efectivo. 🍀\n\n🏆 *Premio en juego:* ${prizeFormatted}\n📅 *Cita del Gran Sorteo:* ${startDate}\n\n¡Entra ya mismo y cantemos BINGO en familia! 👨‍👩‍👧‍👦🍀\n\n👉 *Regístrate y reclama 1 CARTÓN GRATIS de bienvenida aquí:*\n{url}`;
 
-    const finalMessage = customTemplate
+    let finalMessage = customTemplate
       .replace(/\{url\}/g, smartUrl)
       .replace(/\{bingoName\}/g, bingoName)
       .replace(/\{prize\}/g, prizeFormatted)
       .replace(/\{date\}/g, startDate);
+
+    // Para WhatsApp es fundamental que el enlace inteligente esté siempre al final del mensaje
+    // para que WhatsApp mobile (iOS y Android) y WhatsApp Web generen la tarjeta de vista previa con la imagen personalizada.
+    if (network === 'whatsapp') {
+      if (!finalMessage.includes(smartUrl)) {
+        finalMessage = `${finalMessage.trim()}\n\n👉 *Reclama tu cartón gratis aquí:*\n${smartUrl}`;
+      } else if (!finalMessage.trim().endsWith(smartUrl)) {
+        finalMessage = finalMessage.replace(smartUrl, '').replace(/\n{3,}/g, '\n\n').trim();
+        finalMessage = `${finalMessage}\n\n👉 *Reclama tu cartón gratis aquí:*\n${smartUrl}`;
+      }
+    }
 
     let promoImg = settings.social_share_image_url || defaultSettings?.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
     if (promoImg && !promoImg.startsWith('http://') && !promoImg.startsWith('https://')) {
@@ -7580,7 +7691,7 @@ app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (re
       : `${baseUrl}${roomPrefix}/register?gift=${inviteId}`;
 
     // Canonical Smart URL: DEBE APUNTAR AL ENLACE INTELIGENTE MISMO, NUNCA A LA URL DE DESTINO SPA
-    // Facebook scraper utiliza og:url como la URL canónica absoluta que indexa.
+    // Facebook y WhatsApp scrapers utilizan og:url como la URL canónica absoluta que indexan.
     const canonicalSmartUrl = `${baseUrl}${roomPrefix}/invitacion/${inviteId}`;
 
     const settings = await getGameSettings('global', tenantSlug);
@@ -7597,15 +7708,16 @@ app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (re
           ? defaultSettings.social_share_message.replace(/\{.*?\}/g, '').trim().substring(0, 200)
           : `Únete a ${tenantInfo.name || 'Bingo Lite'}, reclama tu cartón de cortesía y participa en el gran sorteo en vivo. ¡Solo se redime una vez!`);
 
-    let img = settings.social_share_image_url || defaultSettings?.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
-    if (img && !img.startsWith('http://') && !img.startsWith('https://')) {
-      img = `${baseUrl}${img.startsWith('/') ? '' : '/'}${img}`;
+    let rawImg = settings.social_share_image_url || defaultSettings?.social_share_image_url || tenantInfo.banner_url || tenantInfo.logo_url || `${baseUrl}/logo-app.png`;
+    if (rawImg && !rawImg.startsWith('http://') && !rawImg.startsWith('https://')) {
+      rawImg = `${baseUrl}${rawImg.startsWith('/') ? '' : '/'}${rawImg}`;
     }
-    if (img && img.startsWith('http://') && (img.includes('bingolite.click') || img.includes('supabase.co'))) {
-      img = img.replace('http://', 'https://');
+    if (rawImg && rawImg.startsWith('http://') && (rawImg.includes('bingolite.click') || rawImg.includes('supabase.co'))) {
+      rawImg = rawImg.replace('http://', 'https://');
     }
 
-    const imgType = img.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+    // URL optimizada dinámicamente (<300KB) para que WhatsApp móvil y Facebook carguen la miniatura al 100% de éxito
+    const optimizedOgImageUrl = `${baseUrl}/api/og-image/${tenantSlug}`;
 
     const userAgent = req.headers['user-agent'] || '';
     const isCrawler = /facebookexternalhit|Facebot|Twitterbot|WhatsApp|TelegramBot|LinkedInBot|Slackbot|Discordbot|Pinterest|SkypeUriPreview/i.test(userAgent);
@@ -7621,17 +7733,17 @@ app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (re
   <title>${escapeHtml(title)}</title>
   <meta name="description" content="${escapeHtml(desc)}" />
 
-  <!-- Open Graph / Facebook -->
+  <!-- Open Graph / Facebook & WhatsApp -->
   <meta property="og:site_name" content="${escapeHtml(tenantInfo.name || 'Bingo Lite')}" />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="${canonicalSmartUrl}" />
   <meta property="og:title" content="${escapeHtml(title)}" />
   <meta property="og:description" content="${escapeHtml(desc)}" />
-  <meta property="og:image" content="${img}" />
-  <meta property="og:image:secure_url" content="${img}" />
-  <meta property="og:image:width" content="1200" />
-  <meta property="og:image:height" content="630" />
-  <meta property="og:image:type" content="${imgType}" />
+  <meta property="og:image" content="${optimizedOgImageUrl}" />
+  <meta property="og:image:secure_url" content="${optimizedOgImageUrl}" />
+  <meta property="og:image:width" content="800" />
+  <meta property="og:image:height" content="800" />
+  <meta property="og:image:type" content="image/jpeg" />
   <meta property="og:image:alt" content="${escapeHtml(title)}" />
 
   <!-- Twitter Card -->
@@ -7639,7 +7751,7 @@ app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (re
   <meta name="twitter:url" content="${canonicalSmartUrl}" />
   <meta name="twitter:title" content="${escapeHtml(title)}" />
   <meta name="twitter:description" content="${escapeHtml(desc)}" />
-  <meta name="twitter:image" content="${img}" />
+  <meta name="twitter:image" content="${optimizedOgImageUrl}" />
   <meta name="twitter:image:alt" content="${escapeHtml(title)}" />
 
   ${isCrawler ? '' : `
@@ -7652,7 +7764,7 @@ app.get(['/invitacion/:inviteId', '/sala/:slug/invitacion/:inviteId'], async (re
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #ffffff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; text-align: center;">
   <div style="max-width: 480px; width: 100%; background: #1e293b; padding: 28px; border-radius: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid #334155;">
-    ${img ? `<img src="${img}" alt="${escapeHtml(title)}" style="max-width: 100%; height: auto; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);" />` : ''}
+    ${rawImg ? `<img src="${rawImg}" alt="${escapeHtml(title)}" style="max-width: 100%; height: auto; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);" />` : ''}
     <h1 style="font-size: 20px; font-weight: 800; margin-bottom: 10px; color: #f8fafc;">${escapeHtml(title)}</h1>
     <p style="font-size: 14px; color: #94a3b8; line-height: 1.5; margin-bottom: 24px;">${escapeHtml(desc)}</p>
     <a href="${destinationUrl}" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 9999px; font-weight: 800; font-size: 15px; box-shadow: 0 4px 16px rgba(37,99,235,0.4);">
@@ -15256,6 +15368,7 @@ async function startServer() {
           }
 
           const canonicalUrl = `${baseUrl}${req.originalUrl || req.url}`;
+          const optimizedOgImageUrl = `${baseUrl}/api/og-image/${tenantSlug}`;
           const title = tenantInfo?.name ? `${tenantInfo.name} | Gran Bingo Online en Vivo` : 'Bingo Lite | Bingo Familiar, Bingo Colombia y Bingo Ganador';
           const desc = settings.social_share_message
             ? settings.social_share_message.replace(/\{.*?\}/g, '').trim().substring(0, 200)
@@ -15267,11 +15380,11 @@ async function startServer() {
           if (fs.existsSync(indexPath)) {
             let html = await fs.promises.readFile(indexPath, 'utf-8');
             html = html
-              .replace(/<meta\s+property="og:image"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:image" content="${escapeHtml(promoImage)}" />\n    <meta property="og:image:secure_url" content="${escapeHtml(promoImage)}" />\n    <meta property="og:image:width" content="1200" />\n    <meta property="og:image:height" content="630" />`)
+              .replace(/<meta\s+property="og:image"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:image" content="${escapeHtml(optimizedOgImageUrl)}" />\n    <meta property="og:image:secure_url" content="${escapeHtml(optimizedOgImageUrl)}" />\n    <meta property="og:image:width" content="800" />\n    <meta property="og:image:height" content="800" />`)
               .replace(/<meta\s+property="og:url"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:url" content="${escapeHtml(canonicalUrl)}" />`)
               .replace(/<meta\s+property="og:title"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:title" content="${escapeHtml(title)}" />`)
               .replace(/<meta\s+property="og:description"\s+content="[^"]*"\s*\/?>/i, `<meta property="og:description" content="${escapeHtml(desc)}" />`)
-              .replace(/<meta\s+name="twitter:image"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:image" content="${escapeHtml(promoImage)}" />`)
+              .replace(/<meta\s+name="twitter:image"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:image" content="${escapeHtml(optimizedOgImageUrl)}" />`)
               .replace(/<meta\s+name="twitter:title"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:title" content="${escapeHtml(title)}" />`)
               .replace(/<meta\s+name="twitter:description"\s+content="[^"]*"\s*\/?>/i, `<meta name="twitter:description" content="${escapeHtml(desc)}" />`);
 
